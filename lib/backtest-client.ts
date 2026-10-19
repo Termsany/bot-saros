@@ -175,7 +175,7 @@ export async function runBacktestClient(opts: {
   const wsum = enabled.reduce((s,k)=> s + (WEIGHTS[k]||0), 0) || 1
 
   const trades: Trade[] = []
-  let position: { side:"long"|"short"; entry:number; qty:number; sl:number; tp:number; ts: number } | null = null
+  let position: { side:"long"|"short"; entry:number; qty:number; sl:number; tp:number; ts: number; breakeven: boolean } | null = null
   const fee = 0.0004
   let wins=0, losses=0
   const equity: number[] = [0]
@@ -190,6 +190,18 @@ export async function runBacktestClient(opts: {
       if(fn) total += (fn(close,high,low,vol,i) * (WEIGHTS[k]||0)) / wsum
     }
 
+    // ♻️ Breakeven 50%
+    if(position && !position.breakeven){
+      const trig = position.entry + (position.tp - position.entry)*0.5
+      const hitBe = position.side==="long" ? price >= trig : price <= trig
+      if(hitBe){
+        const off = 0.001
+        const beSl = position.side==="long" ? position.entry*(1+off) : position.entry*(1-off)
+        if(position.side==="long" && beSl > position.sl) position.sl = beSl
+        if(position.side==="short" && beSl < position.sl) position.sl = beSl
+        position.breakeven = true
+      }
+    }
     // SL/TP check
     if(position){
       const sl=position.sl, tp=position.tp
@@ -224,7 +236,7 @@ export async function runBacktestClient(opts: {
         const qty = notional / price
         const sl = side==="long" ? price*0.97 : price*1.03
         const tp = side==="long" ? price*1.06 : price*0.94
-        position = { side, entry: price, qty, sl, tp, ts }
+        position = { side, entry: price, qty, sl, tp, ts, breakeven: false }
       }
     }
     equity.push(equity[equity.length-1]||0)

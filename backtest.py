@@ -261,6 +261,15 @@ def run_backtest(df, amount_usdt=20, leverage=5, fee_pct=0.0004, warmup=60, enab
         if position is not None:
             side=position["side"]; entry=position["entry"]
             sl=position["sl"]; tp=position["tp"]
+            # ♻️ Breakeven 50% -> move SL to entry + offset
+            if not pos.get("breakeven"):
+                trig = entry + (tp - entry) * 0.5
+                hit_be = (df.high.iloc[i] >= trig) if side=="long" else (df.low.iloc[i] <= trig)
+                if hit_be:
+                    be_sl = entry * 1.001 if side=="long" else entry * 0.999
+                    if side=="long" and be_sl > sl: sl = be_sl; pos["sl"] = be_sl
+                    if side=="short" and be_sl < sl: sl = be_sl; pos["sl"] = be_sl
+                    pos["breakeven"] = True
             hit=False; reason=""
             if side=="long":
                 if df.low.iloc[i] <= sl: hit=True; reason="SL"; price_exit=sl

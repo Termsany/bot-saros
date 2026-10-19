@@ -41,6 +41,9 @@ CONFIG = {
     "regime_filter": False, "regime_adx_trend": 20,
     "max_daily_loss_pct": 5.0,     # لو خسر 5% في يوم يوقف
     "cooldown_after_loss": 60,     # دقائق انتظار بعد خسارة
+    "breakeven_enabled": True,         # بعد أول هدف ينقل الوقف لنقطة الدخول
+    "breakeven_trigger_pct": 0.50,     # 50% من المسافة للهدف = أول هدف
+    "breakeven_offset_pct": 0.001,     # 0.1% فوق الدخول لتغطية العمولة
     "stop_loss_pct": 0.03,
     "take_profit_pct": 0.06,
     "max_open_positions": 5,
@@ -406,12 +409,34 @@ def check_sl_tp(state, prices, ex=None):
         if sl is None or tp is None:
             if side=="long": sl=entry*(1-CONFIG["stop_loss_pct"]); tp=entry*(1+CONFIG["take_profit_pct"])
             else: sl=entry*(1+CONFIG["stop_loss_pct"]); tp=entry*(1-CONFIG["take_profit_pct"])
+        # ♻️ Breakeven — بعد 50% للهدف ينقل الوقف لنقطة الدخول
+        if CONFIG.get("breakeven_enabled") and not pos.get("breakeven"):
+            trig_pct = float(CONFIG.get("breakeven_trigger_pct", 0.5))
+            off = float(CONFIG.get("breakeven_offset_pct", 0.001))
+            trig_price = entry + (tp - entry) * trig_pct if side=="long" else entry - (entry - tp) * trig_pct
+            hit_be = (price >= trig_price) if side=="long" else (price <= trig_price)
+            if hit_be:
+                be_sl = entry * (1 + off) if side=="long" else entry * (1 - off)
+                # لا تضيّق الوقف لو كان أضيق أصلاً
+                if side=="long" and be_sl > sl: pos["sl"] = be_sl
+                elif side=="short" and be_sl < sl: pos["sl"] = be_sl
+                pos["breakeven"] = True
+                sl = pos["sl"]
+                try: save_state(state)
+                except: pass
+                log(f"♻️ {symbol} {side} حقق 50% للهدف @ {price:.4f} — نقل الوقف لنقطة الدخول {be_sl:.4f}")
+                try:
+                    from backend.app.telegram_bot import send_telegram as _tg
+                    import asyncio as _aio
+                    _aio.create_task(_tg(f"♻️ *Breakeven* {symbol} {side} — SL → {be_sl:.4f}"))
+                except: pass
+
         reason=""; hit=False
         if side=="long":
-            if price<=sl: hit=True; reason=f"وقف لونج SL {sl:.4f}"
+            if price<=sl: hit=True; reason=f"وقف لونج SL {sl:.4f}" + (" (breakeven)" if pos.get("breakeven") else "")
             elif price>=tp: hit=True; reason=f"هدف لونج TP {tp:.4f}"
         else:
-            if price>=sl: hit=True; reason=f"وقف شورت SL {sl:.4f}"
+            if price>=sl: hit=True; reason=f"وقف شورت SL {sl:.4f}" + (" (breakeven)" if pos.get("breakeven") else "")
             elif price<=tp: hit=True; reason=f"هدف شورت TP {tp:.4f}"
         if not hit: continue
         qty=pos["qty"]
@@ -520,7 +545,7 @@ def try_enter(symbol, analysis, state, ex):
             order_side="long" if side=="long" else "short"
             res=place_order(ex,symbol,order_side,amount,price)
             sl, tp = dynamic_sl_tp(price, side, _f_df if '_f_df' in locals() else fetch_ohlcv(symbol, CONFIG["timeframe"], limit=60, ex=ex))
-            state["positions"][symbol]={"side":side,"entry":res["price"],"qty":res["qty"],"cost":res["cost"],"notional":res.get("notional",amount*CONFIG.get("leverage",5)),"leverage":res.get("leverage",CONFIG.get("leverage",5)),"time":datetime.now(timezone.utc).isoformat(),"sl":sl,"tp":tp}
+            state["positions"][symbol]={"side":side,"entry":res["price"],"qty":res["qty"],"cost":res["cost"],"notional":res.get("notional",amount*CONFIG.get("leverage",5)),"leverage":res.get("leverage",CONFIG.get("leverage",5)),"time":datetime.now(timezone.utc).isoformat(),"sl":sl,"tp":tp,"breakeven":False}
             state["last_trade"][symbol]=datetime.now(timezone.utc).isoformat(); save_state(state)
             mode="وهمي" if CONFIG["paper_trading"] else "حقيقي"
             lev_txt=f" x{res.get('leverage',CONFIG.get('leverage',5))}" if CONFIG.get("market")=="future" else ""
