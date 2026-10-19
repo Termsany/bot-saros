@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { Bar, BarChart, CartesianGrid, Cell, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
-import { Activity, BarChart3, Clock3, Crosshair, RefreshCw, Wifi } from "lucide-react"
+import { Logo } from "@/components/Logo"
+import { BarChart3, Clock3, Crosshair, RefreshCw, Wifi, Activity } from "lucide-react"
 import { StrategyPicker } from "@/components/StrategyPicker"
 import { PAIRS, NAMES } from "@/lib/pairs"
 import { apiTrades, apiKlines } from "@/lib/api"
@@ -100,7 +101,7 @@ export default function Dashboard(){
   return (
     <main className="min-h-screen bg-[#070B12] text-[#E8EEF5]">
       <header className="flex h-16 items-center justify-between border-b border-[#1c2632] bg-[#0a1018] px-5 lg:px-8">
-        <div className="flex items-center gap-3"><div className="flex h-8 w-8 items-center justify-center rounded bg-[#00D395]/10 text-[#00D395]"><Activity size={18}/></div><div><div className="text-sm font-semibold tracking-[0.18em]">BOT SAROS</div><div className="font-mono text-[9px] tracking-[0.2em] text-[#647386]">AUTONOMOUS TRADING TERMINAL</div></div></div>
+        <Logo />
         <div className="hidden items-center gap-4 md:flex">
           <span className="flex items-center gap-2 text-[11px] text-[#00D395]"><Wifi size={13}/> BINANCE SPOT <i className="h-1.5 w-1.5 rounded-full bg-[#00D395] animate-pulse"/></span>
           <span className="font-mono text-[11px] text-[#778597]">UTC {new Date().toISOString().slice(11,19)}</span>

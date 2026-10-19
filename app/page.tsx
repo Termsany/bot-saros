@@ -1,6 +1,7 @@
 import { Pricing } from "@/components/Pricing"
 import { STRATEGIES } from "@/lib/strategies"
-import { Activity, Wifi, ShieldCheck, Zap, TrendingUp, Layers } from "lucide-react"
+import { Logo } from "@/components/Logo"
+import { Wifi, ShieldCheck, Zap, TrendingUp, Layers } from "lucide-react"
 
 export default function Page(){
   const heroStats = [
@@ -12,11 +13,8 @@ export default function Page(){
   return (
     <main className="min-h-screen bg-[#070B12] text-[#E8EEF5]">
       {/* Header — same as dashboard */}
-      <header className="flex h-16 items-center justify-between border-b border-[#1c2632] bg-[#0a1018] px-5 lg:px-8 sticky top-0 z-30">
-        <div className="flex items-center gap-3">
-          <div className="flex h-8 w-8 items-center justify-center rounded bg-[#00D395]/10 text-[#00D395]"><Activity size={18}/></div>
-          <div><div className="text-sm font-semibold tracking-[0.18em]">BOT SAROS</div><div className="font-mono text-[9px] tracking-[0.2em] text-[#647386]">AUTONOMOUS TRADING TERMINAL</div></div>
-        </div>
+      <header className="flex h-16 items-center justify-between border-b border-[#1c2632] bg-[#0a1018]/90 backdrop-blur px-5 lg:px-8 sticky top-0 z-30">
+        <Logo />
         <div className="flex items-center gap-3">
           <span className="hidden md:flex items-center gap-2 text-[11px] text-[#00D395] font-mono"><Wifi size={13}/> BINANCE SPOT <i className="h-1.5 w-1.5 rounded-full bg-[#00D395] animate-pulse"/></span>
           <a href="/auth" className="hidden md:block text-[11px] text-[#778597] hover:text-white px-3 py-1.5 rounded border border-[#1c2632]">دخول</a>

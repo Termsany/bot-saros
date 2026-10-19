@@ -1,4 +1,5 @@
 "use client"
+import { Logo } from "@/components/Logo"
 import { useState } from "react"
 import { STRATEGIES, TIERS } from "@/lib/strategies"
 
@@ -18,8 +19,11 @@ export default function AdminPage(){
     <div className="min-h-screen bg-[#070B12] text-[#E6EEF8] p-4" dir="rtl">
       <div className="max-w-[1200px] mx-auto">
         <div className="flex justify-between items-center">
-          <h1 className="text-lg font-black">لوحة تحكم الأدمن — Bot Saros</h1>
-          <a href="/" className="text-xs px-3 py-1.5 rounded-xl border border-[#1E2A3A]">الرئيسية</a>
+          <div className="flex items-center gap-3"><Logo size="sm" /><h1 className="text-lg font-black">لوحة تحكم الأدمن</h1></div>
+          <div className="flex items-center gap-2">
+            <a href="/dashboard" className="text-xs px-3 py-1.5 rounded border border-[#1c2632] hover:bg-[#0c131c]">المنصة</a>
+            <a href="/" className="text-xs px-3 py-1.5 rounded-xl border border-[#1E2A3A]">الرئيسية</a>
+          </div>
         </div>
         <p className="text-xs text-[#8A9AB0] mt-1">عدّل التسعير والاستراتيجيات بدون كود — التغييرات هنا للمعاينة، احفظها في lib/strategies.ts للنشر</p>
 

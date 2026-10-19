@@ -2,8 +2,9 @@
 import { useState } from "react"
 import { STRATEGIES } from "@/lib/strategies"
 import { PAIRS, NAMES } from "@/lib/pairs"
-import { LiveTicker } from "@/components/LiveTicker"
+import { Logo } from "@/components/Logo"
 import { apiBacktest, chartUrl } from "@/lib/api"
+import { Activity, Wifi, TrendingUp, Layers, Clock3, Zap, BarChart3 } from "lucide-react"
 
 type BacktestData = {
   symbol: string
@@ -13,19 +14,12 @@ type BacktestData = {
 }
 
 const TIMEFRAMES = [
-  { value:"15m", label:"15 دقيقة" },
-  { value:"1h", label:"1 ساعة" },
-  { value:"4h", label:"4 ساعات" },
-  { value:"1d", label:"يوم" },
+  { value:"15m", label:"15m" },
+  { value:"1h", label:"1h" },
+  { value:"4h", label:"4h" },
+  { value:"1d", label:"1d" },
 ]
-
-function fmt(n:number){
-  if(n>=1000) return n.toFixed(2)
-  if(n>=1) return n.toFixed(2)
-  if(n>=0.01) return n.toFixed(4)
-  return n.toExponential(2)
-}
-
+function fmt(n:number){ if(n>=1000) return n.toFixed(2); if(n>=1) return n.toFixed(2); if(n>=0.01) return n.toFixed(4); return n.toExponential(2) }
 function toISODate(d: Date){ return d.toISOString().slice(0,10) }
 
 export default function BacktestPage(){
@@ -41,11 +35,7 @@ export default function BacktestPage(){
   const [error, setError] = useState("")
   const [chartKey, setChartKey] = useState(0)
 
-  function toggle(id:string){
-    if(single) setSelected([id])
-    else setSelected(s=> s.includes(id) ? s.filter(x=>x!==id) : [...s, id])
-  }
-
+  function toggle(id:string){ if(single) setSelected([id]); else setSelected(s=> s.includes(id) ? s.filter(x=>x!==id) : [...s, id]) }
   async function run(){
     setLoading(true); setError(""); setResult(null)
     try{
@@ -57,177 +47,165 @@ export default function BacktestPage(){
     }catch(e:any){ setError(String(e?.message||e)) }
     finally{ setLoading(false) }
   }
-
   const selStrategies = STRATEGIES.filter(s=> selected.includes(s.id))
   const chartFile = result ? `backtest_${result.symbol.replace("/","")}_${result.timeframe}.png` : ""
 
   return (
-    <div className="min-h-screen">
-      <header className="sticky top-0 z-20 backdrop-blur bg-[#070B12]/80 border-b border-[#1E2A3A]">
-        <div className="max-w-[1200px] mx-auto px-3 py-2 flex justify-between items-center">
-          <div className="flex items-center gap-2">
-            <a href="/" className="w-7 h-7 rounded-lg bg-[#00D395] grid place-items-center font-black text-[#062016] text-xs">S</a>
-            <span className="font-black text-sm">Backtest — Bot Saros</span>
-          </div>
-          <LiveTicker/>
+    <div className="min-h-screen bg-[#070B12] text-[#E8EEF5]">
+      <header className="flex h-16 items-center justify-between border-b border-[#1c2632] bg-[#0a1018]/90 backdrop-blur px-5 lg:px-8 sticky top-0 z-30">
+        <Logo />
+        <div className="flex items-center gap-3">
+          <span className="hidden md:flex items-center gap-2 text-[11px] text-[#00D395] font-mono"><Wifi size={13}/> BINANCE SPOT <i className="h-1.5 w-1.5 rounded-full bg-[#00D395] animate-pulse"/></span>
+          <a href="/dashboard" className="px-4 py-2 rounded bg-[#00D395] text-[#062016] text-xs font-bold hover:bg-[#00b87a]">المنصة</a>
+          <a href="/" className="hidden md:block text-[11px] text-[#778597] hover:text-white">الرئيسية</a>
         </div>
       </header>
 
-      <div className="max-w-[1200px] mx-auto p-4">
-        <div className="rounded-2xl border border-[#1E2A3A] bg-[#111827] p-4">
-          <div className="text-sm font-black">1 — اختر العملة والفريم والمدة</div>
-          <div className="text-xs text-[#8A9AB0]">اختر العملة من القائمة، والفريم، وحدد المدة من التقويم — ثم اختر الاستراتيجية</div>
-          <div className="grid md:grid-cols-4 gap-3 mt-3">
-            <div>
-              <label className="text-[11px] text-[#8A9AB0]">العملة</label>
-              <select value={symbol} onChange={e=>setSymbol(e.target.value)} className="w-full mt-1 bg-[#0E141D] border border-[#1E2A3A] rounded-xl px-2 py-2 text-xs">
+      <div className="mx-auto max-w-[1600px] p-4 lg:p-6 space-y-5">
+        {/* Step 1 */}
+        <section className="rounded border border-[#1c2632] bg-[#0c131c] p-5">
+          <div className="flex items-center gap-2 mb-1"><span className="h-6 w-6 grid place-items-center rounded bg-[#00D395]/10 text-[#00D395] text-xs font-black">1</span><h2 className="text-xs font-semibold tracking-[0.14em]">اختر العملة والفريم والمدة</h2></div>
+          <p className="font-mono text-[11px] text-[#647386]">العملة + الفريم + التقويم — كل شيء هنا قبل اختيار الاستراتيجية</p>
+          <div className="grid md:grid-cols-4 gap-3 mt-4">
+            <div><label className="font-mono text-[10px] tracking-[0.14em] text-[#68778a]">العملة</label>
+              <select value={symbol} onChange={e=>setSymbol(e.target.value)} className="w-full mt-1 bg-[#0a1018] border border-[#1d2936] rounded px-3 py-2.5 text-xs focus:border-[#00D395]/40 outline-none">
                 {PAIRS.map(p=> <option key={p} value={p}>{NAMES[p]||p}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="text-[11px] text-[#8A9AB0]">الفريم</label>
-              <select value={timeframe} onChange={e=>setTimeframe(e.target.value)} className="w-full mt-1 bg-[#0E141D] border border-[#1E2A3A] rounded-xl px-2 py-2 text-xs">
+              </select></div>
+            <div><label className="font-mono text-[10px] tracking-[0.14em] text-[#68778a]">الفريم</label>
+              <select value={timeframe} onChange={e=>setTimeframe(e.target.value)} className="w-full mt-1 bg-[#0a1018] border border-[#1d2936] rounded px-3 py-2.5 text-xs focus:border-[#00D395]/40 outline-none">
                 {TIMEFRAMES.map(t=> <option key={t.value} value={t.value}>{t.label} — {t.value}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="text-[11px] text-[#8A9AB0]">من</label>
-              <input type="date" value={from} onChange={e=>setFrom(e.target.value)} className="w-full mt-1 bg-[#0E141D] border border-[#1E2A3A] rounded-xl px-2 py-2 text-xs" />
-            </div>
-            <div>
-              <label className="text-[11px] text-[#8A9AB0]">إلى</label>
-              <input type="date" value={to} onChange={e=>setTo(e.target.value)} className="w-full mt-1 bg-[#0E141D] border border-[#1E2A3A] rounded-xl px-2 py-2 text-xs" />
-            </div>
+              </select></div>
+            <div><label className="font-mono text-[10px] tracking-[0.14em] text-[#68778a]">من</label>
+              <input type="date" value={from} onChange={e=>setFrom(e.target.value)} className="w-full mt-1 bg-[#0a1018] border border-[#1d2936] rounded px-3 py-2.5 text-xs" /></div>
+            <div><label className="font-mono text-[10px] tracking-[0.14em] text-[#68778a]">إلى</label>
+              <input type="date" value={to} onChange={e=>setTo(e.target.value)} className="w-full mt-1 bg-[#0a1018] border border-[#1d2936] rounded px-3 py-2.5 text-xs" /></div>
           </div>
-          <div className="text-[11px] text-[#8A9AB0] mt-2">المدى: <b className="text-white">{from}</b> → <b className="text-white">{to}</b> — الفريم <b className="text-[#00D395]">{timeframe}</b> — العملة <b className="text-white">{NAMES[symbol]||symbol}</b></div>
-        </div>
+          <div className="mt-3 flex items-center gap-2 font-mono text-[11px] text-[#5f6e81]"><BarChart3 size={12}/><span>{NAMES[symbol]||symbol}</span><span className="text-[#1c2632]">·</span><span className="text-[#00D395]">{timeframe}</span><span className="text-[#1c2632]">·</span><span>{from} → {to}</span></div>
+        </section>
 
-        <div className="rounded-2xl border border-[#1E2A3A] bg-[#111827] p-4 mt-4">
-          <div className="flex justify-between items-center">
-            <div>
-              <div className="text-sm font-black">2 — اختر الاستراتيجية</div>
-              <div className="text-xs text-[#8A9AB0]">واحدة لوحدها أو مجموعة — كل واحدة ليها نسبة ربح منفصلة</div>
-            </div>
-            <div className="flex gap-1.5">
-              <button onClick={()=>{ setSingle(true); setSelected(s=> s.slice(0,1)) }} className={`px-3 py-1.5 rounded-xl text-xs font-bold ${single?"bg-[#00D395] text-[#062016]":"bg-[#1E2A3A] text-white"}`}>واحدة</button>
-              <button onClick={()=>setSingle(false)} className={`px-3 py-1.5 rounded-xl text-xs font-bold ${!single?"bg-[#00D395] text-[#062016]":"bg-[#1E2A3A] text-white"}`}>مجموعة</button>
+        {/* Step 2 */}
+        <section className="rounded border border-[#1c2632] bg-[#0c131c] p-5">
+          <div className="flex justify-between items-start gap-4">
+            <div className="flex items-center gap-2"><span className="h-6 w-6 grid place-items-center rounded bg-[#00D395]/10 text-[#00D395] text-xs font-black">2</span><div><h2 className="text-xs font-semibold tracking-[0.14em]">اختر الاستراتيجية</h2><p className="font-mono text-[11px] text-[#647386]">واحدة لوحدها أو مجموعة — كل واحدة نسبة ربح منفصلة</p></div></div>
+            <div className="flex gap-1.5 shrink-0">
+              <button onClick={()=>{ setSingle(true); setSelected(s=> s.slice(0,1)) }} className={`px-3 py-1.5 rounded text-xs font-bold ${single?"bg-[#00D395] text-[#062016]":"bg-[#1d2936] text-[#8A9AB0]"}`}>واحدة</button>
+              <button onClick={()=>setSingle(false)} className={`px-3 py-1.5 rounded text-xs font-bold ${!single?"bg-[#00D395] text-[#062016]":"bg-[#1d2936] text-[#8A9AB0]"}`}>مجموعة</button>
             </div>
           </div>
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2 mt-3 max-h-[360px] overflow-auto pr-1">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2 mt-4 max-h-[380px] overflow-auto pr-1">
             {STRATEGIES.map(s=>{
               const active = selected.includes(s.id)
               return (
                 <button key={s.id} onClick={()=>toggle(s.id)}
-                  className={`text-right p-2.5 rounded-xl border text-xs ${active ? "border-[#00D395] bg-[#0A2E1A]" : "border-[#1E2A3A] bg-[#0E141D] hover:border-[#2a3a56]"}`}>
-                  <div className="flex justify-between"><span>{s.icon}</span>{active && <span className="text-[#00D395]">✓</span>}</div>
-                  <div className="font-bold mt-1">{s.nameAr}</div>
-                  <div className="text-[10px] text-[#8A9AB0]">{s.desc}</div>
-                  <div className="text-[10px] mt-1"><span className={s.winRate>=45?"text-[#00D395]":s.winRate>=35?"text-[#FFB800]":"text-[#FF3B5C]"}>WR {s.winRate}%</span> <span className="text-[#8A9AB0]">PF {s.pf}</span></div>
+                  className={`text-right p-3 rounded border text-xs text-left transition ${active ? "border-[#00D395]/40 bg-[#00D395]/[0.06]" : "border-[#1d2936] bg-[#0a1018] hover:border-[#2a3a56]"}`}>
+                  <div className="flex justify-between items-start"><span className="text-base">{s.icon}</span>{active && <span className="h-2 w-2 rounded-full bg-[#00D395] mt-1"/>}</div>
+                  <div className="font-bold mt-1.5 leading-tight">{s.nameAr}</div>
+                  <div className="font-mono text-[10px] text-[#647386] leading-tight">{s.desc}</div>
+                  <div className="mt-2 font-mono text-[10px] flex gap-2"><span className={s.winRate>=45?"text-[#00D395]":s.winRate>=35?"text-[#FFB800]":"text-[#FF3B5C]"}>WR {s.winRate}%</span><span className="text-[#5f6e81]">PF {s.pf}</span></div>
                 </button>
               )
             })}
           </div>
-          <div className="mt-3 flex gap-2">
-            <button onClick={run} disabled={loading || selected.length===0}
-              className={`flex-1 py-2.5 rounded-xl text-sm font-black ${loading ? "bg-[#1E2A3A] text-[#8A9AB0]" : "bg-[#00D395] text-[#062016] hover:bg-[#00b87a]"}`}>
-              {loading ? "جاري التحليل..." : `شغّل الـ Backtest — ${selected.length} استراتيجية · ${symbol} ${timeframe} ${from} → ${to}`}
-            </button>
-          </div>
-          <div className="text-[11px] text-[#8A9AB0] mt-2 font-mono">python backtest.py --symbol {symbol} --timeframe {timeframe} --from {from} --to {to} --strategies {selected.join(",")} --leverage 5</div>
-        </div>
+          <button onClick={run} disabled={loading || selected.length===0}
+            className={`w-full mt-4 py-3 rounded text-sm font-black flex items-center justify-center gap-2 ${loading ? "bg-[#1c2632] text-[#647386]" : "bg-[#00D395] text-[#062016] hover:bg-[#00b87a]"}`}>
+            <Zap size={14}/>{loading ? "جاري التحليل..." : `شغّل الـ Backtest — ${selected.length} استراتيجية · ${symbol} ${timeframe} ${from} → ${to}`}
+          </button>
+          <div className="mt-2 font-mono text-[10px] text-[#5f6e81]">python backtest.py --symbol {symbol} --timeframe {timeframe} --from {from} --to {to} --strategies {selected.join(",")} --leverage 5</div>
+        </section>
 
         {loading && (
-          <div className="rounded-2xl border border-[#1E2A3A] bg-[#111827] p-6 mt-4 text-center">
-            <div className="w-10 h-10 mx-auto rounded-full border-2 border-[#1E2A3A] border-t-[#00D395] animate-spin"/>
+          <section className="rounded border border-[#1c2632] bg-[#0c131c] p-8 text-center">
+            <div className="w-10 h-10 mx-auto rounded-full border-2 border-[#1c2632] border-t-[#00D395] animate-spin"/>
             <div className="text-sm font-bold mt-3">جاري جلب الشموع وتشغيل الـ Backtest...</div>
-            <div className="text-xs text-[#8A9AB0] mt-1">{symbol} — {timeframe} — {from} → {to} — {selected.join(", ")}</div>
-            <div className="text-[11px] text-[#8A9AB0] mt-2">قد يستغرق 10-30 ثانية حسب المدة</div>
-          </div>
+            <div className="font-mono text-xs text-[#647386] mt-1">{symbol} — {timeframe} — {from} → {to} — {selected.join(", ")}</div>
+            <div className="font-mono text-[11px] text-[#5f6e81] mt-2">قد يستغرق 10-30 ثانية</div>
+          </section>
         )}
 
         {result && !loading && (
-          <div className="rounded-2xl border border-[#1E2A3A] bg-[#111827] p-4 mt-4">
-            <div className="flex flex-wrap justify-between gap-2">
-              <div>
-                <div className="text-sm font-black">التقرير — {result.symbol} {result.timeframe} — {from} → {to}</div>
-                <div className="text-xs text-[#8A9AB0] mt-1">
-                  {selected.length} استراتيجية: {selStrategies.map(s=> s.nameAr).join(" + ")} — {timeframe} — {from} إلى {to}
-                </div>
-              </div>
-              <span className={`px-3 py-1 rounded-full text-xs font-black border ${result.stats.pnl>=0 ? "bg-[#0A2E1A] text-[#00D395] border-[#00D395]" : "bg-[#2e0a14] text-[#FF3B5C] border-[#FF3B5C]"}`}>
+          <section className="rounded border border-[#1c2632] bg-[#0c131c] p-5">
+            <div className="flex flex-wrap justify-between gap-3">
+              <div><h3 className="text-sm font-bold">التقرير — {result.symbol} {result.timeframe} — {from} → {to}</h3>
+                <p className="font-mono text-xs text-[#647386] mt-1">{selected.length} استراتيجية: {selStrategies.map(s=> s.nameAr).join(" + ")} — {timeframe} — {from} إلى {to}</p></div>
+              <span className={`px-4 py-1.5 rounded-full text-xs font-black border ${result.stats.pnl>=0 ? "bg-[#00D395]/10 text-[#00D395] border-[#00D395]/30" : "bg-[#FF3B5C]/10 text-[#FF3B5C] border-[#FF3B5C]/30"}`}>
                 المحصلة: {result.stats.pnl>=0 ? "مكسب" : "خسارة"} {result.stats.pnl>=0?"+":""}{result.stats.pnl.toFixed(2)} USDT {result.stats.pnl>=0?"🟢":"🔴"}
               </span>
             </div>
 
-            <div className="mt-3">
-              <div className="text-xs font-bold mb-2">طريقة الاستراتيجية</div>
+            <div className="mt-4">
+              <h4 className="text-xs font-semibold tracking-[0.14em] mb-2">طريقة الاستراتيجية</h4>
               <div className="grid md:grid-cols-2 gap-2">
                 {selStrategies.map(s=>(
-                  <div key={s.id} className="rounded-xl border border-[#1E2A3A] bg-[#0E141D] p-3">
+                  <div key={s.id} className="rounded border border-[#1c2632] bg-[#0a1018] p-3">
                     <div className="text-xs font-bold">{s.icon} {s.nameAr} — {s.name}</div>
-                    <div className="text-[11px] text-[#8A9AB0] mt-1 leading-relaxed">{s.method}</div>
-                    <div className="text-[11px] mt-2"><span className={s.winRate>=45?"text-[#00D395]":s.winRate>=35?"text-[#FFB800]":"text-[#FF3B5C]"}>WR {s.winRate}%</span> <span className="text-[#8A9AB0]">PF {s.pf}</span> <span className="text-[#8A9AB0]">· {s.desc}</span></div>
+                    <div className="font-mono text-[11px] text-[#8A9AB0] mt-1.5 leading-relaxed">{s.method}</div>
+                    <div className="font-mono text-[11px] mt-2 flex gap-2"><span className={s.winRate>=45?"text-[#00D395]":s.winRate>=35?"text-[#FFB800]":"text-[#FF3B5C]"}>WR {s.winRate}%</span><span className="text-[#5f6e81]">PF {s.pf}</span></div>
                   </div>
                 ))}
               </div>
             </div>
 
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-4">
-              <div className="rounded-xl bg-[#0E141D] border border-[#1E2A3A] p-3 text-center">
-                <div className="text-[10px] text-[#8A9AB0]">الصفقات</div><div className="text-lg font-black">{result.stats.total}</div>
-                <div className="text-[11px] text-[#8A9AB0]">{result.stats.wins} رابحة · {result.stats.losses} خاسرة</div>
+              <div className="rounded border border-[#1c2632] bg-[#0a1018] p-4 text-center">
+                <div className="font-mono text-[10px] tracking-[0.14em] text-[#68778a]">الصفقات</div><div className="text-xl font-black font-mono">{result.stats.total}</div>
+                <div className="font-mono text-[11px] text-[#68778a]">{result.stats.wins} رابحة · {result.stats.losses} خاسرة</div>
               </div>
-              <div className="rounded-xl bg-[#0E141D] border border-[#1E2A3A] p-3 text-center">
-                <div className="text-[10px] text-[#8A9AB0]">نسبة الربح</div><div className={`text-lg font-black ${result.stats.win_rate>=45?"text-[#00D395]":result.stats.win_rate>=35?"text-[#FFB800]":"text-[#FF3B5C]"}`}>{result.stats.win_rate.toFixed(1)}%</div>
-                <div className="text-[11px] text-[#8A9AB0]">PF {result.stats.profit_factor.toFixed(2)}</div>
+              <div className="rounded border border-[#1c2632] bg-[#0a1018] p-4 text-center">
+                <div className="font-mono text-[10px] tracking-[0.14em] text-[#68778a]">نسبة الربح</div><div className={`text-xl font-black font-mono ${result.stats.win_rate>=45?"text-[#00D395]":result.stats.win_rate>=35?"text-[#FFB800]":"text-[#FF3B5C]"}`}>{result.stats.win_rate.toFixed(1)}%</div>
+                <div className="font-mono text-[11px] text-[#68778a]">PF {result.stats.profit_factor.toFixed(2)}</div>
               </div>
-              <div className="rounded-xl bg-[#0E141D] border border-[#1E2A3A] p-3 text-center">
-                <div className="text-[10px] text-[#8A9AB0]">المكسب / الخسارة</div>
-                <div className="text-xs font-bold text-[#00D395]">مكسب +{(result.stats.avg_win||0).toFixed(2)}</div>
-                <div className="text-xs font-bold text-[#FF3B5C]">خسارة {(result.stats.avg_loss||0).toFixed(2)}</div>
+              <div className="rounded border border-[#1c2632] bg-[#0a1018] p-4 text-center">
+                <div className="font-mono text-[10px] tracking-[0.14em] text-[#68778a]">المكسب / الخسارة</div>
+                <div className="font-mono text-xs font-bold text-[#00D395]">مكسب +{(result.stats.avg_win||0).toFixed(2)}</div>
+                <div className="font-mono text-xs font-bold text-[#FF3B5C]">خسارة {(result.stats.avg_loss||0).toFixed(2)}</div>
               </div>
-              <div className={`rounded-xl border p-3 text-center ${result.stats.pnl>=0 ? "bg-[#0A2E1A] border-[#00D395]" : "bg-[#2e0a14] border-[#FF3B5C]"}`}>
-                <div className="text-[10px] text-[#8A9AB0]">المحصلة النهائية</div>
-                <div className={`text-lg font-black ${result.stats.pnl>=0?"text-[#00D395]":"text-[#FF3B5C]"}`}>{result.stats.pnl>=0?"+":""}{result.stats.pnl.toFixed(2)} USDT</div>
-                <div className="text-[11px]">{result.stats.pnl>=0 ? "مكسب" : "خسارة"} · Max DD {result.stats.max_dd.toFixed(2)}</div>
+              <div className={`rounded border p-4 text-center ${result.stats.pnl>=0 ? "bg-[#00D395]/[0.06] border-[#00D395]/30" : "bg-[#FF3B5C]/[0.06] border-[#FF3B5C]/30"}`}>
+                <div className="font-mono text-[10px] tracking-[0.14em] text-[#68778a]">المحصلة النهائية</div>
+                <div className={`text-xl font-black font-mono ${result.stats.pnl>=0?"text-[#00D395]":"text-[#FF3B5C]"}`}>{result.stats.pnl>=0?"+":""}{result.stats.pnl.toFixed(2)} USDT</div>
+                <div className="font-mono text-[11px] text-[#68778a]">{result.stats.pnl>=0 ? "مكسب" : "خسارة"} · Max DD {result.stats.max_dd.toFixed(2)}</div>
               </div>
             </div>
 
-            <div className="mt-4">
-              <div className="text-xs font-bold mb-2">الشارت — السعر + الصفقات + السكور + Equity</div>
-              <img key={chartKey} src={`${chartUrl(chartFile)}&k=${chartKey}`} alt="chart" className="w-full rounded-xl border border-[#1E2A3A]" />
+            <div className="mt-5">
+              <h4 className="text-xs font-semibold tracking-[0.14em] mb-2 flex items-center gap-2"><TrendingUp size={12} className="text-[#00D395]"/> الشارت — السعر + الصفقات + Equity</h4>
+              <img key={chartKey} src={`${chartUrl(chartFile)}&k=${chartKey}`} alt="chart" className="w-full rounded border border-[#1c2632]" />
             </div>
 
-            <div className="mt-4">
-              <div className="text-xs font-bold mb-2">آخر الصفقات — دخول / خروج / مكسب-خسارة</div>
-              <div className="overflow-auto rounded-xl border border-[#1E2A3A]">
-                <table className="w-full text-xs">
-                  <thead className="bg-[#0E141D] text-[#8A9AB0]"><tr><th className="p-2 text-right">دخول</th><th className="p-2 text-right">خروج</th><th className="p-2">اتجاه</th><th className="p-2">دخول</th><th className="p-2">خروج</th><th className="p-2">النتيجة</th><th className="p-2">السبب</th></tr></thead>
+            <div className="mt-5">
+              <h4 className="text-xs font-semibold tracking-[0.14em] mb-2">آخر الصفقات</h4>
+              <div className="overflow-auto rounded border border-[#1c2632]">
+                <table className="w-full text-xs font-mono">
+                  <thead className="bg-[#0a1018] text-[#68778a]"><tr><th className="p-2.5 text-right font-normal tracking-[0.1em]">دخول</th><th className="p-2.5 text-right font-normal tracking-[0.1em]">خروج</th><th className="p-2.5 font-normal">اتجاه</th><th className="p-2.5 font-normal">دخول</th><th className="p-2.5 font-normal">خروج</th><th className="p-2.5 font-normal">النتيجة</th><th className="p-2.5 font-normal">السبب</th></tr></thead>
                   <tbody>
                     {result.trades.slice(-12).reverse().map((t,i)=>(
-                      <tr key={i} className="border-t border-[#1E2A3A]">
-                        <td className="p-2 text-[11px]">{String(t.entry_ts).slice(5,16).replace("T"," ")}</td>
-                        <td className="p-2 text-[11px]">{String(t.exit_ts).slice(5,16).replace("T"," ")}</td>
-                        <td className="p-2"><span className={`px-1.5 py-0.5 rounded text-[10px] font-bold border ${t.side==="long"?"bg-[#0A2E1A] text-[#00D395] border-[#00D395]":"bg-[#2e0a14] text-[#FF3B5C] border-[#FF3B5C]"}`}>{t.side==="long"?"LONG":"SHORT"}</span></td>
-                        <td className="p-2 font-mono">{fmt(t.entry)}</td><td className="p-2 font-mono">{fmt(t.exit)}</td>
-                        <td className={`p-2 font-bold ${t.pnl>=0?"text-[#00D395]":"text-[#FF3B5C]"}`}>{t.pnl>=0?"+":""}{t.pnl.toFixed(2)}</td>
-                        <td className="p-2 text-[11px]">{t.reason}</td>
+                      <tr key={i} className="border-t border-[#1c2632]">
+                        <td className="p-2.5 text-[11px]">{String(t.entry_ts).slice(5,16).replace("T"," ")}</td>
+                        <td className="p-2.5 text-[11px]">{String(t.exit_ts).slice(5,16).replace("T"," ")}</td>
+                        <td className="p-2.5"><span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${t.side==="long"?"bg-[#00D395]/10 text-[#00D395] border-[#00D395]/30":"bg-[#FF3B5C]/10 text-[#FF3B5C] border-[#FF3B5C]/30"}`}>{t.side==="long"?"LONG":"SHORT"}</span></td>
+                        <td className="p-2.5">{fmt(t.entry)}</td><td className="p-2.5">{fmt(t.exit)}</td>
+                        <td className={`p-2.5 font-bold ${t.pnl>=0?"text-[#00D395]":"text-[#FF3B5C]"}`}>{t.pnl>=0?"+":""}{t.pnl.toFixed(2)}</td>
+                        <td className="p-2.5 text-[11px] text-[#8A9AB0]">{t.reason}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
             </div>
-          </div>
+          </section>
         )}
 
         {error && !loading && (
-          <div className="rounded-xl border border-[#FF3B5C] bg-[#2e0a14] p-3 mt-4 text-xs text-[#FF3B5C] whitespace-pre-wrap">{error}</div>
+          <div className="rounded border border-[#FF3B5C]/30 bg-[#FF3B5C]/[0.06] p-4 text-xs text-[#FF3B5C] whitespace-pre-wrap">{error}</div>
         )}
         {!result && !loading && stdout && (
-          <div className="rounded-xl border border-[#1E2A3A] bg-[#0E141D] p-3 mt-4 text-[11px] font-mono whitespace-pre-wrap">{stdout.slice(-4000)}</div>
+          <div className="rounded border border-[#1c2632] bg-[#0a1018] p-4 font-mono text-[11px] whitespace-pre-wrap text-[#8A9AB0]">{stdout.slice(-4000)}</div>
         )}
       </div>
+
+      <footer className="mx-auto max-w-[1600px] px-5 lg:px-8 border-t border-[#1c2632] mt-6 py-6 flex flex-wrap justify-between gap-3 font-mono text-[11px] text-[#5f6e81]">
+        <span>Bot Saros © 2026 — 15 استراتيجية + Backtest + Futures LONG/SHORT</span>
+        <span>ENGINE STATUS <b className="text-[#00D395]">● OPERATIONAL</b> · bot-saros.vercel.app</span>
+      </footer>
     </div>
   )
 }
