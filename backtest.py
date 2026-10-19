@@ -152,9 +152,9 @@ def fetch_ohlcv(symbol, timeframe, limit, from_date=None, to_date=None):
         cur_since=since
         # Estimate timeframe ms
         tf_ms={"1m":60000,"15m":900000,"1h":3600000,"4h":14400000,"1d":86400000}.get(timeframe, 3600000)
-        for _ in range(20):
+        for _ in range(2):  # max 300 candles (300*60 min)
             try:
-                chunk = ex.fetch_ohlcv(symbol, timeframe, since=cur_since, limit=1000)
+                chunk = ex.fetch_ohlcv(symbol, timeframe, since=cur_since, limit=300)
             except:
                 try: chunk = ex2.fetch_ohlcv(symbol, timeframe, since=cur_since, limit=1000)
                 except Exception as e2: print(f"fetch {symbol}: {e2}"); break
@@ -167,6 +167,8 @@ def fetch_ohlcv(symbol, timeframe, limit, from_date=None, to_date=None):
         # Filter by until
         if until: all_ohlcv=[c for c in all_ohlcv if c[0] < until]
         if not all_ohlcv: raise RuntimeError(f"no data for {symbol} {from_date}→{to_date}")
+        if len(all_ohlcv) > 300:
+            all_ohlcv = all_ohlcv[-300:]  # keep most recent 300
         df=pd.DataFrame(all_ohlcv, columns=["ts","open","high","low","close","vol"])
         df["ts"]=pd.to_datetime(df["ts"], unit="ms")
         _cache_put(_key, df)

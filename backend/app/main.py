@@ -45,7 +45,7 @@ class BacktestReq(BaseModel):
     timeframe: str = "1h"
     from_date: Optional[str] = None  # YYYY-MM-DD
     to_date: Optional[str] = None
-    limit: int = 500
+    limit: int = 300
     strategies: Optional[List[str]] = None
     amount: float = 20
     leverage: int = 5

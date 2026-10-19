@@ -41,7 +41,7 @@ export async function POST(req: NextRequest) {
   // Fallback local (old behavior)
   const symbol: string = body.symbol || "BTC/USDT"
   const timeframe: string = body.timeframe || "1h"
-  const limit: number = Math.min(2000, Math.max(50, parseInt(String(body.limit ?? 500))))
+  const limit: number = Math.min(2000, Math.max(50, parseInt(String(body.limit ?? 300))))
   const strategies: string[] | null = body.strategies?.length ? body.strategies : null
   const amount = parseFloat(body.amount) || 20
   const leverage = parseInt(body.leverage) || 5
