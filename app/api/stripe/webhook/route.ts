@@ -46,10 +46,21 @@ export async function POST(req: NextRequest){
     return null
   }
   async function setTier(userId: string, tier: string, customer?: string){
-    const patch: any = { tier }
-    if(customer) patch.stripe_customer_id = customer
-    const { error } = await admin.from("profiles").update(patch).eq("id", userId)
-    if(error) throw new Error(error.message)
+    const { data: existing } = await admin.from("profiles").select("id").eq("id", userId).maybeSingle()
+    if(existing){
+      const patch: any = { tier }
+      if(customer) patch.stripe_customer_id = customer
+      const { error } = await admin.from("profiles").update(patch).eq("id", userId)
+      if(error) throw new Error(error.message)
+    } else {
+      // No profile yet (Stripe paid but Supabase has no row) — create it
+      const { data: userData } = await admin.auth.admin.getUserById(userId)
+      const email = customer ? undefined : userData?.user?.email
+      const row: any = { id: userId, tier, email: email || null }
+      if(customer) row.stripe_customer_id = customer
+      const { error } = await admin.from("profiles").insert(row)
+      if(error) throw new Error(error.message)
+    }
   }
 
   try{
@@ -61,7 +72,7 @@ export async function POST(req: NextRequest){
       else console.warn("checkout.session.completed: no user/tier", s.id)
     }
 
-    if(event.type==="customer.subscription.updated" || event.type==="customer.subscription.deleted"){
+    if(event.type==="customer.subscription.created" || event.type==="customer.subscription.updated" || event.type==="customer.subscription.deleted"){
       const sub = event.data.object
       const customer = typeof sub.customer === "string" ? sub.customer : sub.customer?.id
       const userId = await findUserId({ userId: sub.metadata?.user_id, customer })
