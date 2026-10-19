@@ -34,7 +34,7 @@ export async function fetchCandles(symbol: string, timeframe: string, limit=300,
   }catch{}
   // OKX
   try{
-    const okxTf = timeframe==="1d"?"1D":timeframe
+    const okxTf = timeframe.replace(/h$/, "H").replace(/d$/, "D")  // OKX bars are 1H, 4H, 1D
     const r = await fetch(`https://www.okx.com/api/v5/market/candles?instId=${sym.replace("USDT","-USDT")}&bar=${okxTf}&limit=${effLimit}`)
     if(r.ok){
       const j = await r.json()

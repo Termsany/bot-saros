@@ -15,5 +15,5 @@ export function LiveTicker(){
     const id = setInterval(tick, 5000)
     return ()=>clearInterval(id)
   },[])
-  return <span className="font-mono text-xs px-2 py-1 rounded-lg bg-[#0E141D] border border-[#1E2A3A]">BTC {price ? `$${price.toLocaleString()}` : "—"}</span>
+  return <span className="font-mono text-xs px-2 py-1 rounded-lg bg-surface border border-line">BTC {price ? `$${price.toLocaleString()}` : "—"}</span>
 }

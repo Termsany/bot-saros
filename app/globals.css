@@ -2,11 +2,6 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --font-cairo: var(--font-cairo);
-  --font-mono: var(--font-mono);
-}
-
 /* Base: Cairo readable, 15px */
 html { font-size: 15px; }
 body { line-height: 1.6; }
@@ -15,9 +10,13 @@ body { line-height: 1.6; }
 .font-mono, code, .font-mono * {
   font-family: var(--font-mono), ui-monospace, monospace !important;
 }
+.font-display { font-family: var(--font-display), var(--font-cairo), sans-serif; }
 
 h1, h2, h3 { letter-spacing: -0.02em; line-height: 1.2; }
 
+/* tabular figures so prices don't jump while updating */
+.tabular { font-variant-numeric: tabular-nums; }
+
 ::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-thumb { background: #1E2A3A; border-radius: 999px; }
-::-webkit-scrollbar-track { background: #0a1018; }
+::-webkit-scrollbar-thumb { background: #232838; border-radius: 999px; }
+::-webkit-scrollbar-track { background: #0F1118; }

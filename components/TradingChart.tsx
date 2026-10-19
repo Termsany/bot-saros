@@ -27,25 +27,25 @@ export function TradingChart({ candles, markers, height=380 }: { candles: Candle
         chart = lwc.createChart(ref.current, {
           width: ref.current.clientWidth,
           height,
-          layout: { background: { type: lwc.ColorType.Solid, color: "#0A0F1A" }, textColor: "#8A9AB0" },
-          grid: { vertLines: { color: "#1E2A3A" }, horzLines: { color: "#1E2A3A" } },
-          rightPriceScale: { borderColor: "#1E2A3A" },
-          timeScale: { borderColor: "#1E2A3A", timeVisible: true, secondsVisible: false },
+          layout: { background: { type: lwc.ColorType.Solid, color: "#0A0F1A" }, textColor: "#8B91A7" },
+          grid: { vertLines: { color: "#232838" }, horzLines: { color: "#232838" } },
+          rightPriceScale: { borderColor: "#232838" },
+          timeScale: { borderColor: "#232838", timeVisible: true, secondsVisible: false },
           crosshair: { mode: 1 },
           handleScroll: true, handleScale: true,
         })
         // v5: addSeries(CandlestickSeries), v4: addCandlestickSeries
         if(typeof chart.addCandlestickSeries === "function"){
           series = chart.addCandlestickSeries({
-            upColor: "#00D395", downColor: "#FF3B5C",
-            borderUpColor: "#00D395", borderDownColor: "#FF3B5C",
-            wickUpColor: "#00D395", wickDownColor: "#FF3B5C",
+            upColor: "#22D3A0", downColor: "#FF5470",
+            borderUpColor: "#22D3A0", borderDownColor: "#FF5470",
+            wickUpColor: "#22D3A0", wickDownColor: "#FF5470",
           })
         } else {
           series = chart.addSeries(lwc.CandlestickSeries, {
-            upColor: "#00D395", downColor: "#FF3B5C",
-            borderUpColor: "#00D395", borderDownColor: "#FF3B5C",
-            wickUpColor: "#00D395", wickDownColor: "#FF3B5C",
+            upColor: "#22D3A0", downColor: "#FF5470",
+            borderUpColor: "#22D3A0", borderDownColor: "#FF5470",
+            wickUpColor: "#22D3A0", wickDownColor: "#FF5470",
           })
         }
         // Ensure sorted ascending
@@ -72,10 +72,10 @@ export function TradingChart({ candles, markers, height=380 }: { candles: Candle
   }, [candles, markers, height])
 
   if(err){
-    return <div className="h-[380px] grid place-items-center bg-[#0A0F1A] rounded-xl border border-[#FF3B5C]/30 text-xs text-[#FF3B5C]">خطأ الشارت: {err}</div>
+    return <div className="h-[380px] grid place-items-center bg-void rounded-xl border border-loss/30 text-xs text-loss">خطأ الشارت: {err}</div>
   }
   if(!candles.length){
-    return <div className="h-[380px] grid place-items-center bg-[#0A0F1A] rounded-xl border border-[#1E2A3A] text-xs text-[#8A9AB0]">جاري تحميل الشموع من Binance...</div>
+    return <div className="h-[380px] grid place-items-center bg-void rounded-xl border border-line text-xs text-muted">جاري تحميل الشموع من Binance...</div>
   }
-  return <div ref={ref} className="rounded-xl border border-[#1E2A3A] overflow-hidden bg-[#0A0F1A]" style={{height}} />
+  return <div ref={ref} className="rounded-xl border border-line overflow-hidden bg-void" style={{height}} />
 }

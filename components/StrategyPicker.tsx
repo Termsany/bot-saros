@@ -1,11 +1,16 @@
 "use client"
+import { Lock } from "lucide-react"
 import { STRATEGIES, TIERS } from "@/lib/strategies"
 
+// A plan unlocks the first `count` strategies (same rule as the backend's TIER_STRATEGY_COUNT)
+function unlockTier(index: number){
+  return TIERS.find(t => t.count > index)?.name || "Elite"
+}
+
 export function StrategyPicker({ selected, onToggle, tier }: { selected: string[], onToggle: (id:string)=>void, tier: string }){
-  const tierOrder: Record<string,number> = { free: 2, starter: 6, pro: 7, elite: 15 }
-  const maxCount = tierOrder[tier] ?? 2
+  const maxCount = TIERS.find(t => t.id === tier)?.count ?? 2
   return (
-    <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+    <div className="space-y-1.5">
       {STRATEGIES.map((s,i)=>{
         const locked = i >= maxCount
         const active = selected.includes(s.id)
@@ -14,19 +19,23 @@ export function StrategyPicker({ selected, onToggle, tier }: { selected: string[
             key={s.id}
             disabled={locked}
             onClick={()=>!locked && onToggle(s.id)}
-            className={`text-right p-4 rounded-xl border text-sm transition flex flex-col min-h-[140px] ${locked ? "opacity-40 border-[#1c2632] bg-[#0c131c]" : active ? "border-[#00D395]/50 bg-[#00D395]/[0.07] shadow-[0_0_0_1px_rgba(0,211,149,0.15)]" : "border-[#1c2632] bg-[#0a1018] hover:border-[#2a3a56] hover:bg-[#111a25]"}`}
+            aria-pressed={active}
+            className={`w-full flex items-center justify-between gap-3 rounded-xl px-3.5 py-2.5 text-right transition ${locked ? "border border-line/70 opacity-60 cursor-not-allowed" : active ? "bg-surface2 ring-1 ring-corona/25" : "border border-line hover:bg-surface2/60"}`}
           >
-            <div className="flex justify-between items-start">
-              <span className="text-base leading-none">{s.icon}</span>
-              {locked && <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#2a2506] text-[#FFB800] font-bold">Elite</span>}
-              {!locked && active && <span className="h-5 w-5 grid place-items-center rounded-full bg-[#00D395] text-[#062016] text-[11px] font-black">✓</span>}
+            <div className="min-w-0">
+              <div className={`text-sm font-bold truncate ${active ? "text-ink" : "text-ink/80"}`}>{s.nameAr}</div>
+              <div className="font-mono text-[11px] text-muted tabular">
+                <span className={s.winRate>=45 ? "text-profit" : s.winRate>=35 ? "text-corona" : "text-loss"}>WR {s.winRate}%</span>
+                <span className="mx-1.5 text-faint">·</span>PF {s.pf}
+              </div>
             </div>
-            <div className="font-bold mt-2.5 text-sm leading-tight">{s.nameAr}</div>
-            <div className="font-mono text-xs text-[#8A9AB0] leading-tight mt-1">{s.desc}</div>
-            <div className="mt-auto pt-3 flex gap-3 font-mono text-xs">
-              <span className={s.winRate>=45 ? "text-[#00D395] font-bold" : s.winRate>=35 ? "text-[#FFB800] font-bold" : "text-[#FF3B5C] font-bold"}>WR {s.winRate}%</span>
-              <span className="text-[#5f6e81]">PF {s.pf}</span>
-            </div>
+            {locked ? (
+              <span className="flex shrink-0 items-center gap-1 rounded-full bg-corona/10 px-2 py-0.5 text-[10px] font-bold text-corona"><Lock size={11}/> {unlockTier(i)}</span>
+            ) : (
+              <span className={`relative h-5 w-9 shrink-0 rounded-full transition ${active ? "bg-corona" : "bg-line"}`} dir="ltr">
+                <span className={`absolute top-0.5 h-4 w-4 rounded-full transition-all ${active ? "left-[18px] bg-void" : "left-0.5 bg-muted"}`}/>
+              </span>
+            )}
           </button>
         )
       })}

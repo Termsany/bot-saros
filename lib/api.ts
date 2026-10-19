@@ -50,20 +50,20 @@ export async function apiKlines(symbol: string, interval: string, limit=200){
       if(Array.isArray(list) && list.length){
         // Bybit: [startTime, open, high, low, close, volume, turnover] — newest first, reverse
         const sorted = [...list].reverse()
-        return sorted.map((k:any)=> ({ time: Math.floor(Number(k[0])/1000) as any, open:+k[1], high:+k[2], low:+k[3], close:+k[4] }))
+        return sorted.map((k:any)=> ({ time: Math.floor(Number(k[0])/1000) as any, open:+k[1], high:+k[2], low:+k[3], close:+k[4], volume:+k[5] }))
       }
     }
   }catch{}
   // 2) OKX (light too)
   try{
-    const okxTf = interval === "1d" ? "1D" : interval
+    const okxTf = interval.replace(/h$/, "H").replace(/d$/, "D")  // OKX bars are 1H, 4H, 1D (15m stays lowercase)
     const r=await fetch(`https://www.okx.com/api/v5/market/candles?instId=${sym.replace("USDT","-USDT")}&bar=${okxTf}&limit=${limit}`)
     if(r.ok){
       const j = await r.json()
       const data = j?.data
       if(Array.isArray(data) && data.length){
         const sorted = [...data].reverse()
-        return sorted.map((k:any)=> ({ time: Math.floor(Number(k[0])/1000) as any, open:+k[1], high:+k[2], low:+k[3], close:+k[4] }))
+        return sorted.map((k:any)=> ({ time: Math.floor(Number(k[0])/1000) as any, open:+k[1], high:+k[2], low:+k[3], close:+k[4], volume:+k[5] }))
       }
     }
   }catch{}
@@ -73,7 +73,7 @@ export async function apiKlines(symbol: string, interval: string, limit=200){
     if(r.ok){
       const raw = await r.json()
       if(Array.isArray(raw) && raw.length){
-        return raw.map((k:any)=> ({ time: Math.floor(k[0]/1000) as any, open:+k[1], high:+k[2], low:+k[3], close:+k[4] }))
+        return raw.map((k:any)=> ({ time: Math.floor(k[0]/1000) as any, open:+k[1], high:+k[2], low:+k[3], close:+k[4], volume:+k[5] }))
       }
     }
   }catch{}

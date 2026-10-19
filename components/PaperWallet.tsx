@@ -25,26 +25,27 @@ export function PaperWallet(){
     load()
   }, [])
 
-  if(loading) return <div className="rounded-xl border border-[#1c2632] bg-[#0c131c] p-3 animate-pulse h-[80px]" />
+  if(loading) return <div className="rounded-xl bg-surface2 p-4 animate-pulse h-[118px]" />
   if(balance === null) return null // guest — no wallet
 
   const total = balance + pnl
   const isProfit = pnl >= 0
+  const pct = balance ? pnl / balance * 100 : 0
 
   return (
-    <div className="rounded-xl border border-[#1c2632] bg-[#0c131c] p-4">
-      <div className="flex items-center gap-2 text-[11px] tracking-[0.12em] text-[#5f6e81] font-mono"><Wallet size={12}/> المحفظة الوهمية</div>
-      <div className="mt-2 flex items-baseline gap-2">
-        <span className="text-xl font-black font-mono">${total.toFixed(2)}</span>
-        <span className={`text-xs font-bold font-mono flex items-center gap-1 ${isProfit?"text-[#00D395]":"text-[#FF3B5C]"}`}>
+    <div className="rounded-xl bg-surface2 p-4">
+      <div className="flex items-center justify-between">
+        <span className="flex items-center gap-2 text-[13px] font-semibold text-muted"><Wallet size={14}/> المحفظة التجريبية</span>
+        <span className={`flex items-center gap-1 font-mono text-xs font-bold tabular ${isProfit?"text-profit":"text-loss"}`}>
           {isProfit ? <TrendingUp size={12}/> : <TrendingDown size={12}/>}
-          {isProfit?"+":""}{pnl.toFixed(2)}
+          {isProfit?"+":""}{pct.toFixed(1)}%
         </span>
       </div>
-      <div className="font-mono text-[11px] text-[#5f6e81] mt-1">رصيد {balance.toFixed(0)}$ + ربح {pnl>=0?"+":""}{pnl.toFixed(2)}$ · وهمي 100%</div>
-      <div className="mt-2 h-1.5 rounded-full bg-[#1c2632] overflow-hidden">
-        <div className={`h-full rounded-full ${isProfit?"bg-[#00D395]":"bg-[#FF3B5C]"}`} style={{width: `${Math.min(100, Math.max(4, 50 + (pnl/20)))}%`}} />
+      <div className="mt-2 font-mono text-2xl font-bold tabular" dir="ltr">{total.toLocaleString("en-US",{minimumFractionDigits:2, maximumFractionDigits:2})} <span className="text-sm text-muted">USDT</span></div>
+      <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-line" dir="ltr">
+        <div className="h-full rounded-full bg-gradient-to-r from-umbra to-corona" style={{width: `${Math.min(100, Math.max(4, 50 + pct*2))}%`}} />
       </div>
+      <div className="mt-2 text-[11px] text-faint">رأس المال {balance.toLocaleString("en-US")} USDT · فلوس وهمية 100%</div>
     </div>
   )
 }
