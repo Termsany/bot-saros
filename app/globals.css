@@ -1,6 +1,23 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-* { font-family: Inter, Tajawal, system-ui, sans-serif; }
+
+:root {
+  --font-cairo: var(--font-cairo);
+  --font-mono: var(--font-mono);
+}
+
+/* Cairo for everything, JetBrains for mono/numbers */
+.font-mono, code, .font-mono * {
+  font-family: var(--font-mono), ui-monospace, monospace !important;
+}
+
+/* Headings extra weight */
+h1, h2, h3 { letter-spacing: -0.02em; }
+
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-thumb { background: #1E2A3A; border-radius: 999px; }
+::-webkit-scrollbar-track { background: #0a1018; }
+
+/* Global rhythm */
+section + section { margin-top: 0; }
