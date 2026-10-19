@@ -300,6 +300,39 @@ async def evolve():
     except Exception as e:
         return {"ok": False, "error": str(e)[:300]}
 
+
+@app.post("/api/llm/generate")
+async def llm_generate(prompt: str = "RSI + volume divergence on 4h", symbol: str = "BTC/USDT", timeframe: str = "4h"):
+    """LLM يخترع استراتيجية + باك تست فوري"""
+    from app.llm_generator import generate_strategy, save_strategy, backtest_llm
+    gen = await generate_strategy(prompt)
+    if not gen.get("ok"):
+        return gen
+    code = gen["code"]
+    # Save
+    try:
+        fp = save_strategy(code)
+        name = fp.stem
+    except Exception as e:
+        return {"ok": False, "error": f"save failed: {e}", "code": code}
+    # Backtest
+    try:
+        bt_result = await backtest_llm(code, symbol, timeframe, limit=300)
+    except Exception as e:
+        return {"ok": True, "code": code, "name": name, "backtest": {"ok": False, "error": str(e)[:300]}, "usage": gen.get("usage")}
+    return {"ok": True, "code": code, "name": name, "backtest": bt_result, "usage": gen.get("usage")}
+
+@app.get("/api/llm/list")
+async def llm_list():
+    from pathlib import Path as _P
+    d = _P(__file__).parent.parent / "strategies_llm"
+    if not d.exists():
+        return []
+    out = []
+    for f in sorted(d.glob("llm_*.py")):
+        out.append({"name": f.stem, "code": f.read_text(encoding="utf-8")[:2000], "size": f.stat().st_size})
+    return out
+
 @app.get("/api/trades")
 async def api_trades(limit: int = 50):
     async with async_session() as sess:

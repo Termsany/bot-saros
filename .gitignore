@@ -9,3 +9,6 @@ __pycache__/
 *.pyc
 .cache/
 
+
+strategies_llm/*.py
+!strategies_llm/.gitkeep
