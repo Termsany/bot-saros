@@ -10,6 +10,7 @@ export function PaperWallet(){
 
   useEffect(()=>{
     async function load(){
+      if(!supabase){ setLoading(false); return }  // Supabase env not set (e.g. local dev)
       const { data: { user } } = await supabase.auth.getUser()
       if(!user){ setLoading(false); return }
       const { data } = await supabase.from("profiles").select("paper_balance, paper_pnl").eq("id", user.id).single()

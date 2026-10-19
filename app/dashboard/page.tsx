@@ -132,7 +132,7 @@ export default function Dashboard(){
         <Logo />
         <div className="hidden items-center gap-4 md:flex">
           <span className="flex items-center gap-2 text-[11px] text-[#00D395]"><Wifi size={13}/> BINANCE SPOT <i className="h-1.5 w-1.5 rounded-full bg-[#00D395] animate-pulse"/></span>
-          <span className="font-mono text-[11px] text-[#778597]">UTC {new Date().toISOString().slice(11,19)}</span>
+          <span className="font-mono text-[11px] text-[#778597]">UTC {lastUpdated ? lastUpdated.toISOString().slice(11,19) : "--:--:--"}</span>
           <a href="/" className="text-[11px] text-[#778597] hover:text-white">الرئيسية</a>
           <a href="/backtest" className="text-[11px] text-[#778597] hover:text-white">Backtest</a>
         </div>
