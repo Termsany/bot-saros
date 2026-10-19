@@ -30,7 +30,7 @@ export default function LLMLab(){
       </header>
       <div className="mx-auto max-w-[900px] p-5 lg:p-8 space-y-5">
         <div>
-          <h1 className="text-xl font-black">\U0001f916 مختبر الـ LLM — اخترع استراتيجية</h1>
+          <h1 className="text-xl font-black">مختبر الاستراتيجيات</h1>
           <p className="font-mono text-xs text-[#647386] mt-1">اكتب وصف و الـ LLM يولد الكود + باك تست فوري عبر <b className="text-[#00D395]">Claude Sonnet 5</b> (CodeCraft)</p>
         </div>
 
@@ -41,7 +41,7 @@ export default function LLMLab(){
             placeholder="مثال: اخترع استراتيجية تمزج Bollinger Squeeze + حجم للـ 15m" />
           <button onClick={generate} disabled={loading || !prompt.trim()}
             className={`w-full mt-3 py-3 rounded-xl text-sm font-black ${loading?"bg-[#1c2632] text-[#647386]":"bg-[#00D395] text-[#062016] hover:bg-[#00b87a]"}`}>
-            {loading ? "جاري التوليد والاختبار..." : "\u2728 اخترع الاستراتيجية"}
+            {loading ? "جاري التحليل..." : "حوّل الفكرة لاستراتيجية"}
           </button>
         </div>
 
@@ -70,11 +70,8 @@ export default function LLMLab(){
                 <div className="rounded border border-[#1c2632] bg-[#0a1018] p-3"><div className="font-mono text-[10px] text-[#68778a]">PnL</div><div className={`font-mono text-lg font-black ${result.backtest.stats.pnl>=0?"text-[#00D395]":"text-[#FF3B5C]"}`}>{result.backtest.stats.pnl>=0?"+":""}{result.backtest.stats.pnl.toFixed(2)}</div><div className="font-mono text-[11px] text-[#68778a]">MaxDD {result.backtest.stats.max_dd?.toFixed(2)}</div></div>
               </div>
             )}
-            <div>
-              <h4 className="font-mono text-xs tracking-[0.12em] text-[#68778a] mb-2">الكود المولد</h4>
-              <pre className="rounded border border-[#1c2632] bg-[#0a1018] p-3 text-xs font-mono overflow-auto max-h-[320px] whitespace-pre-wrap">{result.code}</pre>
-            </div>
-            {result.usage && <div className="font-mono text-[11px] text-[#5f6e81]">Tokens: {result.usage.total_tokens} · {result.usage.completion_tokens} completion</div>}
+            <details className="rounded border border-[#1c2632] bg-[#0a1018] p-3"><summary className="text-xs font-bold cursor-pointer">عرض الكود</summary><pre className="mt-2 text-xs font-mono overflow-auto max-h-[320px] whitespace-pre-wrap">{result.code}</pre></details>
+
           </div>
         )}
       </div>

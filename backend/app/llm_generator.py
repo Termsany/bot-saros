@@ -33,7 +33,10 @@ async def generate_strategy(prompt: str) -> dict:
                     "max_tokens": 3000,
                 })
             if r.status_code != 200:
-                return {"ok": False, "error": f"LLM {r.status_code}: {r.text[:300]}"}
+                body = r.text[:500]
+                if "Just a moment" in body or "cloudflare" in body.lower():
+                    return {"ok": False, "error": "CodeCraft blocked from Render (Cloudflare). \u0627\u0633\u062a\u062e\u062f\u0645 \u0627\u0644\u0645\u062e\u062a\u0628\u0631 \u0644\u0648\u0643\u0627\u0644 \u0623\u0648 \u0641\u0639\u0651\u0644 Cloudflare bypass في CodeCraft"}
+                return {"ok": False, "error": f"LLM {r.status_code}: {body[:300]}"}
             j = r.json()
             content = j["choices"][0]["message"]["content"] or ""
             # Extract code
