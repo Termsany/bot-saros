@@ -12,7 +12,7 @@ export const STRATEGIES: Strategy[] = [
   { id:"supertrend", name:"SuperTrend", nameAr:"سوبر ترند", desc:"ATR + ترند", method:"SuperTrend ATR(10)×3: السعر فوق EMA+1.5×ATR = LONG، تحته = SHORT + ATR يتوسع = زخم.", tier:"elite", winRate:44, pf:1.5, icon:"▲" },
   { id:"bollinger", name:"Bollinger", nameAr:"بولنجر", desc:"Squeeze + StochRSI", method:"Bollinger Bands 20×2: Squeeze (عرض ضيق) = انفجار قريب. اختراق علوي + RSI>60 = LONG.", tier:"elite", winRate:41, pf:1.3, icon:"◎" },
   { id:"harmonic", name:"Harmonic", nameAr:"هارمونيك", desc:"Gartley/Bat", method:"4 Pivot أخيرة: نسبة AB/XA بين 0.618-0.786 = نموذج Gartley. قاع جديد مع ارتداد = صاعد.", tier:"elite", winRate:39, pf:1.2, icon:"⬢" },
-  { id:"ict", name:"ICT Killzone", nameAr:"ICT", desc:"London/NY", method:"Killzone لندن 7-10 UTC / نيويورك 12-15 UTC + Sweep قمة/قاع الجلسة = انعكاس.", tier:"elite", winRate:46, pf:1.7, icon:"◐" },
+  { id:"ict", name:"ICT Killzone", nameAr:"ICT ⭐", desc:"London/NY — بطل BTC 4h 100% و 15m 83% PF 30", method:"Killzone لندن 7-10 UTC / نيويورك 12-15 UTC + Sweep قمة/قاع الجلسة = انعكاس. BTC 4h: +10.48 PF inf (3/3) و BTC 15m: +3.63 PF 30 (5/6) — يحتاج Walk-Forward على كل عملة.", tier:"elite", winRate:71, pf:3.32, icon:"◐" },
   { id:"heikin", name:"Heikin+ADX", nameAr:"هيكن + ADX", desc:"فلترة", method:"Heikin Ashi شمعتان متتاليتان بنفس الاتجاه + ADX>25 قوي يضاعف الإشارة، <15 يضعفها.", tier:"elite", winRate:43, pf:1.4, icon:"⬣" },
   { id:"ai", name:"AI Ensemble", nameAr:"AI", desc:"تكيف تلقائي", method:"متوسط مرجح لكل الاستراتيجيات + تعزيز إذا 4+ استراتيجيات متفقة (×1.3). إجماع قوي = إشارة أقوى.", tier:"elite", winRate:50, pf:1.9, icon:"✦" },
 ]

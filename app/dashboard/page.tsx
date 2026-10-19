@@ -44,6 +44,9 @@ export default function Dashboard(){
           <div className="rounded-2xl border border-[#1E2A3A] bg-[#111827] p-3">
             <div className="text-xs font-bold mb-2">اختر الاستراتيجيات ({selected.length}) — باقة {tier}</div>
             <StrategyPicker selected={selected} onToggle={toggle} tier={tier}/>
+            {tier!=="elite" && selected.some(s=>["smc","vwap","supertrend","bollinger","harmonic","ict","heikin","ai"].includes(s)) && (
+              <div className="mt-2 text-[11px] text-[#FFB800] bg-[#2a2506] border border-[#4a3a00] rounded-xl px-3 py-2">⚠️ هذه الاستراتيجيات للباقة Elite — حدث من <a href="/#pricing" className="underline">الأسعار</a></div>
+            )}
             <button className="w-full mt-3 py-2 rounded-xl bg-[#00D395] text-[#062016] text-sm font-bold">شغّل البوت بهذه الاستراتيجيات</button>
             <div className="text-[11px] text-[#8A9AB0] mt-2">الأمر: <code className="bg-[#0E141D] px-1 py-0.5 rounded">--strategies {selected.join(",")}</code></div>
           </div>
