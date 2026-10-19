@@ -25,10 +25,43 @@ except: pass
 
 BOT_DIR = Path(__file__).parent.parent.parent
 
+def _supabase_key_kind(key: str) -> str:
+    """'service', 'public' or 'unknown' — from the key's own format, without calling Supabase."""
+    if key.startswith("sb_secret_"): return "service"
+    if key.startswith("sb_publishable_"): return "public"
+    try:  # legacy keys are JWTs with a "role" claim
+        import base64
+        payload = key.split(".")[1]
+        role = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4))).get("role")
+        return {"service_role": "service", "anon": "public"}.get(role, "unknown")
+    except Exception:
+        return "unknown"
+
+async def check_supabase_service_key():
+    """Log once at startup whether SUPABASE_SERVICE_KEY can read plans. Never logs the key."""
+    url, key = os.getenv("SUPABASE_URL", "").rstrip("/"), os.getenv("SUPABASE_SERVICE_KEY", "")
+    if not url or not key:
+        print("SUPABASE_SERVICE_KEY check: MISSING (SUPABASE_URL or SUPABASE_SERVICE_KEY not set) — plan lookups fall back to free")
+        return
+    kind = _supabase_key_kind(key)
+    if kind == "public":
+        print("SUPABASE_SERVICE_KEY check: WRONG KEY — this is the public anon/publishable key, use the service_role/secret key")
+        return
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(f"{url}/rest/v1/profiles", params={"select": "id", "limit": "1"},
+                                 headers={"apikey": key, "Authorization": f"Bearer {key}"})
+        print(f"SUPABASE_SERVICE_KEY check: {'OK' if r.status_code == 200 else f'INVALID (HTTP {r.status_code})'}"
+              + (" (key type unrecognized)" if kind == "unknown" and r.status_code == 200 else ""))
+    except Exception as e:
+        print(f"SUPABASE_SERVICE_KEY check: could not reach Supabase ({type(e).__name__})")
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
     print("DB ready")
+    asyncio.create_task(check_supabase_service_key())  # don't delay startup on a slow Supabase
     yield
 
 # API docs list every endpoint — off in production unless ENABLE_API_DOCS=true

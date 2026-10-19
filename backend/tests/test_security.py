@@ -114,6 +114,23 @@ class ApiAuthTests(unittest.TestCase):
             self.assertEqual(asyncio.run(main.get_tier(ADMIN)), "elite")
             self.assertEqual(asyncio.run(main.get_tier(SQUATTER)), "free")
 
+    def test_supabase_key_check_detects_wrong_key_without_logging_it(self):
+        import base64, io, json as _j, contextlib
+        from app import main
+        jwt = lambda role: "x." + base64.urlsafe_b64encode(_j.dumps({"role": role}).encode()).decode().rstrip("=") + ".sig"
+        self.assertEqual(main._supabase_key_kind(jwt("service_role")), "service")
+        self.assertEqual(main._supabase_key_kind(jwt("anon")), "public")
+        self.assertEqual(main._supabase_key_kind("sb_secret_abc"), "service")
+        self.assertEqual(main._supabase_key_kind("sb_publishable_abc"), "public")
+        anon = jwt("anon")
+        for env, expect in [({"SUPABASE_URL": "", "SUPABASE_SERVICE_KEY": ""}, "MISSING"),
+                            ({"SUPABASE_URL": "https://x.supabase.co", "SUPABASE_SERVICE_KEY": anon}, "WRONG KEY")]:
+            out = io.StringIO()
+            with mock.patch.dict(os.environ, env), contextlib.redirect_stdout(out):
+                asyncio.run(main.check_supabase_service_key())
+            self.assertIn(expect, out.getvalue())
+            self.assertNotIn(anon, out.getvalue())
+
     def test_cron_secret(self):
         self.assertEqual(self.c.post("/api/evolve", headers={"X-Cron-Secret": "wrong"}).status_code, 401)
         r = self.c.post("/api/evolve", headers={"X-Cron-Secret": "cron-s3cret"})

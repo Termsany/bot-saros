@@ -36,11 +36,13 @@ export default function BacktestPage(){
   const [stdout, setStdout] = useState("")
   const [error, setError] = useState("")
   const [chartKey, setChartKey] = useState(0)
+  // server chart name comes from the backend (unique per run); browser backtests have no server chart
+  const [chartFile, setChartFile] = useState("")
 
   function toggle(id:string){ if(single) setSelected([id]); else setSelected(s=> s.includes(id) ? s.filter(x=>x!==id) : [...s, id]) }
   async function run(){
     if(from > to){ setError("التاريخ معكوس — من يجب أن يكون قبل إلى"); return }
-    setLoading(true); setError(""); setResult(null)
+    setLoading(true); setError(""); setResult(null); setChartFile("")
     try{
       // Try browser-direct first (Bybit/OKX — no Render, no ban)
       const client = await runBacktestClient({ symbol, timeframe, from, to, strategies: selected, amount, leverage: 5 })
@@ -54,7 +56,7 @@ export default function BacktestPage(){
       // Fallback: backend (Render) for chart image
       const j = await apiBacktest({ symbol, timeframe, from, to, strategies: selected, amount, leverage: 5 })
       setStdout((j.stdout||"") + (j.stderr ? "\n"+j.stderr : "") + (client.error ? "\nClient: "+client.error : ""))
-      if(j.data) setResult(j.data as BacktestData)
+      if(j.data){ setResult(j.data as BacktestData); if(typeof j.chart === "string") setChartFile(j.chart) }
       else if(client.error) setError(client.error)
       else if(!j.ok) setError(j.error || (typeof j.detail === "string" ? j.detail : "") || j.stdout || "فشل")
       setChartKey(k=>k+1)
@@ -62,7 +64,6 @@ export default function BacktestPage(){
     finally{ setLoading(false) }
   }
   const selStrategies = STRATEGIES.filter(s=> selected.includes(s.id))
-  const chartFile = result ? `backtest_${result.symbol.replace("/","")}_${result.timeframe}.png` : ""
 
   return (
     <div className="min-h-screen bg-[#070B12] text-[#E8EEF5]">
@@ -191,10 +192,12 @@ export default function BacktestPage(){
               </div>
             </div>
 
-            <div className="mt-5">
-              <h4 className="text-xs font-semibold tracking-[0.14em] mb-2 flex items-center gap-2"><TrendingUp size={12} className="text-[#00D395]"/> الشارت — السعر + الصفقات + Equity</h4>
-              <img key={chartKey} src={`${chartUrl(chartFile)}&k=${chartKey}`} alt="chart" className="w-full rounded border border-[#1c2632]" />
-            </div>
+            {chartFile && (
+              <div className="mt-5">
+                <h4 className="text-xs font-semibold tracking-[0.14em] mb-2 flex items-center gap-2"><TrendingUp size={12} className="text-[#00D395]"/> الشارت — السعر + الصفقات + Equity</h4>
+                <img key={chartKey} src={`${chartUrl(chartFile)}&k=${chartKey}`} alt="chart" className="w-full rounded border border-[#1c2632]" />
+              </div>
+            )}
 
             <div className="mt-5">
               <h4 className="text-xs font-semibold tracking-[0.14em] mb-2">آخر الصفقات</h4>
