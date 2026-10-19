@@ -38,6 +38,7 @@ export default function BacktestPage(){
 
   function toggle(id:string){ if(single) setSelected([id]); else setSelected(s=> s.includes(id) ? s.filter(x=>x!==id) : [...s, id]) }
   async function run(){
+    if(from > to){ setError("التاريخ معكوس — من يجب أن يكون قبل إلى"); return }
     setLoading(true); setError(""); setResult(null)
     try{
       const j = await apiBacktest({ symbol, timeframe, from, to, strategies: selected, amount, leverage: 5 })
