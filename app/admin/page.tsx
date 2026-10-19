@@ -79,10 +79,47 @@ export default function AdminPage(){
           <div className="text-[11px] text-[#8A9AB0] mt-2">ملاحظة: التعديل هنا للمعاينة فقط. للنشر انسخ الكود والصقه في <code>lib/strategies.ts</code> ثم <code>npm run build</code></div>
         </div>
 
-        <div className="mt-6 rounded-2xl border border-[#1E2A3A] bg-[#111827] p-3">
-          <h3 className="text-xs font-bold">المُحسّن الأسبوعي</h3>
-          <div className="text-[11px] text-[#8A9AB0] mt-1">شغّل <code className="bg-[#0E141D] px-1 py-0.5 rounded">python auto_optimizer.py --symbol BTC/USDT --timeframe 4h --limit 200</code> كل جمعة لتحديث <code>ai_weights.json</code></div>
-          <div className="text-[11px] text-[#8A9AB0] mt-1">المقارنة الكاملة: <code className="bg-[#0E141D] px-1 py-0.5 rounded">python backtest.py --compare --timeframe 4h --limit 300</code></div>
+        <div className="mt-6 grid md:grid-cols-2 gap-4">
+          <div className="rounded-2xl border border-[#1E2A3A] bg-[#111827] p-4">
+            <h3 className="text-sm font-black">🤖 المُحسّن الأسبوعي</h3>
+            <p className="text-xs text-[#8A9AB0] mt-1">يختبر الـ 15 استراتيجية ويختار البطل + أفضل SL/TP</p>
+            <div className="flex gap-2 mt-3">
+              <button onClick={async()=>{
+                const b=document.getElementById("opt-status") as HTMLElement
+                if(b) b.textContent="جاري — قد يستغرق دقيقة..."
+                try{
+                  const r=await fetch((process.env.NEXT_PUBLIC_API_URL||"http://localhost:8000")+"/api/optimizer/run?symbol=BTC/USDT&timeframe=4h&limit=200",{method:"POST"})
+                  const j=await r.json()
+                  if(b) b.textContent=j.ok ? "✅ تم — "+JSON.stringify(j.weights||{}).slice(0,120) : "❌ "+(j.error||j.stderr||"فشل")
+                }catch(e:any){ const b2=document.getElementById("opt-status"); if(b2) b2.textContent="خطأ: "+String(e.message||e) }
+              }} className="px-4 py-2 rounded-xl bg-[#00D395] text-[#062016] text-xs font-bold">شغّل المُحسّن الآن (BTC 4h)</button>
+            </div>
+            <div id="opt-status" className="mt-2 text-[11px] text-[#8A9AB0]">جاهز</div>
+            <div className="text-[11px] text-[#8A9AB0] mt-2">أو عبر التيرمنال: <code className="bg-[#0E141D] px-1 py-0.5 rounded">python auto_optimizer.py --symbol BTC/USDT --timeframe 4h --limit 200</code></div>
+          </div>
+          <div className="rounded-2xl border border-[#1E2A3A] bg-[#111827] p-4">
+            <h3 className="text-sm font-black">📱 تنبيهات تليجرام</h3>
+            <p className="text-xs text-[#8A9AB0] mt-1">كل صفقة دخول/خروج توصلك فورا</p>
+            <div className="flex gap-2 mt-3">
+              <button onClick={async()=>{
+                const b=document.getElementById("tg-status") as HTMLElement
+                if(b) b.textContent="جاري الاختبار..."
+                try{
+                  const r=await fetch((process.env.NEXT_PUBLIC_API_URL||"http://localhost:8000")+"/api/telegram/test",{method:"POST"})
+                  const j=await r.json()
+                  if(b) b.textContent=j.ok ? "✅ وصلت الرسالة لتليجرام!" : "❌ "+(j.msg||"فشل — ضع التوكن في backend/.env")
+                }catch(e:any){ const b2=document.getElementById("tg-status"); if(b2) b2.textContent="خطأ: "+String(e.message||e) }
+              }} className="px-4 py-2 rounded-xl bg-[#229ED9] text-white text-xs font-bold">اختبر التليجرام</button>
+              <button onClick={async()=>{
+                const r=await fetch((process.env.NEXT_PUBLIC_API_URL||"http://localhost:8000")+"/api/telegram/status")
+                const j=await r.json()
+                const b=document.getElementById("tg-status")
+                if(b) b.textContent=j.configured ? "✅ مربوط" : "⚠️ غير مربوط — ضع TELEGRAM_BOT_TOKEN و CHAT_ID في backend/.env"
+              }} className="px-3 py-2 rounded-xl border border-[#1E2A3A] text-xs">الحالة</button>
+            </div>
+            <div id="tg-status" className="mt-2 text-[11px] text-[#8A9AB0]">اضغط الحالة للتحقق</div>
+            <div className="text-[11px] text-[#8A9AB0] mt-2">من <a href="https://t.me/BotFather" target="_blank" className="text-[#229ED9] underline">@BotFather</a> اعمل بوت وخذ التوكن، ثم من <a href="https://t.me/userinfobot" target="_blank" className="text-[#229ED9] underline">@userinfobot</a> خذ الـ Chat ID</div>
+          </div>
         </div>
       </div>
     </div>
