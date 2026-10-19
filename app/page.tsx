@@ -1,7 +1,7 @@
 import { Pricing } from "@/components/Pricing"
 import { HeroPreview } from "@/components/HeroPreview"
 import { BRAND } from "@/lib/brand"
-import { STRATEGIES, TIERS } from "@/lib/strategies"
+import { MOST_CONSISTENT, STATS_META, STRATEGIES, TIERS, pfTone } from "@/lib/strategies"
 import { Logo } from "@/components/Logo"
 import { ArrowUpRight, CandlestickChart, Check, Layers, LineChart, ShieldCheck, Zap } from "lucide-react"
 
@@ -9,14 +9,15 @@ import { ArrowUpRight, CandlestickChart, Check, Layers, LineChart, ShieldCheck, 
 const unlockTier = (i: number) => TIERS.find(t => t.count > i) || TIERS[TIERS.length-1]
 
 const STEPS = [
-  { icon: Layers, title: "اختار استراتيجيتك", body: "15 استراتيجية من التحليل الكلاسيكي لحد Smart Money والذكاء الاصطناعي. شغّل واحدة أو اجمع كذا واحدة مع بعض." },
-  { icon: CandlestickChart, title: "اختبرها على بيانات حقيقية", body: "Backtest على شموع Bybit وOKX وBinance، وشوف كل صفقة: دخلت فين، خرجت فين، وكسبت ولا خسرت — قبل ما تخاطر." },
+  { icon: Layers, title: "اختار استراتيجيتك", body: "15 استراتيجية من التحليل الكلاسيكي لحد Smart Money وإجماع الاستراتيجيات. شغّل واحدة أو اجمع كذا واحدة مع بعض." },
+  { icon: CandlestickChart, title: "اختبرها على بيانات حقيقية", body: "Backtest على شموع Bybit وBinance للفترة اللي تختارها، بنفس قواعد البوت بالظبط. وشوف كل صفقة: دخلت فين، خرجت فين، وكسبت ولا خسرت." },
   { icon: LineChart, title: "تابعها لحظة بلحظة", body: "المحرك بيراقب السوق على مدار الساعة ويسجّل الصفقات على محفظة وهمية، وانت شايف الأرباح ونسبة الفوز في الداشبورد." },
 ]
 
 const FAQ = [
   { q: "هل البوت بيضمن ربح؟", a: "لأ. الأرقام اللي في الموقع نتايج اختبارات على بيانات سابقة، والنتايج السابقة مش ضمان للمستقبل. تداول العملات الرقمية — خصوصاً بالرافعة — عالي المخاطرة وممكن تخسر جزء من رأس مالك أو كله." },
   { q: "لازم أحط فلوس حقيقية عشان أجرّب؟", a: "لأ. الـ Backtest والمحفظة التجريبية بفلوس وهمية 100%، والباقة المجانية مش محتاجة كارت." },
+  { q: "الأرقام اللي في جدول الاستراتيجيات جاية منين؟", a: "من Backtest حقيقي بنفس محرك البوت: 4 عملات على فريمين، 2000 شمعة لكل واحدة، والربح محسوب بعد الرسوم. «كسبت في» معناها في كام مجموعة من الـ 8 الاستراتيجية خلصت كسبانة. ومعظم الاستراتيجيات قريبة من التعادل — عشان كده بنعرض الأرقام زي ما هي." },
   { q: "إيه الفرق بين الباقات؟", a: "كل باقة بتفتح عدد استراتيجيات أكبر ومدة Backtest أطول: المجانية 7 أيام، Starter ‏30 يوم، Pro ‏90 يوم، وElite بلا حدود مع كل الاستراتيجيات." },
   { q: "الدفع آمن؟", a: "الدفع كله عن طريق Stripe، وبيانات الكارت مش بتعدّي على سيرفراتنا أصلاً." },
 ]
@@ -95,43 +96,53 @@ export default function Page(){
         </div>
       </section>
 
-      {/* STRATEGIES */}
+      {/* STRATEGIES — numbers come from lib/strategy-stats.json (research/measure_strategies.py) */}
       <section id="strategies" className="mx-auto max-w-[1180px] scroll-mt-20 px-5 pb-20">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <h2 className="text-[30px] font-black">الـ 15 استراتيجية</h2>
-            <p className="mt-1 text-sm text-muted">نسبة الفوز وProfit Factor من Backtest على BTC فريم 4 ساعات</p>
+            <p className="mt-1 max-w-[720px] text-sm leading-6 text-muted">
+              نتايج حقيقية من Backtest على {STATS_META.symbols.map(x => x.replace("/USDT", "")).join(" و")}، فريم ساعة و4 ساعات
+              ({STATS_META.sets} مجموعات بيانات، {STATS_META.candlesPerSet.toLocaleString("en-US")} شمعة لكل واحدة، لحد {STATS_META.to}).
+              كل صفقة ${STATS_META.engine.marginUsdt} × {STATS_META.engine.leverage}، والربح بعد الرسوم.
+            </p>
           </div>
           <a href="/backtest" className="flex items-center gap-1 text-sm font-semibold text-corona hover:underline">اختبر أي واحدة بنفسك <ArrowUpRight size={14}/></a>
         </div>
         <div className="mt-6 overflow-x-auto rounded-2xl border border-line bg-surface">
-          <table className="w-full min-w-[640px] text-sm">
+          <table className="w-full min-w-[780px] text-sm">
             <thead className="bg-surface2/60 text-xs text-muted">
               <tr>
                 <th className="px-5 py-3 text-right font-semibold">الاستراتيجية</th>
-                <th className="hidden px-5 py-3 text-right font-semibold md:table-cell">الفكرة</th>
-                <th className="px-5 py-3 text-center font-semibold">نسبة الفوز</th>
-                <th className="px-5 py-3 text-center font-semibold">PF</th>
-                <th className="px-5 py-3 text-center font-semibold">متاحة من</th>
+                <th className="hidden px-5 py-3 text-right font-semibold lg:table-cell">الفكرة</th>
+                <th className="px-4 py-3 text-center font-semibold">صفقات</th>
+                <th className="px-4 py-3 text-center font-semibold">نسبة الفوز</th>
+                <th className="px-4 py-3 text-center font-semibold">PF</th>
+                <th className="px-4 py-3 text-center font-semibold">صافي الربح</th>
+                <th className="px-4 py-3 text-center font-semibold">كسبت في</th>
+                <th className="px-4 py-3 text-center font-semibold">متاحة من</th>
               </tr>
             </thead>
             <tbody>
               {STRATEGIES.map((s, i)=>{
-                const t = unlockTier(i)
+                const t = unlockTier(i), best = s.id === MOST_CONSISTENT.id
                 return (
-                  <tr key={s.id} className={`border-t border-line ${s.id==="ict" ? "bg-corona/[0.05]" : "hover:bg-surface2/50"}`}>
+                  <tr key={s.id} className={`border-t border-line ${best ? "bg-corona/[0.05]" : "hover:bg-surface2/50"}`}>
                     <td className="px-5 py-3.5">
                       <div className="flex items-center gap-2">
                         <span className="font-bold">{s.nameAr}</span>
                         <span className="font-display text-xs text-faint">{s.name}</span>
-                        {s.id==="ict" && <span className="rounded-full bg-corona px-2 py-0.5 text-[10px] font-bold text-void">الأقوى</span>}
+                        {best && <span className="rounded-full bg-corona px-2 py-0.5 text-[10px] font-bold text-void">الأثبت</span>}
                       </div>
-                      <div className="mt-0.5 text-xs text-muted md:hidden">{s.desc}</div>
+                      <div className="mt-0.5 text-xs text-muted lg:hidden">{s.desc}</div>
                     </td>
-                    <td className="hidden px-5 py-3.5 text-xs text-muted md:table-cell">{s.desc}</td>
-                    <td className="px-5 py-3.5 text-center"><span className={`font-mono font-bold ${s.winRate>=45 ? "text-profit" : s.winRate>=35 ? "text-corona" : "text-loss"}`}>{s.winRate}%</span></td>
-                    <td className="px-5 py-3.5 text-center font-mono text-muted">{s.pf}</td>
-                    <td className="px-5 py-3.5 text-center"><span className="rounded-full px-2.5 py-0.5 text-[11px] font-bold" style={{color: t.color, background: `${t.color}1A`}}>{t.name}</span></td>
+                    <td className="hidden px-5 py-3.5 text-xs text-muted lg:table-cell">{s.desc}</td>
+                    <td className="px-4 py-3.5 text-center font-mono text-muted">{s.trades.toLocaleString("en-US")}</td>
+                    <td className="px-4 py-3.5 text-center font-mono text-muted">{s.winRate}%</td>
+                    <td className={`px-4 py-3.5 text-center font-mono font-bold ${pfTone(s.pf)}`}>{s.pf.toFixed(2)}</td>
+                    <td className={`px-4 py-3.5 text-center font-mono font-bold ${s.pnl >= 0 ? "text-profit" : "text-loss"}`} dir="ltr">{s.pnl >= 0 ? "+" : ""}{s.pnl.toFixed(0)}$</td>
+                    <td className="px-4 py-3.5 text-center font-mono text-muted">{s.setsWon}/{STATS_META.sets}</td>
+                    <td className="px-4 py-3.5 text-center"><span className="rounded-full px-2.5 py-0.5 text-[11px] font-bold" style={{color: t.color, background: `${t.color}1A`}}>{t.name}</span></td>
                   </tr>
                 )
               })}
@@ -139,9 +150,10 @@ export default function Page(){
           </table>
         </div>
         <div className="mt-3 flex flex-wrap gap-4 text-xs text-faint">
-          <span className="flex items-center gap-1.5"><i className="h-2 w-2 rounded-full bg-profit"/> فوز ≥ 45%</span>
-          <span className="flex items-center gap-1.5"><i className="h-2 w-2 rounded-full bg-corona"/> 35–44%</span>
-          <span className="flex items-center gap-1.5"><i className="h-2 w-2 rounded-full bg-loss"/> أقل من 35%</span>
+          <span className="flex items-center gap-1.5"><i className="h-2 w-2 rounded-full bg-profit"/> PF ≥ 1.05 كسبانة</span>
+          <span className="flex items-center gap-1.5"><i className="h-2 w-2 rounded-full bg-corona"/> 0.95–1.05 تقريباً متعادلة</span>
+          <span className="flex items-center gap-1.5"><i className="h-2 w-2 rounded-full bg-loss"/> أقل من 0.95 خسرانة</span>
+          <span>· «الأثبت» = كسبت في أكبر عدد من المجموعات، في الفترة كلها وفي آخر 40% منها</span>
         </div>
       </section>
 

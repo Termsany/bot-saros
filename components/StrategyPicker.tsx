@@ -1,6 +1,6 @@
 "use client"
 import { Lock } from "lucide-react"
-import { STRATEGIES, TIERS } from "@/lib/strategies"
+import { STRATEGIES, TIERS, pfTone } from "@/lib/strategies"
 
 // A plan unlocks the first `count` strategies (same rule as the backend's TIER_STRATEGY_COUNT)
 function unlockTier(index: number){
@@ -25,8 +25,8 @@ export function StrategyPicker({ selected, onToggle, tier }: { selected: string[
             <div className="min-w-0">
               <div className={`text-sm font-bold truncate ${active ? "text-ink" : "text-ink/80"}`}>{s.nameAr}</div>
               <div className="font-mono text-[11px] text-muted tabular">
-                <span className={s.winRate>=45 ? "text-profit" : s.winRate>=35 ? "text-corona" : "text-loss"}>WR {s.winRate}%</span>
-                <span className="mx-1.5 text-faint">·</span>PF {s.pf}
+                <span className={`font-bold ${pfTone(s.pf)}`}>PF {s.pf.toFixed(2)}</span>
+                <span className="mx-1.5 text-faint">·</span>WR {s.winRate}%<span className="mx-1.5 text-faint">·</span>{s.setsWon}/8
               </div>
             </div>
             {locked ? (

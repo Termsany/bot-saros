@@ -1,26 +1,43 @@
-export type Strategy = { id: string; name: string; nameAr: string; desc: string; method: string; tier: "free"|"starter"|"pro"|"elite"; winRate: number; pf: number; icon: string }
-export const STRATEGIES: Strategy[] = [
-  { id:"rsi_macd", name:"RSI+MACD", nameAr:"RSI+MACD", desc:"تشبع + مومنتوم", method:"RSI14 <30 تشبع بيعي / >70 تشبع شرائي + MACD Histogram فوق/تحت الصفر. دخول LONG عند RSI منخفض و MACD صاعد، SHORT عند العكس.", tier:"free", winRate:28.6, pf:0.44, icon:"◉" },
-  { id:"classical", name:"Classical", nameAr:"كلاسيكي", desc:"SMA + ترند", method:"السعر فوق SMA20>SMA50 = صاعد، تحته = هابط + ميل الترند 20 شمعة + تأكيد حجم.", tier:"free", winRate:35, pf:0.8, icon:"━" },
-  { id:"ichimoku", name:"Ichimoku", nameAr:"إيشيموكو", desc:"السحابة + Tenkan", method:"السعر فوق السحابة (Senkou A/B) + Tenkan فوق Kijun = LONG قوي. تحتها = SHORT. Chicou فوق السعر تأكيد.", tier:"starter", winRate:38, pf:1.1, icon:"☁" },
-  { id:"dow", name:"Dow", nameAr:"داو", desc:"HH/HL", method:"نظريـة داو: قمم وقيعان صاعدة Higher Highs/Lows = ترند صاعد، هابطة = هابط. عد 5 قمم/قيعان أخيرة.", tier:"starter", winRate:33, pf:0.9, icon:"↗" },
-  { id:"gann", name:"Gann", nameAr:"جان", desc:"1/8 + زاوية", method:"تقسيم مدى 50 شمعة إلى 8 مستويات (1/8) + زاوية ميل السعر. قرب مستوى جان = ارتداد متوقع.", tier:"starter", winRate:31, pf:0.85, icon:"⬡" },
-  { id:"sr", name:"S/R", nameAr:"دعوم", desc:"Pivot", method:"تحديد Pivot High/Low آخر 6 مستويات. قرب الدعم 1.5% = شراء، قرب المقاومة = بيع.", tier:"starter", winRate:40, pf:1.2, icon:"▭" },
-  { id:"elliott", name:"Elliott", nameAr:"موجي", desc:"ZigZag + فيبو", method:"ZigZag 5 نقاط لتحديد الموجات + فيبوناتشي 38.2%/50%/61.8%. ارتداد 50-61.8% = موجة دافعة، كسر 61.8% = تصحيح عميق.", tier:"pro", winRate:42, pf:1.4, icon:"〰" },
-  { id:"smc", name:"SMC", nameAr:"Smart Money", desc:"OB + FVG + BOS", method:"Order Block (آخر شمعة انعكاسية) + Fair Value Gap (فجوة 3 شمعات) + Break of Structure (كسر قمة/قاع).", tier:"elite", winRate:48, pf:1.8, icon:"◆" },
-  { id:"vwap", name:"VWAP", nameAr:"VWAP", desc:"حجم + VWAP", method:"السعر فوق VWAP20 = صاعد، تحته = هابط + انفجار حجم >1.8x المتوسط كتأكيد.", tier:"elite", winRate:45, pf:1.6, icon:"▣" },
-  { id:"supertrend", name:"SuperTrend", nameAr:"سوبر ترند", desc:"ATR + ترند", method:"SuperTrend ATR(10)×3: السعر فوق EMA+1.5×ATR = LONG، تحته = SHORT + ATR يتوسع = زخم.", tier:"elite", winRate:44, pf:1.5, icon:"▲" },
-  { id:"bollinger", name:"Bollinger", nameAr:"بولنجر", desc:"Squeeze + StochRSI", method:"Bollinger Bands 20×2: Squeeze (عرض ضيق) = انفجار قريب. اختراق علوي + RSI>60 = LONG.", tier:"elite", winRate:41, pf:1.3, icon:"◎" },
-  { id:"harmonic", name:"Harmonic", nameAr:"هارمونيك", desc:"Gartley/Bat", method:"4 Pivot أخيرة: نسبة AB/XA بين 0.618-0.786 = نموذج Gartley. قاع جديد مع ارتداد = صاعد.", tier:"elite", winRate:39, pf:1.2, icon:"⬢" },
-  { id:"ict", name:"ICT Killzone", nameAr:"ICT ⭐", desc:"London/NY — بطل BTC 4h 100% و 15m 83% PF 30", method:"Killzone لندن 7-10 UTC / نيويورك 12-15 UTC + Sweep قمة/قاع الجلسة = انعكاس. BTC 4h: +10.48 PF inf (3/3) و BTC 15m: +3.63 PF 30 (5/6) — يحتاج Walk-Forward على كل عملة.", tier:"elite", winRate:71, pf:3.32, icon:"◐" },
-  { id:"heikin", name:"Heikin+ADX", nameAr:"هيكن + ADX", desc:"فلترة", method:"Heikin Ashi شمعتان متتاليتان بنفس الاتجاه + ADX>25 قوي يضاعف الإشارة، <15 يضعفها.", tier:"elite", winRate:43, pf:1.4, icon:"⬣" },
-  { id:"ai", name:"AI Ensemble", nameAr:"AI", desc:"تكيف تلقائي", method:"متوسط مرجح لكل الاستراتيجيات + تعزيز إذا 4+ استراتيجيات متفقة (×1.3). إجماع قوي = إشارة أقوى.", tier:"elite", winRate:50, pf:1.9, icon:"✦" },
+import STATS_FILE from "./strategy-stats.json"
+
+/** Measured with the bot's own engine by research/measure_strategies.py — never edit these numbers by hand. */
+export type StrategyStats = { trades: number; winRate: number; pf: number; pnl: number; setsWon: number; oosPnl: number; oosSetsWon: number; maxDD: number }
+export type Strategy = { id: string; name: string; nameAr: string; desc: string; method: string; tier: "free"|"starter"|"pro"|"elite"; icon: string } & StrategyStats
+export const STATS_META = STATS_FILE.meta
+
+// Order matters: a plan unlocks the first N (see TIERS.count). `method` describes what the code really does.
+const BASE: Omit<Strategy, keyof StrategyStats>[] = [
+  { id:"rsi_macd", name:"RSI+MACD", nameAr:"RSI+MACD", desc:"تشبع + مومنتوم", method:"RSI(14): تحت 30 شراء قوي، تحت 40 شراء خفيف، فوق 60/70 بيع. ويضيف اتجاه MACD Histogram (فوق الصفر = صاعد).", tier:"free", icon:"◉" },
+  { id:"classical", name:"Classical", nameAr:"كلاسيكي", desc:"SMA + ميل الترند", method:"السعر فوق SMA20 وSMA20 فوق SMA50 = صاعد، والعكس هابط. ويضيف ميل السعر في آخر 20 شمعة.", tier:"free", icon:"━" },
+  { id:"ichimoku", name:"Ichimoku", nameAr:"إيشيموكو", desc:"السحابة + Tenkan/Kijun", method:"السعر فوق السحابة (Senkou A وB) = صاعد، تحتها = هابط. وTenkan فوق Kijun يقوّي الإشارة.", tier:"starter", icon:"☁" },
+  { id:"dow", name:"Dow", nameAr:"داو", desc:"قمم وقيعان صاعدة", method:"نظرية داو: يعدّ آخر 5 قمم و5 قيعان. قمم وقيعان أعلى من اللي قبلها = ترند صاعد، أقل = هابط.", tier:"starter", icon:"↗" },
+  { id:"gann", name:"Gann", nameAr:"جان", desc:"زاوية الميل", method:"ميل السعر في آخر 10 شموع مقارنة بمدى آخر 50 شمعة. ميل قوي لفوق = صاعد، لتحت = هابط.", tier:"starter", icon:"⬡" },
+  { id:"sr", name:"S/R", nameAr:"دعوم", desc:"Pivot", method:"آخر 6 قمم وقيعان (Pivots). قرب الدعم بأقل من 1.5% = شراء، قرب المقاومة = بيع.", tier:"starter", icon:"▭" },
+  { id:"elliott", name:"Elliott", nameAr:"موجي", desc:"ZigZag + فيبو", method:"آخر 9 قمم وقيعان + فيبوناتشي: ارتداد بين 50% و61.8% مع شمعة صاعدة = شراء، كسر 61.8% = بيع، اختراق القمة = شراء.", tier:"pro", icon:"〰" },
+  { id:"smc", name:"SMC", nameAr:"Smart Money", desc:"BOS + FVG + OB", method:"كسر هيكل (BOS) لقمة أو قاع سابق + فجوة سعرية (FVG) من 3 شموع + Order Block قريب من آخر قاع.", tier:"elite", icon:"◆" },
+  { id:"vwap", name:"VWAP", nameAr:"VWAP", desc:"حجم + VWAP", method:"السعر فوق VWAP آخر 20 شمعة = صاعد، تحته = هابط. حجم أكبر من 1.8× المتوسط يقوّي الإشارة.", tier:"elite", icon:"▣" },
+  { id:"supertrend", name:"SuperTrend", nameAr:"سوبر ترند", desc:"EMA + ATR", method:"السعر أعلى من EMA(10) + 1.5×ATR = صاعد، أقل من EMA(10) − 1.5×ATR = هابط، وبينهم محايد.", tier:"elite", icon:"▲" },
+  { id:"bollinger", name:"Bollinger", nameAr:"بولنجر", desc:"Bands + RSI", method:"اختراق الحد العلوي (20، 2σ) مع RSI فوق 60 = شراء، كسر السفلي مع RSI تحت 40 = بيع. وإلا: RSI تحت 30 شراء، فوق 70 بيع.", tier:"elite", icon:"◎" },
+  { id:"harmonic", name:"Harmonic", nameAr:"هارمونيك", desc:"نسب Gartley", method:"آخر 4 قمم وقيعان: لو الارتداد بين 0.618 و0.786 والسعر ارتد 1% من آخر قاع = شراء، أو نزل 1% من آخر قمة = بيع.", tier:"elite", icon:"⬢" },
+  { id:"ict", name:"ICT Killzone", nameAr:"ICT", desc:"جلسات لندن ونيويورك", method:"وقت جلسة لندن (7–10 UTC) أو نيويورك (12–15 UTC): اختراق أعلى قمة آخر 20 شمعة = بيع (Sweep)، كسر أدنى قاع = شراء.", tier:"elite", icon:"◐" },
+  { id:"heikin", name:"Heikin+ADX", nameAr:"هيكن + ADX", desc:"Heikin Ashi + قوة الترند", method:"شمعتين Heikin Ashi متتاليتين في نفس الاتجاه، وADX فوق 25 يقوّيها وتحت 15 يضعّفها.", tier:"elite", icon:"⬣" },
+  { id:"ai", name:"Consensus", nameAr:"الإجماع", desc:"إجماع الـ 14 استراتيجية", method:"متوسط إشارات الـ 14 استراتيجية التانية، ويقوّي الإشارة لو 4 أو أكتر متفقين في نفس الاتجاه.", tier:"elite", icon:"✦" },
 ]
+
+const MEASURED = STATS_FILE.strategies as Record<string, StrategyStats>
+export const STRATEGIES: Strategy[] = BASE.map(s => ({ ...s, ...MEASURED[s.id] }))
+
+/** Consistency across the 8 data sets, both periods — more meaningful than win rate alone. */
+export const consistency = (s: StrategyStats) => s.setsWon + s.oosSetsWon
+export const MOST_CONSISTENT = [...STRATEGIES].sort((a, b) => consistency(b) - consistency(a) || b.pnl - a.pnl)[0]
+/** Text colour for a profit factor: above 1.05 profitable, 0.95–1.05 roughly break-even, below that losing. */
+export const pfTone = (pf: number) => pf >= 1.05 ? "text-profit" : pf >= 0.95 ? "text-corona" : "text-loss"
+
 export const TIERS = [
   { id:"free", name:"Free", price:"0$", per:"/شهر", cta:"ابدأ مجانا", features:["استراتيجيتان","Spot فقط","Backtest 7 أيام"], count:2, color:"#8B91A7" },
   { id:"starter", name:"Starter", price:"29$", per:"/شهر", cta:"اشترك", features:["6 استراتيجيات","Spot","Backtest 30 يوم"], count:6, color:"#4CC9F0" },
   { id:"pro", name:"Pro", price:"59$", per:"/شهر", cta:"اشترك Pro", features:["7 استراتيجيات","Futures LONG/SHORT x5","Backtest 90 يوم"], count:7, color:"#7B61FF", popular:true },
-  { id:"elite", name:"Elite", price:"99$", per:"/شهر", cta:"اشترك Elite", features:["15 استراتيجية","AI + SMC + ICT","Backtest غير محدود"], count:15, color:"#F5B841" },
+  { id:"elite", name:"Elite", price:"99$", per:"/شهر", cta:"اشترك Elite", features:["15 استراتيجية","SMC + ICT + الإجماع","Backtest غير محدود"], count:15, color:"#F5B841" },
 ]
 // Max backtest range in days, end date inclusive (null = unlimited). The backend enforces the same
 // numbers (TIER_BACKTEST_DAYS in backend/app/main.py) — keep them in sync.

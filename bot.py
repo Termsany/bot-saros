@@ -25,29 +25,30 @@ CONFIG = {
         "LINK/USDT","TRX/USDT","LTC/USDT","BCH/USDT","UNI/USDT",
         "ETC/USDT","NEAR/USDT","1000PEPE/USDT","ARB/USDT","SUI/USDT",
     ],
-    "timeframe": "4h",  # ✅ 4h = الفريم الذهبي (BTC ICT +10.48 PF inf)
+    "timeframe": "4h",
     "weights": {"ichimoku":0.10,"dow":0.05,"gann":0.05,"elliott":0.08,"classical":0.05,"sr":0.05,"rsi_macd":0.12,"smc":0.10,"vwap":0.07,"supertrend":0.07,"bollinger":0.07,"harmonic":0.05,"ict":0.05,"heikin":0.05,"ai":0.04},
-    "enabled_strategies": ["ict"],  # ✅ ICT Killzone — BTC 4h +10.48 PF inf و BTC 15m +3.63 PF 30
-    "buy_threshold": 0.15, "strong_buy": 0.35, "sell_threshold": -0.15, "strong_sell": -0.35,
+    "enabled_strategies": ["ict"],  # measured results per strategy: lib/strategy-stats.json (research/README.md)
+    # Engine rules below match backtest.py and lib/strategy-engine.ts, so live trading behaves like the backtests:
+    # |score| > 0.35 to enter, 3 candles of cooldown after a trade, fixed 3%/6% SL/TP, ADX >= 10, range filter.
+    "buy_threshold": 0.35, "strong_buy": 0.35, "sell_threshold": -0.35, "strong_sell": -0.35,
     "trade_amount_usdt": 20,
     # === Week 1: Risk + Filters ===
     "risk_pct": 2.0,              # 2% من المحفظة لكل صفقة (لو balance معروف)
     "use_percent_risk": False,     # False = 20$ ثابت، True = % من الرصيد
-    "adx_threshold": 0,           # فلتر ADX — اقل من 18 = سوق عرضي لا تدخل
+    "adx_threshold": 10,          # فلتر ADX — أقل من 10 = سوق بلا اتجاه، لا تدخل (نفس الباك تست)
     "vol_filter": False,            # لازم حجم > متوسط 20
     "htf_filter": False,            # لا تدخل عكس ترند 4h
     "htf_timeframe": "4h",
-    "dynamic_sl_tp": True, "atr_sl_mult": 2.0, "atr_tp_mult": 3.0, "atr_period": 14,
-    "regime_filter": False, "regime_adx_trend": 20,
+    "dynamic_sl_tp": False, "atr_sl_mult": 2.0, "atr_tp_mult": 3.0, "atr_period": 14,  # ATR exits helped some strategies and hurt others in testing
+    "regime_filter": True, "regime_adx_trend": 20,
     "max_daily_loss_pct": 5.0,     # لو خسر 5% في يوم يوقف
-    "cooldown_after_loss": 60,     # دقائق انتظار بعد خسارة
     "breakeven_enabled": True,         # بعد أول هدف ينقل الوقف لنقطة الدخول
     "breakeven_trigger_pct": 0.50,     # 50% من المسافة للهدف = أول هدف
     "breakeven_offset_pct": 0.001,     # 0.1% فوق الدخول لتغطية العمولة
     "stop_loss_pct": 0.03,
     "take_profit_pct": 0.06,
     "max_open_positions": 5,
-    "cooldown_minutes": 30,
+    "cooldown_bars": 3,            # شموع انتظار بعد قفل أي صفقة على نفس الزوج (نفس الباك تست)
     "paper_trading": True,
     "poll_seconds": 60,
     "state_file": "state.json",
@@ -347,13 +348,9 @@ def cooldown_ok(state,symbol):
     if not last: return True
     try:
         mins=(datetime.now(timezone.utc)-datetime.fromisoformat(last)).total_seconds()/60
-        base=int(CONFIG.get("cooldown_minutes",30))
-        # لو آخر صفقة خاسرة، ضاعف الانتظار
-        hist=state.get("history",[])
-        last_hist=next((h for h in reversed(hist) if h.get("symbol")==symbol), None)
-        if last_hist and float(last_hist.get("pnl",0)) < 0:
-            base=int(CONFIG.get("cooldown_after_loss", 60))
-        return mins >= base
+        # same rule as the backtest: wait cooldown_bars candles of the trading timeframe after a trade closes
+        tf_min={"15m":15,"30m":30,"1h":60,"2h":120,"4h":240,"1d":1440}.get(CONFIG.get("timeframe","4h"), 240)
+        return mins >= int(CONFIG.get("cooldown_bars",3)) * tf_min
     except: return True
 
 def ensure_futures_setup(ex, symbol):

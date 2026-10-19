@@ -25,3 +25,6 @@ api_bot_config.json
 dashboard-data.json
 backtest_*.json
 backtest_*.png
+
+# strategy research cache (market data + signals)
+research/.cache/

@@ -1,7 +1,7 @@
 "use client"
 import { useEffect, useState } from "react"
 import { apiKlines } from "@/lib/api"
-import { STRATEGIES } from "@/lib/strategies"
+import { STATS_META, STRATEGIES, consistency, pfTone } from "@/lib/strategies"
 
 /** Landing hero card: live BTC price + 48h chart, and the top strategies by the site's own backtest stats. */
 export function HeroPreview(){
@@ -16,7 +16,9 @@ export function HeroPreview(){
   const w = 420, h = 120
   const mn = Math.min(...closes), mx = Math.max(...closes)
   const pts = closes.map((v, i)=> `${(i / Math.max(1, closes.length-1) * w).toFixed(1)},${(h - 6 - (v - mn) / ((mx - mn) || 1) * (h - 12)).toFixed(1)}`)
-  const top = [...STRATEGIES].sort((a,b)=> b.winRate - a.winRate).slice(0, 3)
+  // ranked by how many of the 8 data sets they finished positive (whole period + last 40%), not win rate
+  const top = [...STRATEGIES].sort((a,b)=> consistency(b) - consistency(a) || b.pnl - a.pnl).slice(0, 3)
+  const total = STATS_META.sets * 2
 
   return (
     <div className="relative rounded-3xl border border-line bg-surface p-5 shadow-[0_30px_80px_-30px_rgba(245,184,65,0.25)]">
@@ -43,18 +45,19 @@ export function HeroPreview(){
       </svg>
       <div className="mt-4 border-t border-line pt-4">
         <div className="mb-3 flex items-center justify-between text-xs">
-          <span className="font-bold">أعلى نسبة فوز</span>
-          <span className="font-mono text-faint">Backtest · BTC 4h</span>
+          <span className="font-bold">الأثبت في الاختبار</span>
+          <span className="font-mono text-faint" dir="ltr">{STATS_META.sets} SETS · 1H/4H</span>
         </div>
         <div className="space-y-2.5">
           {top.map(s=>(
             <div key={s.id} className="flex items-center gap-3">
               <span className="w-28 shrink-0 truncate text-sm font-semibold">{s.nameAr}</span>
-              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-line" dir="ltr"><div className="h-full rounded-full bg-gradient-to-r from-umbra to-corona" style={{width: `${s.winRate}%`}}/></div>
-              <span className="w-10 shrink-0 text-left font-mono text-xs font-bold text-profit">{s.winRate}%</span>
+              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-line" dir="ltr"><div className="h-full rounded-full bg-gradient-to-r from-umbra to-corona" style={{width: `${consistency(s) / total * 100}%`}}/></div>
+              <span className={`w-16 shrink-0 whitespace-nowrap text-left font-mono text-xs font-bold ${pfTone(s.pf)}`} dir="ltr">PF {s.pf.toFixed(2)}</span>
             </div>
           ))}
         </div>
+        <p className="mt-3 text-[11px] leading-5 text-faint">الشريط = عدد المرات اللي خلصت فيها كسبانة من {total} (الفترة كلها + آخر 40%). نتايج سابقة، مش ضمان.</p>
       </div>
     </div>
   )

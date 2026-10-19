@@ -13,7 +13,9 @@ import matplotlib.dates as mdates
 
 CONFIG = {
     "weights": {"ichimoku":0.10,"dow":0.05,"gann":0.05,"elliott":0.08,"classical":0.05,"sr":0.05,"rsi_macd":0.12,"smc":0.10,"vwap":0.07,"supertrend":0.07,"bollinger":0.07,"harmonic":0.05,"ict":0.05,"heikin":0.05,"ai":0.04},
-    "buy_threshold": 0.15, "strong_buy": 0.35, "sell_threshold": -0.15, "strong_sell": -0.35,
+    # Entry needs |score| > 0.35 and 3 candles after the last exit: chosen on 2026 data (research/README.md) —
+    # 0.15 with no cooldown overtraded, fees ate the edge. Same values in bot.py and lib/strategy-engine.ts.
+    "buy_threshold": 0.35, "strong_buy": 0.35, "sell_threshold": -0.35, "strong_sell": -0.35, "cooldown_bars": 3,
     "stop_loss_pct": 0.03, "take_profit_pct": 0.06,
     "trade_amount_usdt": 20, "leverage": 5, "fee_pct": 0.0004,
     "adx_threshold": 0, "vol_filter": False, "htf_filter": False, "htf_timeframe": "4h","dynamic_sl_tp": False, "atr_sl_mult": 2.0, "atr_tp_mult": 3.0,
@@ -68,7 +70,8 @@ def sr_signal(df):
     h,l,c=df.high,df.low,df.close; price=c.iloc[-1]
     piv_hi=[h.iloc[i] for i in range(2,len(h)-2) if h.iloc[i]==h.iloc[i-2:i+3].max()][-6:]
     piv_lo=[l.iloc[i] for i in range(2,len(l)-2) if l.iloc[i]==l.iloc[i-2:i+3].min()][-6:]
-    sups=sorted(set(round(x,2) for x in piv_lo)); ress=sorted(set(round(x,2) for x in piv_hi))
+    # 6 decimals like bot.py — 2 decimals merged every level on coins under ~$5 (XRP, DOGE, SHIB, PEPE)
+    sups=sorted(set(round(x,6) for x in piv_lo)); ress=sorted(set(round(x,6) for x in piv_hi))
     sup=max([x for x in sups if x<price], default=None); res=min([x for x in ress if x>price], default=None)
     score=0
     if sup and (price-sup)/price<0.015: score+=0.7
@@ -250,13 +253,14 @@ def run_backtest(df, amount_usdt=20, leverage=5, fee_pct=0.0004, warmup=60, enab
     bt_threshold=CONFIG["buy_threshold"]; st_threshold=CONFIG["sell_threshold"]
     trades=[]; position=None; equity=[0]; equity_curve=[{"ts": df.ts.iloc[0] if len(df)>0 else None, "equity": 0}]
     wins=0; losses=0
+    cooldown_bars=int(CONFIG.get("cooldown_bars", 0)); last_exit_i=-10**9  # bars to wait after a trade closes
 
     for i in range(warmup, len(df)):
-        window = df.iloc[:i+1]  # all data up to i
+        window = df.iloc[:i+1]  # all data up to i (filters)
         price = float(df.close.iloc[i])
         ts = df.ts.iloc[i]
-        # Score at this bar close
-        total, breakdown = score_at(window, enabled)
+        # Score at this bar close on the last 300 candles — what the live bot sees (it fetches limit=300)
+        total, breakdown = score_at(df.iloc[max(0, i-299):i+1], enabled)
         # Check SL/TP first if in position
         if position is not None:
             side=position["side"]; entry=position["entry"]
@@ -284,7 +288,7 @@ def run_backtest(df, amount_usdt=20, leverage=5, fee_pct=0.0004, warmup=60, enab
                 else: losses+=1
                 equity.append(equity[-1]+pnl)
                 equity_curve.append({"ts":ts,"equity":equity[-1]})
-                position=None
+                position=None; last_exit_i=i
                 continue
             else:
                 # ♻️ Breakeven 50% -> move SL to entry + offset.
@@ -307,6 +311,9 @@ def run_backtest(df, amount_usdt=20, leverage=5, fee_pct=0.0004, warmup=60, enab
         # No position — try to enter (with week1 filters)
         if position is None:
             side=None
+            if i - last_exit_i <= cooldown_bars:
+                equity_curve.append({"ts":ts,"equity":equity[-1]})
+                continue
             if total > bt_threshold: side="long"
             elif total < st_threshold: side="short"
             if side:
@@ -498,7 +505,7 @@ def plot_results(df, res, symbol, timeframe, out_path):
         ax2.fill_between(ts_sc, vals, 0, where=[v>=0 for v in vals], color="#00d395", alpha=0.3)
         ax2.fill_between(ts_sc, vals, 0, where=[v<0 for v in vals], color="#ff3b5c", alpha=0.3)
         ax2.plot(ts_sc, vals, color="#60a5fa", linewidth=0.7)
-        ax2.axhline(0.15, color="#00d395", linestyle="--", linewidth=0.6); ax2.axhline(-0.15, color="#ff3b5c", linestyle="--", linewidth=0.6)
+        ax2.axhline(CONFIG["buy_threshold"], color="#22d3a0", linestyle="--", linewidth=0.6); ax2.axhline(CONFIG["sell_threshold"], color="#ff5470", linestyle="--", linewidth=0.6)
         ax2.axhline(0.35, color="#00d395", linestyle=":", linewidth=0.5); ax2.axhline(-0.35, color="#ff3b5c", linestyle=":", linewidth=0.5)
     ax2.set_ylabel("Score"); ax2.set_ylim(-1,1); ax2.grid(alpha=0.2)
     # Equity

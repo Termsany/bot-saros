@@ -1,7 +1,7 @@
 "use client"
 import { useEffect, useMemo, useState } from "react"
 import { Area, AreaChart, CartesianGrid, ComposedChart, Line, ReferenceLine, ResponsiveContainer, Scatter, Tooltip, XAxis, YAxis } from "recharts"
-import { STRATEGIES, BACKTEST_DAYS, backtestSpanDays } from "@/lib/strategies"
+import { STRATEGIES, BACKTEST_DAYS, backtestSpanDays, pfTone } from "@/lib/strategies"
 import { getMyTier } from "@/lib/supabase"
 import { PAIRS } from "@/lib/pairs"
 import { AppShell } from "@/components/AppShell"
@@ -195,7 +195,7 @@ export default function BacktestPage(){
                     className={`flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2 text-right transition ${on ? "bg-surface2 ring-1 ring-corona/30" : "border border-line hover:bg-surface2/60"}`}>
                     <div className="min-w-0">
                       <div className="truncate text-sm font-bold">{st.nameAr}</div>
-                      <div className="font-mono text-[11px] text-muted"><span className={st.winRate>=45 ? "text-profit" : st.winRate>=35 ? "text-corona" : "text-loss"}>WR {st.winRate}%</span><span className="mx-1.5 text-faint">·</span>PF {st.pf}</div>
+                      <div className="font-mono text-[11px] text-muted"><span className={`font-bold ${pfTone(st.pf)}`}>PF {st.pf.toFixed(2)}</span><span className="mx-1.5 text-faint">·</span>WR {st.winRate}%<span className="mx-1.5 text-faint">·</span>{st.setsWon}/8</div>
                     </div>
                     <span className={`grid h-5 w-5 shrink-0 place-items-center ${single ? "rounded-full" : "rounded-md"} border ${on ? "border-corona bg-corona text-void" : "border-faint"}`}>{on && <Check size={13} strokeWidth={3}/>}</span>
                   </button>
@@ -324,7 +324,7 @@ export default function BacktestPage(){
                   <div key={st.id} className="rounded-2xl border border-line bg-surface p-4">
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-sm font-bold">{st.nameAr} <span className="font-display font-medium text-muted">· {st.name}</span></span>
-                      <span className="font-mono text-[11px] text-muted"><span className={st.winRate>=45 ? "text-profit" : st.winRate>=35 ? "text-corona" : "text-loss"}>WR {st.winRate}%</span> · PF {st.pf}</span>
+                      <span className="font-mono text-[11px] text-muted"><span className={`font-bold ${pfTone(st.pf)}`}>PF {st.pf.toFixed(2)}</span> · WR {st.winRate}% · {st.trades} صفقة في الاختبار</span>
                     </div>
                     <p className="mt-2 text-xs leading-6 text-muted">{st.method}</p>
                   </div>

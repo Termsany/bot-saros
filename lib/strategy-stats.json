@@ -1,0 +1,180 @@
+{
+ "meta": {
+  "generatedAt": "2026-10-19",
+  "sets": 8,
+  "symbols": [
+   "BTC/USDT",
+   "ETH/USDT",
+   "SOL/USDT",
+   "XRP/USDT"
+  ],
+  "timeframes": [
+   "1h",
+   "4h"
+  ],
+  "candlesPerSet": 2000,
+  "from": "2025-11-19",
+  "to": "2026-10-19",
+  "engine": {
+   "entryThreshold": 0.35,
+   "cooldownBars": 3,
+   "stopLossPct": 0.03,
+   "takeProfitPct": 0.06,
+   "marginUsdt": 20,
+   "leverage": 5,
+   "feePct": 0.0004
+  }
+ },
+ "strategies": {
+  "ichimoku": {
+   "trades": 642,
+   "winRate": 45.8,
+   "pf": 1.1,
+   "pnl": 84.11,
+   "setsWon": 5,
+   "oosPnl": 3.8,
+   "oosSetsWon": 3,
+   "maxDD": 38.49
+  },
+  "dow": {
+   "trades": 563,
+   "winRate": 47.4,
+   "pf": 1.12,
+   "pnl": 82.43,
+   "setsWon": 6,
+   "oosPnl": 27.2,
+   "oosSetsWon": 5,
+   "maxDD": 52.89
+  },
+  "gann": {
+   "trades": 1056,
+   "winRate": 37.6,
+   "pf": 0.99,
+   "pnl": -9.47,
+   "setsWon": 4,
+   "oosPnl": -75.64,
+   "oosSetsWon": 3,
+   "maxDD": 48.42
+  },
+  "elliott": {
+   "trades": 876,
+   "winRate": 38.1,
+   "pf": 1.05,
+   "pnl": 43.46,
+   "setsWon": 6,
+   "oosPnl": -50.66,
+   "oosSetsWon": 2,
+   "maxDD": 45.2
+  },
+  "classical": {
+   "trades": 835,
+   "winRate": 41.3,
+   "pf": 0.93,
+   "pnl": -77.82,
+   "setsWon": 3,
+   "oosPnl": -55.92,
+   "oosSetsWon": 2,
+   "maxDD": 49.63
+  },
+  "sr": {
+   "trades": 1051,
+   "winRate": 54.0,
+   "pf": 0.9,
+   "pnl": -103.51,
+   "setsWon": 2,
+   "oosPnl": -48.71,
+   "oosSetsWon": 3,
+   "maxDD": 59.99
+  },
+  "rsi_macd": {
+   "trades": 890,
+   "winRate": 38.8,
+   "pf": 0.92,
+   "pnl": -62.56,
+   "setsWon": 2,
+   "oosPnl": -30.15,
+   "oosSetsWon": 3,
+   "maxDD": 57.83
+  },
+  "smc": {
+   "trades": 963,
+   "winRate": 39.4,
+   "pf": 0.99,
+   "pnl": -5.75,
+   "setsWon": 4,
+   "oosPnl": -62.65,
+   "oosSetsWon": 2,
+   "maxDD": 50.99
+  },
+  "vwap": {
+   "trades": 1288,
+   "winRate": 33.0,
+   "pf": 1.06,
+   "pnl": 64.23,
+   "setsWon": 5,
+   "oosPnl": 24.49,
+   "oosSetsWon": 5,
+   "maxDD": 43.46
+  },
+  "supertrend": {
+   "trades": 354,
+   "winRate": 44.4,
+   "pf": 0.95,
+   "pnl": -27.88,
+   "setsWon": 4,
+   "oosPnl": -30.55,
+   "oosSetsWon": 2,
+   "maxDD": 35.51
+  },
+  "bollinger": {
+   "trades": 800,
+   "winRate": 47.8,
+   "pf": 0.98,
+   "pnl": -20.29,
+   "setsWon": 4,
+   "oosPnl": 19.9,
+   "oosSetsWon": 4,
+   "maxDD": 33.94
+  },
+  "harmonic": {
+   "trades": 139,
+   "winRate": 43.2,
+   "pf": 0.66,
+   "pnl": -75.89,
+   "setsWon": 1,
+   "oosPnl": -68.61,
+   "oosSetsWon": 1,
+   "maxDD": 27.8
+  },
+  "ict": {
+   "trades": 258,
+   "winRate": 53.9,
+   "pf": 0.98,
+   "pnl": -8.38,
+   "setsWon": 3,
+   "oosPnl": 40.65,
+   "oosSetsWon": 6,
+   "maxDD": 49.24
+  },
+  "heikin": {
+   "trades": 549,
+   "winRate": 41.7,
+   "pf": 1.05,
+   "pnl": 28.01,
+   "setsWon": 6,
+   "oosPnl": -55.01,
+   "oosSetsWon": 3,
+   "maxDD": 39.8
+  },
+  "ai": {
+   "trades": 543,
+   "winRate": 43.3,
+   "pf": 0.96,
+   "pnl": -32.92,
+   "setsWon": 3,
+   "oosPnl": -35.95,
+   "oosSetsWon": 2,
+   "maxDD": 44.41
+  }
+ }
+}
