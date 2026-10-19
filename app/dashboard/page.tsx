@@ -5,6 +5,7 @@ import { Bar, BarChart, CartesianGrid, Cell, ReferenceLine, ResponsiveContainer,
 import { Logo } from "@/components/Logo"
 import { BarChart3, Clock3, Crosshair, RefreshCw, Wifi, Activity } from "lucide-react"
 import { StrategyPicker } from "@/components/StrategyPicker"
+import { PaperWallet } from "@/components/PaperWallet"
 import { PAIRS, NAMES } from "@/lib/pairs"
 import { apiTrades, apiKlines } from "@/lib/api"
 
@@ -158,6 +159,7 @@ export default function Dashboard(){
               </select>
             </div>
             <StrategyPicker selected={selected} onToggle={toggle} tier={tier}/>
+            <div className="mt-4"><PaperWallet/></div>
             {tier!=="elite" && selected.some(s=>["smc","vwap","supertrend","bollinger","harmonic","ict","heikin","ai"].includes(s)) && (
               <div className="mt-3 text-[11px] text-[#FFB800] bg-[#2a2506] border border-[#4a3a00] rounded-xl px-3 py-2">⚠️ للباقة Elite — <a href="/#pricing" className="underline">حدّث</a></div>
             )}

@@ -27,6 +27,7 @@ export default function BacktestPage(){
   const [timeframe, setTimeframe] = useState("1h")
   const [from, setFrom] = useState(()=>{ const d=new Date(); d.setMonth(d.getMonth()-1); return toISODate(d) })
   const [to, setTo] = useState(()=> toISODate(new Date()))
+  const [amount, setAmount] = useState(20)
   const [selected, setSelected] = useState<string[]>(["rsi_macd"])
   const [single, setSingle] = useState(true)
   const [loading, setLoading] = useState(false)
@@ -39,7 +40,7 @@ export default function BacktestPage(){
   async function run(){
     setLoading(true); setError(""); setResult(null)
     try{
-      const j = await apiBacktest({ symbol, timeframe, from, to, strategies: selected, amount: 20, leverage: 5 })
+      const j = await apiBacktest({ symbol, timeframe, from, to, strategies: selected, amount, leverage: 5 })
       setStdout((j.stdout||"") + (j.stderr ? "\n"+j.stderr : ""))
       if(j.data) setResult(j.data as BacktestData)
       else if(!j.ok) setError(j.error || j.stdout || "فشل")
@@ -106,9 +107,20 @@ export default function BacktestPage(){
               )
             })}
           </div>
+          {/* Amount — وهمي */}
+          <div className="mt-4 rounded border border-[#1c2632] bg-[#0a1018] p-4">
+            <div className="flex justify-between items-center">
+              <div><div className="text-xs font-bold">المبلغ الوهمي للصفقة</div><div className="font-mono text-[11px] text-[#647386]">اختر كأنك داخل بكام — وهمي 100% بدون فلوس حقيقية</div></div>
+              <span className="font-mono text-lg font-black text-[#00D395]">{amount}$</span>
+            </div>
+            <input type="range" min={10} max={200} step={10} value={amount} onChange={e=>setAmount(parseInt(e.target.value))} className="w-full mt-3 accent-[#00D395]" />
+            <div className="flex justify-between font-mono text-[10px] text-[#5f6e81] mt-1"><span>10$</span><span>100$</span><span>200$</span></div>
+            <div className="mt-2 font-mono text-[11px] text-[#5f6e81]">هامش وهمي <b className="text-white">{amount}$</b> × رافعة x5 = <b className="text-[#00D395]">{amount*5}$</b> حجم الصفقة</div>
+          </div>
+
           <button onClick={run} disabled={loading || selected.length===0}
             className={`w-full mt-4 py-3 rounded text-sm font-black flex items-center justify-center gap-2 ${loading ? "bg-[#1c2632] text-[#647386]" : "bg-[#00D395] text-[#062016] hover:bg-[#00b87a]"}`}>
-            <Zap size={14}/>{loading ? "جاري التحليل..." : `شغّل الـ Backtest — ${selected.length} استراتيجية · ${symbol} ${timeframe} ${from} → ${to}`}
+            <Zap size={14}/>{loading ? "جاري التحليل..." : `شغّل الـ Backtest — ${selected.length} استراتيجية · ${amount}$ · ${symbol} ${timeframe} ${from} → ${to}`}
           </button>
           <div className="mt-2 font-mono text-[10px] text-[#5f6e81]">python backtest.py --symbol {symbol} --timeframe {timeframe} --from {from} --to {to} --strategies {selected.join(",")} --leverage 5</div>
         </section>
