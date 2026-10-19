@@ -3,6 +3,12 @@ import { authHeaders } from "./supabase"
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
 const JSON_CT = { "Content-Type": "application/json" }
 
+/** Auth headers, or null when nobody is signed in — callers skip requests that would just be rejected. */
+async function signedInHeaders(): Promise<Record<string,string>|null>{
+  const h = await authHeaders()
+  return h.Authorization ? h : null
+}
+
 export async function apiBacktest(body: any){
   const r = await fetch(`${API}/api/backtest`, { method:"POST", headers: await authHeaders(JSON_CT), body: JSON.stringify(body) })
   return r.json()
@@ -11,7 +17,10 @@ export async function apiHealth(){
   try{ const r=await fetch(`${API}/api/health`); return r.json() }catch{ return {ok:false} }
 }
 export async function apiBotStatus(){
-  try{ const r=await fetch(`${API}/api/bot/status`, { headers: await authHeaders() }); return r.ok ? r.json() : {running:false} }catch{ return {running:false} }
+  try{
+    const headers = await signedInHeaders(); if(!headers) return {running:false}
+    const r=await fetch(`${API}/api/bot/status`, { headers }); return r.ok ? r.json() : {running:false}
+  }catch{ return {running:false} }
 }
 export async function apiBotStart(cfg:any){
   const r=await fetch(`${API}/api/bot/start`, {method:"POST", headers: await authHeaders(JSON_CT), body: JSON.stringify(cfg)})
@@ -23,14 +32,20 @@ export async function apiBotStop(){
 }
 /** Plan as the backend sees it (admins count as elite) — same source the server limits use. */
 export async function apiUserTier(): Promise<string|null>{
-  try{ const r=await fetch(`${API}/api/user/tier`, { headers: await authHeaders() }); return r.ok ? (await r.json()).tier : null }catch{ return null }
+  try{
+    const headers = await signedInHeaders(); if(!headers) return null
+    const r=await fetch(`${API}/api/user/tier`, { headers }); return r.ok ? (await r.json()).tier : null
+  }catch{ return null }
 }
 export function chartUrl(file:string){ return `${API}/api/chart?file=${encodeURIComponent(file)}` }
 export const API_URL = API
 
 export async function apiTrades(limit=20){
   // admin-only on the backend; non-admins just see no trades
-  try{ const r=await fetch(`${API}/api/trades?limit=${limit}`, { headers: await authHeaders() }); return r.ok ? r.json() : [] }catch{ return [] }
+  try{
+    const headers = await signedInHeaders(); if(!headers) return []
+    const r=await fetch(`${API}/api/trades?limit=${limit}`, { headers }); return r.ok ? r.json() : []
+  }catch{ return [] }
 }
 
 function toBybitInterval(tf: string){
