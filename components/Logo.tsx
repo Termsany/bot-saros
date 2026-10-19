@@ -2,8 +2,8 @@
 import { Activity } from "lucide-react"
 
 export function Logo({ size="md", showText=true }: { size?: "sm"|"md"|"lg", showText?: boolean }){
-  const dims = { sm: "h-7 w-7", md: "h-8 w-8", lg: "h-10 w-10" }[size]
-  const textSize = { sm: "text-xs", md: "text-sm", lg: "text-base" }[size]
+  const dims = { sm: "h-8 w-8", md: "h-9 w-9", lg: "h-11 w-11" }[size]
+  const textSize = { sm: "text-sm", md: "text-[15px]", lg: "text-lg" }[size]
   return (
     <div className="flex items-center gap-3">
       <div className={`${dims} relative grid place-items-center rounded-lg overflow-hidden bg-[#00D395]/10 border border-[#00D395]/20`}>

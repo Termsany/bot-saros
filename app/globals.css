@@ -7,17 +7,17 @@
   --font-mono: var(--font-mono);
 }
 
+/* Base: Cairo readable, 15px */
+html { font-size: 15px; }
+body { line-height: 1.6; }
+
 /* Cairo for everything, JetBrains for mono/numbers */
 .font-mono, code, .font-mono * {
   font-family: var(--font-mono), ui-monospace, monospace !important;
 }
 
-/* Headings extra weight */
-h1, h2, h3 { letter-spacing: -0.02em; }
+h1, h2, h3 { letter-spacing: -0.02em; line-height: 1.2; }
 
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-thumb { background: #1E2A3A; border-radius: 999px; }
 ::-webkit-scrollbar-track { background: #0a1018; }
-
-/* Global rhythm */
-section + section { margin-top: 0; }

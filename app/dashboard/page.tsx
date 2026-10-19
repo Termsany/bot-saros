@@ -201,7 +201,7 @@ export default function Dashboard(){
               <span className="hidden sm:flex items-center gap-1"><Crosshair size={12}/> BINANCE</span>
               <span className="ml-auto">{lastUpdated ? `UPDATED ${lastUpdated.toLocaleTimeString()}` : "CONNECTING..."}</span>
             </div>
-            <div className="h-[420px] w-full px-2 pb-3">
+            <div className="h-[460px] w-full px-2 pb-3">
               {loading && !candles.length ? <div className="flex h-full items-center justify-center font-mono text-xs text-[#647386]">FETCHING BINANCE KLINES...</div>
               : !candles.length ? <div className="flex h-full items-center justify-center font-mono text-xs text-[#FF3B5C]">BINANCE DATA UNAVAILABLE</div>
               : (

@@ -2,13 +2,10 @@
 import { STRATEGIES, TIERS } from "@/lib/strategies"
 
 export function StrategyPicker({ selected, onToggle, tier }: { selected: string[], onToggle: (id:string)=>void, tier: string }){
-  const allowed = new Set(TIERS.find(t=>t.id===tier)?.features ? [] : [])
-  // Map tier to allowed strategy ids
-  const tierOrder = { free: 2, starter: 6, pro: 7, elite: 15 }
-  // Simple: by index
-  const maxCount = tierOrder[tier as keyof typeof tierOrder] ?? 2
+  const tierOrder: Record<string,number> = { free: 2, starter: 6, pro: 7, elite: 15 }
+  const maxCount = tierOrder[tier] ?? 2
   return (
-    <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+    <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
       {STRATEGIES.map((s,i)=>{
         const locked = i >= maxCount
         const active = selected.includes(s.id)
@@ -17,18 +14,18 @@ export function StrategyPicker({ selected, onToggle, tier }: { selected: string[
             key={s.id}
             disabled={locked}
             onClick={()=>!locked && onToggle(s.id)}
-            className={`text-right p-3 rounded-xl border text-sm transition ${locked ? "opacity-40 border-[#1E2A3A] bg-[#111827]" : active ? "border-[#00D395] bg-[#0A2E1A]" : "border-[#1E2A3A] bg-[#0E141D] hover:border-[#2a3a56]"}`}
+            className={`text-right p-4 rounded-xl border text-sm transition flex flex-col min-h-[140px] ${locked ? "opacity-40 border-[#1c2632] bg-[#0c131c]" : active ? "border-[#00D395]/50 bg-[#00D395]/[0.07] shadow-[0_0_0_1px_rgba(0,211,149,0.15)]" : "border-[#1c2632] bg-[#0a1018] hover:border-[#2a3a56] hover:bg-[#111a25]"}`}
           >
-            <div className="flex justify-between items-center">
-              <span className="text-xs px-1.5 py-0.5 rounded bg-[#1E2A3A]">{s.icon}</span>
-              {locked && <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#2a2506] text-[#FFB800]">Elite</span>}
-              {!locked && active && <span className="text-[10px] text-[#00D395]">✓</span>}
+            <div className="flex justify-between items-start">
+              <span className="text-base leading-none">{s.icon}</span>
+              {locked && <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#2a2506] text-[#FFB800] font-bold">Elite</span>}
+              {!locked && active && <span className="h-5 w-5 grid place-items-center rounded-full bg-[#00D395] text-[#062016] text-[11px] font-black">✓</span>}
             </div>
-            <div className="font-bold mt-1 text-xs">{s.nameAr}</div>
-            <div className="text-[11px] text-[#8A9AB0]">{s.desc}</div>
-            <div className="flex gap-2 mt-1 text-[10px]">
-              <span className={s.winRate>=45 ? "text-[#00D395]" : s.winRate>=35 ? "text-[#FFB800]" : "text-[#FF3B5C]"}>WR {s.winRate}%</span>
-              <span className="text-[#8A9AB0]">PF {s.pf}</span>
+            <div className="font-bold mt-2.5 text-sm leading-tight">{s.nameAr}</div>
+            <div className="font-mono text-xs text-[#8A9AB0] leading-tight mt-1">{s.desc}</div>
+            <div className="mt-auto pt-3 flex gap-3 font-mono text-xs">
+              <span className={s.winRate>=45 ? "text-[#00D395] font-bold" : s.winRate>=35 ? "text-[#FFB800] font-bold" : "text-[#FF3B5C] font-bold"}>WR {s.winRate}%</span>
+              <span className="text-[#5f6e81]">PF {s.pf}</span>
             </div>
           </button>
         )
