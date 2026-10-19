@@ -75,7 +75,11 @@ export async function POST(req: NextRequest){
       const sub = event.data.object
       const customer = typeof sub.customer === "string" ? sub.customer : sub.customer?.id
       const userId = await findUserId({ userId: sub.metadata?.user_id, customer })
-      if(userId){
+      // events from an older/duplicate Stripe customer must not touch the profile tied to the current one
+      const { data: prof } = userId ? await admin.from("profiles").select("stripe_customer_id").eq("id", userId).maybeSingle() : { data: null }
+      if(userId && prof?.stripe_customer_id && customer && prof.stripe_customer_id !== customer){
+        console.warn(`${event.type}: ignoring ${customer}, profile uses ${prof.stripe_customer_id}`)
+      } else if(userId){
         if(event.type==="customer.subscription.deleted" || ENDED.includes(sub.status)){
           // don't downgrade if the same user still has another active subscription
           const others = customer ? (await stripe.subscriptions.list({ customer, status: "active", limit: 10 })).data : []
