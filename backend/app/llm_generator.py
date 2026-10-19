@@ -71,6 +71,35 @@ def save_strategy(code: str, name: str = None) -> Path:
     fp.write_text(code, encoding="utf-8")
     return fp
 
+
+async def auto_promote_if_winner(code: str, name: str, stats: dict) -> dict:
+    """لو WR >= 60% و PF >= 1.2 — يضيفها رسمي للـ elite تلقائياً"""
+    wr = stats.get("win_rate", 0)
+    pf = stats.get("profit_factor", 0)
+    if wr < 60 or (pf != float("inf") and pf < 1.2):
+        return {"promoted": False, "reason": f"WR {wr:.1f}% < 60% or PF {pf:.2f} < 1.2"}
+    # Save to strategies_llm and register
+    from pathlib import Path as _P
+    import json as _js
+    # Add to lib/strategies.ts ? No — just mark as promoted in a registry
+    registry = _P(__file__).parent.parent / "strategies_llm" / "registry.json"
+    registry.parent.mkdir(exist_ok=True)
+    data = []
+    if registry.exists():
+        try: data = _js.loads(registry.read_text(encoding="utf-8"))
+        except: data = []
+    entry = {"name": name, "win_rate": wr, "pf": pf, "pnl": stats.get("pnl",0), "promoted_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()}
+    # dedup
+    data = [d for d in data if d.get("name") != name]
+    data.append(entry)
+    registry.write_text(_js.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    # Telegram notify
+    try:
+        from app.telegram_bot import send_telegram
+        await send_telegram(f"\U0001f389 *استراتيجية جديدة ترقت تلقائياً!*\n{name} — WR `{wr:.1f}%` PF `{pf:.2f}` PnL `{stats.get('pnl',0):+.2f}`\nتمت إضافتها للـ Elite.")
+    except: pass
+    return {"promoted": True, "name": name, "wr": wr, "pf": pf}
+
 async def backtest_llm(code: str, symbol="BTC/USDT", timeframe="4h", limit=300):
     """Run backtest on LLM code — returns stats like backtest.py"""
     import sys, tempfile, subprocess, json as js

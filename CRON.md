@@ -25,3 +25,14 @@ jobs:
 ```
 
 Manual: POST https://bot-saros-backend.onrender.com/api/evolve from /admin
+
+
+## LLM Auto-Invention (كل أسبوع)
+
+إضافة Cron ثانية:
+
+- URL: `https://bot-saros-backend.onrender.com/api/llm/evolve?prompt=innovative+futures+strategy&n=3`
+- Method: POST
+- Schedule: Every Saturday 02:00 UTC
+
+الـ LLM هيولد 3 استراتيجيات جديدة، يباك تست كل واحدة، ولو WR ≥60% و PF ≥1.2 يضيفها تلقائياً للـ Elite ويبعتلك تليجرام.

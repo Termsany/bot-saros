@@ -29,6 +29,10 @@ export default function LLMLab(){
         </div>
       </header>
       <div className="mx-auto max-w-[900px] p-5 lg:p-8 space-y-5">
+        <div className="rounded border border-[#00D395]/20 bg-[#00D395]/[0.06] p-3 flex justify-between items-center">
+          <div><div className="text-xs font-bold text-[#00D395]">الوضع التلقائي مفعّل</div><div className="font-mono text-[11px] text-[#8A9AB0]">كل فكرة WR ≥60% تضاف للـ Elite تلقائياً بدون تدخل</div></div>
+          <a href="/api/llm/promoted" target="_blank" className="text-xs px-3 py-1.5 rounded border border-[#1c2632] bg-[#0a1018]">المُرقّاة</a>
+        </div>
         <div>
           <h1 className="text-xl font-black">مختبر الاستراتيجيات</h1>
           <p className="font-mono text-xs text-[#647386] mt-1">اكتب وصف و الـ LLM يولد الكود + باك تست فوري عبر <b className="text-[#00D395]">Claude Sonnet 5</b> (CodeCraft)</p>

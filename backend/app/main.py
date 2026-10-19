@@ -333,6 +333,54 @@ async def llm_list():
         out.append({"name": f.stem, "code": f.read_text(encoding="utf-8")[:2000], "size": f.stat().st_size})
     return out
 
+
+@app.post("/api/llm/evolve")
+async def llm_evolve(prompt: str = "innovative crypto futures strategy combining momentum and mean reversion", n: int = 3):
+    """يولد n استراتيجيات، يباك تست كل واحدة، ويضيف الفائزة (WR>=60%) تلقائياً"""
+    from app.llm_generator import generate_strategy, save_strategy, backtest_llm, auto_promote_if_winner
+    results = []
+    for i in range(min(n, 5)):
+        gen = await generate_strategy(f"{prompt} — variation {i+1}")
+        if not gen.get("ok"):
+            results.append({"i": i+1, "ok": False, "error": gen.get("error")})
+            continue
+        code = gen["code"]
+        # Save
+        try:
+            fp = save_strategy(code)
+            name = fp.stem
+        except Exception as e:
+            results.append({"i": i+1, "ok": False, "error": str(e)})
+            continue
+        # Backtest
+        try:
+            bt = await backtest_llm(code)
+            if not bt.get("ok"):
+                results.append({"i": i+1, "ok": True, "name": name, "backtest": bt, "promoted": False})
+                continue
+            stats = bt.get("stats", {})
+            promo = await auto_promote_if_winner(code, name, stats)
+            results.append({"i": i+1, "ok": True, "name": name, "code": code[:400], "stats": stats, "promoted": promo.get("promoted"), "reason": promo.get("reason","")})
+        except Exception as e:
+            results.append({"i": i+1, "ok": True, "name": name, "error": str(e)[:200]})
+    promoted = [r for r in results if r.get("promoted")]
+    # Telegram summary
+    try:
+        from app.telegram_bot import send_telegram
+        await send_telegram(f"\U0001f916 LLM Evolve: {len(results)} generated, {len(promoted)} promoted (WR>=60%)")
+    except: pass
+    return {"results": results, "promoted": len(promoted), "total": len(results)}
+
+@app.get("/api/llm/promoted")
+async def llm_promoted():
+    from pathlib import Path as _P
+    import json as _js
+    reg = _P(__file__).parent.parent / "strategies_llm" / "registry.json"
+    if not reg.exists():
+        return []
+    try: return _js.loads(reg.read_text(encoding="utf-8"))
+    except: return []
+
 @app.get("/api/trades")
 async def api_trades(limit: int = 50):
     async with async_session() as sess:
