@@ -16,7 +16,7 @@ const PLAN_COPY: Record<string, string> = {
   free: "استراتيجيتان · Backtest 7 أيام",
   starter: "6 استراتيجيات · Backtest 30 يوم",
   pro: "7 استراتيجيات · Backtest 90 يوم · Futures",
-  elite: "15 استراتيجية · Backtest بلا حدود",
+  elite: "16 استراتيجية · Backtest بلا حدود",
 }
 
 /** App layout for signed-in pages: RTL sidebar (right) + content + footer. */

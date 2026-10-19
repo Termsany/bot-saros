@@ -7,6 +7,7 @@ Measure every strategy with the bot's own engine and write lib/strategy-stats.js
 Data: last CANDLES closed candles per symbol/timeframe from Bybit (cached in research/.cache).
 Signals: backtest.score_at on the last 300 candles at each bar — what the live bot sees.
 Trades: backtest.run_backtest with the CONFIG in backtest.py (same rules as bot.py and lib/strategy-engine.ts).
+Wave Flats has its own entries, stops and targets: strategies_wave.run_wave_flats on the same candles.
 "Out-of-sample" = the last 40% of each series; engine settings were chosen without looking at it (README.md).
 """
 import sys, json, pickle, time
@@ -17,6 +18,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import numpy as np, pandas as pd
 import backtest as bt
+import strategies_wave as wf
 
 CACHE = Path(__file__).resolve().parent / ".cache"
 SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT"]
@@ -24,7 +26,7 @@ TIMEFRAMES = {"1h": 3600_000, "4h": 4 * 3600_000}
 CANDLES = 2000
 OOS_SPLIT = 0.6
 STRATEGIES = ["ichimoku", "dow", "gann", "elliott", "classical", "sr", "rsi_macd", "smc", "vwap", "supertrend",
-              "bollinger", "harmonic", "ict", "heikin", "ai"]
+              "bollinger", "harmonic", "ict", "heikin", "ai", "wave_flats"]
 AMOUNT, LEVERAGE, FEE = 20, 5, 0.0004
 
 
@@ -54,11 +56,15 @@ def signals(sym, tf):
     for i in range(len(df)):
         if i < 60: out.append({k: 0.0 for k in STRATEGIES}); continue
         _, base = bt.score_at(df.iloc[max(0, i - 299):i + 1])
-        out.append({k: float(base[k]) for k in STRATEGIES})
+        out.append({k: float(base[k]) for k in STRATEGIES if k in base})
     path.write_bytes(pickle.dumps(out)); return out
 
 
 def run(df, scores, name):
+    if name == "wave_flats":
+        ts = [int(t.value // 10**6) for t in df.ts]
+        tr = wf.run_wave_flats(list(df.open), list(df.high), list(df.low), list(df.close), ts, df.attrs["tf"], AMOUNT, LEVERAGE, FEE)
+        return [{**t, "entry_ts": pd.to_datetime(t["entry_ts"], unit="ms")} for t in tr]
     bt.score_at = lambda window, enabled=None: (scores[window.index[-1]][name], {})   # one strategy: total = its score
     return bt.run_backtest(df, amount_usdt=AMOUNT, leverage=LEVERAGE, fee_pct=FEE, enabled=[name])["trades"]
 
@@ -75,6 +81,7 @@ def report():
     for sym in SYMBOLS:
         for tf in TIMEFRAMES:
             df, sc = candles(sym, tf), signals(sym, tf)
+            df.attrs["tf"] = tf
             cut = df.ts.iloc[int(len(df) * OOS_SPLIT)]
             sets.append({"symbol": sym, "timeframe": tf, "from": str(df.ts.iloc[0])[:10], "to": str(df.ts.iloc[-1])[:10]})
             for s in STRATEGIES:

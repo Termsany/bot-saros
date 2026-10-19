@@ -9,7 +9,7 @@ import { ArrowUpRight, CandlestickChart, Check, Layers, LineChart, ShieldCheck, 
 const unlockTier = (i: number) => TIERS.find(t => t.count > i) || TIERS[TIERS.length-1]
 
 const STEPS = [
-  { icon: Layers, title: "اختار استراتيجيتك", body: "15 استراتيجية من التحليل الكلاسيكي لحد Smart Money وإجماع الاستراتيجيات. شغّل واحدة أو اجمع كذا واحدة مع بعض." },
+  { icon: Layers, title: "اختار استراتيجيتك", body: "16 استراتيجية من التحليل الكلاسيكي لحد Smart Money وموجات Flat. شغّل واحدة أو اجمع كذا واحدة مع بعض." },
   { icon: CandlestickChart, title: "اختبرها على بيانات حقيقية", body: "Backtest على شموع Bybit وBinance للفترة اللي تختارها، بنفس قواعد البوت بالظبط. وشوف كل صفقة: دخلت فين، خرجت فين، وكسبت ولا خسرت." },
   { icon: LineChart, title: "تابعها لحظة بلحظة", body: "المحرك بيراقب السوق على مدار الساعة ويسجّل الصفقات على محفظة وهمية، وانت شايف الأرباح ونسبة الفوز في الداشبورد." },
 ]
@@ -45,7 +45,7 @@ export default function Page(){
           <div>
             <span className="inline-flex items-center gap-2 rounded-full border border-line bg-surface px-3 py-1.5 text-xs font-semibold text-corona"><Zap size={13}/> {BRAND.taglineAr}</span>
             <h1 className="mt-6 text-[40px] font-black leading-[1.15] sm:text-[56px]">تداول بالأرقام،<br/><span className="bg-gradient-to-l from-corona-soft to-corona bg-clip-text text-transparent">مش بالإحساس.</span></h1>
-            <p className="mt-5 max-w-[540px] text-base leading-8 text-muted">رقم بوت تداول للعملات الرقمية: 15 استراتيجية مختبرة على بيانات حقيقية، صفقات LONG وSHORT بالرافعة، وتقدر تختبر أي استراتيجية مجاناً قبل ما تدفع جنيه.</p>
+            <p className="mt-5 max-w-[540px] text-base leading-8 text-muted">رقم بوت تداول للعملات الرقمية: 16 استراتيجية مختبرة على بيانات حقيقية، صفقات LONG وSHORT بالرافعة، وتقدر تختبر أي استراتيجية مجاناً قبل ما تدفع جنيه.</p>
             <div className="mt-8 flex flex-wrap gap-3">
               <a href="/dashboard" className="inline-flex items-center gap-2 rounded-xl bg-corona px-6 py-3 text-sm font-bold text-void transition hover:bg-corona-soft"><Zap size={16}/> ابدأ مجاناً</a>
               <a href="/backtest" className="inline-flex items-center gap-2 rounded-xl border border-line bg-surface px-6 py-3 text-sm font-semibold transition hover:bg-surface2">جرّب Backtest <ArrowUpRight size={15}/></a>
@@ -64,7 +64,7 @@ export default function Page(){
       <section className="border-y border-line bg-surface/60">
         <div className="mx-auto grid max-w-[1180px] grid-cols-2 gap-px px-5 md:grid-cols-4">
           {[
-            ["15", "استراتيجية", "من كلاسيكي لـ AI"],
+            ["16", "استراتيجية", "من كلاسيكي لموجات Flat"],
             ["20", "زوج عملات", "BTC · ETH · SOL وغيرهم"],
             ["x5", "رافعة Futures", "LONG و SHORT"],
             ["3", "مصادر بيانات", "Bybit · OKX · Binance"],
@@ -100,7 +100,7 @@ export default function Page(){
       <section id="strategies" className="mx-auto max-w-[1180px] scroll-mt-20 px-5 pb-20">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
-            <h2 className="text-[30px] font-black">الـ 15 استراتيجية</h2>
+            <h2 className="text-[30px] font-black">الـ 16 استراتيجية</h2>
             <p className="mt-1 max-w-[720px] text-sm leading-6 text-muted">
               نتايج حقيقية من Backtest على {STATS_META.symbols.map(x => x.replace("/USDT", "")).join(" و")}، فريم ساعة و4 ساعات
               ({STATS_META.sets} مجموعات بيانات، {STATS_META.candlesPerSet.toLocaleString("en-US")} شمعة لكل واحدة، لحد {STATS_META.to}).

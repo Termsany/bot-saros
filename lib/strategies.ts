@@ -22,6 +22,7 @@ const BASE: Omit<Strategy, keyof StrategyStats>[] = [
   { id:"ict", name:"ICT Killzone", nameAr:"ICT", desc:"جلسات لندن ونيويورك", method:"وقت جلسة لندن (7–10 UTC) أو نيويورك (12–15 UTC): اختراق أعلى قمة آخر 20 شمعة = بيع (Sweep)، كسر أدنى قاع = شراء.", tier:"elite", icon:"◐" },
   { id:"heikin", name:"Heikin+ADX", nameAr:"هيكن + ADX", desc:"Heikin Ashi + قوة الترند", method:"شمعتين Heikin Ashi متتاليتين في نفس الاتجاه، وADX فوق 25 يقوّيها وتحت 15 يضعّفها.", tier:"elite", icon:"⬣" },
   { id:"ai", name:"Consensus", nameAr:"الإجماع", desc:"إجماع الـ 14 استراتيجية", method:"متوسط إشارات الـ 14 استراتيجية التانية، ويقوّي الإشارة لو 4 أو أكتر متفقين في نفس الاتجاه.", tier:"elite", icon:"✦" },
+  { id:"wave_flats", name:"Wave Flats", nameAr:"موجات Flat", desc:"تصحيح Flat + فيبو", method:"بعد موجة A قوية (ZigZag): ارتداد لمنطقة 0.382–0.236 بشمعة ابتلاعية أو Pin Bar = Regular Flat وهدفه 1.272، أو موجة b تكسر القمة ثم c = Running/Expanded Flat وأهدافه 1.414 (نص الكمية) و1.618. الوقف تحت أدنى شمعتين −0.2% وبيتنقل للدخول لما السعر يكسر قمة التصحيح. بتشتغل لوحدها بوقفها وأهدافها، مش مع باقي الاستراتيجيات.", tier:"elite", icon:"≋" },
 ]
 
 const MEASURED = STATS_FILE.strategies as Record<string, StrategyStats>
@@ -37,10 +38,18 @@ export const TIERS = [
   { id:"free", name:"Free", price:"0$", per:"/شهر", cta:"ابدأ مجانا", features:["استراتيجيتان","Spot فقط","Backtest 7 أيام"], count:2, color:"#8B91A7" },
   { id:"starter", name:"Starter", price:"29$", per:"/شهر", cta:"اشترك", features:["6 استراتيجيات","Spot","Backtest 30 يوم"], count:6, color:"#4CC9F0" },
   { id:"pro", name:"Pro", price:"59$", per:"/شهر", cta:"اشترك Pro", features:["7 استراتيجيات","Futures LONG/SHORT x5","Backtest 90 يوم"], count:7, color:"#7B61FF", popular:true },
-  { id:"elite", name:"Elite", price:"99$", per:"/شهر", cta:"اشترك Elite", features:["15 استراتيجية","SMC + ICT + الإجماع","Backtest غير محدود"], count:15, color:"#F5B841" },
+  { id:"elite", name:"Elite", price:"99$", per:"/شهر", cta:"اشترك Elite", features:["16 استراتيجية","SMC + ICT + موجات Flat","Backtest غير محدود"], count:16, color:"#F5B841" },
 ]
 // Max backtest range in days, end date inclusive (null = unlimited). The backend enforces the same
 // numbers (TIER_BACKTEST_DAYS in backend/app/main.py) — keep them in sync.
+/** Wave Flats has its own entries, stops and targets, so it always runs alone. */
+export const WAVE_ID = "wave_flats"
+export function toggleStrategy(selected: string[], id: string, single = false){
+  if(single || id === WAVE_ID) return [id]
+  const rest = selected.filter(x => x !== WAVE_ID)
+  return rest.includes(id) ? rest.filter(x => x !== id) : [...rest, id]
+}
+
 export const BACKTEST_DAYS: Record<string, number|null> = { free: 7, starter: 30, pro: 90, elite: null }
 export function backtestSpanDays(from: string, to: string){
   return Math.round((Date.parse(to) - Date.parse(from)) / 86400000) + 1

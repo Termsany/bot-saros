@@ -1,7 +1,7 @@
 "use client"
 import { useEffect, useMemo, useState } from "react"
 import { Area, AreaChart, CartesianGrid, ComposedChart, Line, ReferenceLine, ResponsiveContainer, Scatter, Tooltip, XAxis, YAxis } from "recharts"
-import { STRATEGIES, BACKTEST_DAYS, backtestSpanDays, pfTone } from "@/lib/strategies"
+import { STRATEGIES, BACKTEST_DAYS, backtestSpanDays, pfTone, toggleStrategy } from "@/lib/strategies"
 import { getMyTier } from "@/lib/supabase"
 import { PAIRS } from "@/lib/pairs"
 import { AppShell } from "@/components/AppShell"
@@ -73,7 +73,7 @@ export default function BacktestPage(){
   const span = from && to ? backtestSpanDays(from, to) : 0
   const overLimit = maxDays !== null && span > maxDays
 
-  function toggle(id:string){ if(single) setSelected([id]); else setSelected(s=> s.includes(id) ? s.filter(x=>x!==id) : [...s, id]) }
+  function toggle(id:string){ setSelected(s=> toggleStrategy(s, id, single)) }
   async function run(){
     if(from > to){ setError("التاريخ معكوس — «من» لازم يكون قبل «إلى»"); return }
     if(overLimit){ setError(`المدة ${span} يوم — باقتك تسمح بـ ${maxDays} يوم كحد أقصى. رقّي باقتك لباك تست أطول`); return }

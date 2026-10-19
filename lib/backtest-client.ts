@@ -1,8 +1,10 @@
 // Browser backtest: fetches the requested date range (+ history for the indicators) and runs the
 // bot's own strategies and engine (lib/strategy-engine.ts, checked bar-for-bar against the Python bot).
 import { runEngine, WINDOW, type Candle, type EngineTrade, type Strategy } from "./strategy-engine"
+import { runWaveFlats } from "./wave-flats"
 
 const TF_MS: Record<string, number> = { "15m": 15*60000, "1h": 3600000, "4h": 4*3600000, "1d": 86400000 }
+const WAVE = "wave_flats", WAVE_WARMUP = 1000   // the live bot also reads 1000 candles for Wave Flats
 const MAX_CANDLES = 12000   // ~4 months of 15m, or years of 4h — keeps the browser responsive
 function toBybitInterval(tf: string){ const m: Record<string,string> = { "15m":"15","1h":"60","4h":"240","1d":"D" }; return m[tf]||"60" }
 
@@ -47,14 +49,16 @@ export async function fetchCandles(symbol: string, timeframe: string, startMs: n
   return []
 }
 
-/** Engine in a Web Worker (all 15 strategies take ~1.7 ms per candle); same thread if workers aren't available. */
-function runInWorker(candles: Candle[], ids: Strategy[], amount: number, leverage: number, startTs: number): Promise<EngineTrade[]>{
-  if(typeof Worker === "undefined") return Promise.resolve(runEngine(candles, ids, amount, leverage, 0.0004, undefined, startTs))
+/** Engine in a Web Worker (all 15 score strategies take ~1.7 ms per candle); same thread if workers aren't available. */
+function runInWorker(candles: Candle[], ids: Strategy[], amount: number, leverage: number, startTs: number, timeframe: string): Promise<EngineTrade[]>{
+  if(typeof Worker === "undefined") return Promise.resolve((ids as string[]).includes(WAVE)
+    ? runWaveFlats(candles, timeframe, amount, leverage, 0.0004, startTs)
+    : runEngine(candles, ids, amount, leverage, 0.0004, undefined, startTs))
   return new Promise((resolve, reject) => {
     const w = new Worker(new URL("./backtest.worker.ts", import.meta.url))
     w.onmessage = (e) => { w.terminate(); e.data.ok ? resolve(e.data.trades) : reject(new Error(e.data.error)) }
     w.onerror = (e) => { w.terminate(); reject(new Error(e.message || "worker failed")) }
-    w.postMessage({ candles, ids, amount, leverage, startTs })
+    w.postMessage({ candles, ids, amount, leverage, startTs, timeframe })
   })
 }
 
@@ -64,19 +68,22 @@ export async function runBacktestClient(opts: {
 }){
   const tf = TF_MS[opts.timeframe] || 3600000
   const fromMs = Date.parse(opts.from), toMs = Date.parse(opts.to) + 86400000 - 1   // whole end day, like the server
-  // WINDOW candles before the start so indicators are warmed up exactly like the live bot
-  const candles = await fetchCandles(opts.symbol, opts.timeframe, fromMs - WINDOW * tf, toMs)
+  // History before the start so indicators are warmed up like the live bot: WINDOW candles,
+  // or WAVE_WARMUP for Wave Flats, whose ZigZag needs the earlier swings to find wave A
+  const wave = opts.strategies.includes(WAVE)
+  const warm = wave ? WAVE_WARMUP : WINDOW
+  const candles = await fetchCandles(opts.symbol, opts.timeframe, fromMs - warm * tf, toMs)
   const inRange = candles.filter(c => c.ts >= fromMs)
   if(!candles.length) return { ok:false, error: "مقدرناش نجيب الشموع من Bybit ولا Binance — جرّب تاني بعد شوية" }
   if(inRange.length < 20) return { ok:false, error: `الفترة قصيرة: ${inRange.length} شمعة بس — اختار مدة أطول أو فريم أصغر` }
 
-  const trades = await runInWorker(candles, opts.strategies as Strategy[], opts.amount, opts.leverage, fromMs)
+  const trades = await runInWorker(candles, (wave ? [WAVE] : opts.strategies) as Strategy[], opts.amount, opts.leverage, fromMs, opts.timeframe)
   const pnls = trades.map(t => t.pnl)
   const wins = pnls.filter(p => p > 0).length, losses = pnls.length - wins
   const sumWin = pnls.filter(p => p > 0).reduce((s, p) => s + p, 0), sumLoss = Math.abs(pnls.filter(p => p <= 0).reduce((s, p) => s + p, 0))
   let eq = 0, peak = 0, maxDD = 0
   for(const p of pnls){ eq += p; peak = Math.max(peak, eq); maxDD = Math.max(maxDD, peak - eq) }
-  const truncated = candles.length >= MAX_CANDLES && candles[0].ts > fromMs - WINDOW * tf
+  const truncated = candles.length >= MAX_CANDLES && candles[0].ts > fromMs - warm * tf
 
   return {
     ok: true,

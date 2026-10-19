@@ -95,8 +95,8 @@ def rate_limit(user_id: str, key: str, max_calls: int, per_s: int):
 # Plan limits — enforced here, not only in the UI (StrategyPicker unlocks the first N of this list).
 # Keep in sync with lib/strategies.ts STRATEGIES order and TIERS counts.
 STRATEGY_ORDER = ["rsi_macd", "classical", "ichimoku", "dow", "gann", "sr", "elliott", "smc", "vwap",
-                  "supertrend", "bollinger", "harmonic", "ict", "heikin", "ai"]
-TIER_STRATEGY_COUNT = {"free": 2, "starter": 6, "pro": 7, "elite": 15}
+                  "supertrend", "bollinger", "harmonic", "ict", "heikin", "ai", "wave_flats"]
+TIER_STRATEGY_COUNT = {"free": 2, "starter": 6, "pro": 7, "elite": 16}
 # Max backtest range in days (end date inclusive). None = unlimited. Keep in sync with lib/strategies.ts BACKTEST_DAYS.
 TIER_BACKTEST_DAYS = {"free": 7, "starter": 30, "pro": 90, "elite": None}
 TF_MINUTES = {"1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "2h": 120, "4h": 240, "1d": 1440}
@@ -324,6 +324,11 @@ async def bot_start(req: BotStartReq, bg: BackgroundTasks, user: dict = Depends(
         return {"ok": False, "msg": "already running"}
     if not req.paper and not live_trading_allowed():
         raise HTTPException(400, "LIVE disabled — set ALLOW_LIVE_TRADING=true on the backend to allow real orders")
+    if not req.paper and "wave_flats" in (req.strategies or []):
+        # partial take-profit + moving stop aren't placed as exchange orders yet; it also lost money in testing
+        raise HTTPException(400, "Wave Flats runs in paper mode only for now")
+    if req.strategies and "wave_flats" in req.strategies:
+        req.strategies = ["wave_flats"]  # own entries/stops/targets — can't be mixed with the score strategies
     # Save config for bot loop
     cfg = {"symbols": req.symbols, "strategies": req.strategies, "timeframe": req.timeframe, "paper": req.paper}
     (BOT_DIR / "api_bot_config.json").write_text(json.dumps(cfg, ensure_ascii=False), encoding="utf-8")
@@ -387,7 +392,7 @@ async def bot_loop(cfg):
             prices={}; analyses={}
             for sym in botmod.CONFIG["symbols"]:
                 try:
-                    df=botmod.fetch_ohlcv(sym, botmod.CONFIG["timeframe"], limit=300, ex=ex)
+                    df=botmod.fetch_ohlcv(sym, botmod.CONFIG["timeframe"], limit=botmod.candles_needed(), ex=ex)
                     a=botmod.analyze(sym, df); analyses[sym]=a; prices[sym]=a["price"]
                 except Exception as e: print(f"{sym} {e}")
             before = set(state.get("positions",{}).keys())

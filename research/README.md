@@ -48,3 +48,27 @@ It is a real but modest improvement — most strategies are still close to break
 Also tested and **not** adopted: ATR-based SL/TP (helped some strategies, hurt others), the higher-timeframe filter,
 and 5 new strategies (SuperTrend ATR 10×3, Donchian 20 breakout, EMA 20/50 trend, RSI(2) pullback, MACD cross) —
 none was consistently better on both periods.
+
+## Wave Flats (added October 2026)
+
+Port of the Pine Script "Wave Flats - Regular / Running / Expanded" with its default inputs, **without** the
+higher-timeframe filter (owner's choice). Own entries, stops and targets, so it always runs alone:
+`strategies_wave.py` (bot + server backtest) and `lib/wave-flats.ts` (browser backtest).
+Fills follow TradingView's broker emulator (entry at the next open; stops/targets inside the candle).
+
+```bash
+python research/wave_parity_export.py && node research/wave_parity.ts   # browser = Python trade by trade, live signal = backtest entry
+```
+
+Results ($20 × 5, fees 0.04% per side):
+
+| data | trades | win rate | PF | PnL |
+|---|---|---|---|---|
+| site's 8 sets (2,000 candles, table above) | 45 | 13.3% | 0.73 | −19.6 USDT |
+| 8 coins × 1h (8,000 candles) | 221 | — | — | −45.7 USDT |
+| 8 coins × 4h (5,000 candles) | 210 | — | — | −37.1 USDT |
+| all 16 long sets | 431 | 11.8% | 0.90 | −82.8 USDT |
+| same, with the higher-timeframe filter on | 229 | 9.2% | 0.75 | −99.3 USDT |
+
+Most trades are Regular Flats; 379 of 431 ended at the stop. It does not have an edge on this data —
+the bot runs it in paper mode only (LIVE is refused), and partial take-profit is not placed as exchange orders yet.

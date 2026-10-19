@@ -8,7 +8,7 @@ import { Bell, RefreshCw } from "lucide-react"
 import { StrategyPicker } from "@/components/StrategyPicker"
 import { PaperWallet } from "@/components/PaperWallet"
 import { PAIRS, NAMES } from "@/lib/pairs"
-import { STRATEGIES, TIERS } from "@/lib/strategies"
+import { STRATEGIES, TIERS, toggleStrategy } from "@/lib/strategies"
 import { apiTrades, apiKlines, apiBotStatus } from "@/lib/api"
 import { getMyTier, getUser } from "@/lib/supabase"
 
@@ -84,7 +84,7 @@ export default function Dashboard(){
   const [selected, setSelected] = useState<string[]>(["ict"])
   const [symbol, setSymbol] = useState("BTC/USDT")
   const [tf, setTf] = useState("4h")
-  const toggle = (id:string)=> setSelected(s=> s.includes(id) ? s.filter(x=>x!==id) : [...s, id])
+  const toggle = (id:string)=> setSelected(s=> toggleStrategy(s, id))
   // keep only strategies the plan unlocks (default "ict" is Elite-only); wait for the real tier first
   useEffect(()=>{
     if(!tierReady) return

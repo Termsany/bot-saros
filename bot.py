@@ -69,6 +69,13 @@ def get_exchange(auth=False):
         kwargs["apiKey"]=ak; kwargs["secret"]=sc
     return ccxt.bybit(kwargs), None
 
+def wave_mode():
+    """Wave Flats runs alone with its own entries, stops and targets (strategies_wave.py)."""
+    return "wave_flats" in (CONFIG.get("enabled_strategies") or [])
+
+def candles_needed():
+    return 1000 if wave_mode() else 300   # the ZigZag needs earlier swings to find wave A
+
 def fetch_ohlcv(symbol, timeframe="1h", limit=300, ex=None):
     if ex is None: ex = ccxt.bybit()
     ohlcv = ex.fetch_ohlcv(symbol, timeframe, limit=limit)
@@ -278,8 +285,24 @@ def dynamic_sl_tp(price, side, df):
     return sl, tp
 
 
+def analyze_wave(symbol, df):
+    """Wave Flats on the closed candles (the last row from the exchange is still forming)."""
+    import strategies_wave as wf
+    closed=df.iloc[:-1]; sig={}
+    ms=[int(t.value//10**6) for t in closed.ts]
+    wf.run_wave_flats(list(closed.open), list(closed.high), list(closed.low), list(closed.close), ms, CONFIG["timeframe"], last_signal=sig)
+    price=float(df.close.iloc[-1]); d=sig.get("dir",0)
+    reason=f"{sig['kind']} — وقف {sig['stop']:.6g} هدف {(sig['tgt2'] or sig['tgt1']):.6g}" if d else "لا إعداد"
+    sr_info=sr_signal(df)[2]; rsi_info=rsi_macd_signal(df)[2]
+    return {"symbol":symbol,"price":price,"total":float(d),"decision":"شراء" if d==1 else "بيع" if d==-1 else "انتظار",
+            "breakdown":{"wave_flats":(float(d),reason)},"amount_mult":1.0,
+            "sl":sig.get("stop",price*(1-CONFIG["stop_loss_pct"])),"tp":(sig.get("tgt2") or sig.get("tgt1") or price*(1+CONFIG["take_profit_pct"])),
+            "rsi":rsi_info["rsi"],"supports":sr_info["supports"],"resistances":sr_info["resistances"],
+            "wave":sig or None,"time":datetime.now(timezone.utc).isoformat()}
+
 def analyze(symbol, df=None, timeframe=None):
-    if df is None: df=fetch_ohlcv(symbol, timeframe or CONFIG["timeframe"])
+    if df is None: df=fetch_ohlcv(symbol, timeframe or CONFIG["timeframe"], limit=candles_needed())
+    if wave_mode(): return analyze_wave(symbol, df)
     results={}
     s1,r1,_=ichimoku_signal(df); results["ichimoku"]=(s1,r1)
     s2,r2=dow_signal(df); results["dow"]=(s2,r2)
@@ -406,8 +429,21 @@ def check_sl_tp(state, prices, ex=None):
         if sl is None or tp is None:
             if side=="long": sl=entry*(1-CONFIG["stop_loss_pct"]); tp=entry*(1+CONFIG["take_profit_pct"])
             else: sl=entry*(1+CONFIG["stop_loss_pct"]); tp=entry*(1-CONFIG["take_profit_pct"])
+        wave=pos.get("wave")
+        if wave:
+            sign=1 if side=="long" else -1
+            # Wave Flats: stop to entry once price breaks the correction extreme (the backtest checks at the candle close)
+            if not pos.get("breakeven") and sign*(price-wave["be"])>0:
+                pos["sl"]=sl=entry; pos["breakeven"]=True; save_state(state)
+                log(f"♻️ {symbol} {side} كسر قمة التصحيح {wave['be']:.6g} — الوقف لنقطة الدخول {entry:.6g}")
+            # TP1: close half (Running/Expanded Flat only); paper only — LIVE is refused for Wave Flats
+            if wave.get("tp1") and not wave.get("tp1_done") and sign*(price-wave["tp1"])>=0 and CONFIG["paper_trading"]:
+                half=pos["qty"]/2; pnl=(price-entry)*half*sign
+                state["history"].append({"symbol":symbol,"side":side,"entry":entry,"exit":price,"qty":half,"pnl":pnl,"pnl_pct":pnl/(entry*half)*100,"reason":f"TP1 نص الكمية {wave['tp1']:.6g}","time":datetime.now(timezone.utc).isoformat(),"type":"paper"})
+                state["stats"]["pnl"]+=float(pnl); pos["qty"]-=half; wave["tp1_done"]=True; save_state(state)
+                log(f"🎯 {symbol} {side} TP1 @ {price:.6g} — قفل نص الكمية PnL {pnl:+.4f}")
         # ♻️ Breakeven — بعد 50% للهدف ينقل الوقف لنقطة الدخول
-        if CONFIG.get("breakeven_enabled") and not pos.get("breakeven"):
+        if CONFIG.get("breakeven_enabled") and not pos.get("breakeven") and not wave:
             trig_pct = float(CONFIG.get("breakeven_trigger_pct", 0.5))
             off = float(CONFIG.get("breakeven_offset_pct", 0.001))
             trig_price = entry + (tp - entry) * trig_pct if side=="long" else entry - (entry - tp) * trig_pct
@@ -456,8 +492,34 @@ def check_sl_tp(state, prices, ex=None):
     if closed: save_state(state)
     return closed
 
+def try_enter_wave(symbol, analysis, state, ex):
+    """Wave Flats: enter at market on a new setup from the last closed candle, with the setup's own stop/targets."""
+    sig=analysis.get("wave")
+    if not sig or in_position(state, symbol): return
+    seen=state.setdefault("wave_seen",{})
+    if seen.get(symbol)==sig["ts"]: return   # one entry per signal candle (the loop polls every minute)
+    seen[symbol]=sig["ts"]; save_state(state)
+    if not CONFIG["paper_trading"]:
+        log(f"⏸️ {symbol} Wave Flats شغالة Paper بس — مفيش أوامر حقيقية"); return
+    if len(state["positions"])>=CONFIG["max_open_positions"] or not daily_pnl_ok(state): return
+    side="long" if sig["dir"]==1 else "short"; price=analysis["price"]
+    if (side=="long" and price<=sig["stop"]) or (side=="short" and price>=sig["stop"]):
+        log(f"⏸️ {symbol} {sig['kind']} — السعر عدّى الوقف قبل الدخول"); return
+    try:
+        res=place_order(ex,symbol,side,position_size(price, ex),price)
+        tp=sig["tgt2"] if sig["two"] else sig["tgt1"]
+        state["positions"][symbol]={"side":side,"entry":res["price"],"qty":res["qty"],"cost":res["cost"],"notional":res.get("notional"),"leverage":res.get("leverage",CONFIG.get("leverage",5)),
+            "time":datetime.now(timezone.utc).isoformat(),"sl":sig["stop"],"tp":tp,"breakeven":False,
+            "wave":{"kind":sig["kind"],"tp1":sig["tgt1"] if sig["two"] else None,"tp1_done":False,"be":sig["be"]}}
+        state["last_trade"][symbol]=datetime.now(timezone.utc).isoformat(); save_state(state)
+        emoji="🟢 لونج" if side=="long" else "🔴 شورت"
+        tp1_txt=f" TP1 {sig['tgt1']:.6g}" if sig["two"] else ""
+        log(f"✅ {emoji} وهمي {symbol} {sig['kind']} @ {res['price']:.6g} SL {sig['stop']:.6g} TP {tp:.6g}{tp1_txt}")
+    except Exception as e: log(f"فشل {side} {symbol}: {e}")
+
 def try_enter(symbol, analysis, state, ex):
     """فيوتشر: لونج لو سكور > buy_threshold، شورت لو سكور < sell_threshold"""
+    if wave_mode(): return try_enter_wave(symbol, analysis, state, ex)
     total=analysis["total"]; price=analysis["price"]
     is_long = total > CONFIG["buy_threshold"]
     is_short = total < CONFIG["sell_threshold"]
@@ -558,7 +620,7 @@ def run_once():
     prices={}; analyses={}
     for sym in CONFIG["symbols"]:
         try:
-            df=fetch_ohlcv(sym, CONFIG["timeframe"], limit=300, ex=ex)
+            df=fetch_ohlcv(sym, CONFIG["timeframe"], limit=candles_needed(), ex=ex)
             a=analyze(sym, df); analyses[sym]=a; prices[sym]=a["price"]
             bd=" | ".join(f"{k} {v[0]:+.2f}" for k,v in a["breakdown"].items())
             # اختصر SHIB/PEPE لعرض أوضح

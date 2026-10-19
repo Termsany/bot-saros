@@ -175,6 +175,16 @@
    "oosPnl": -35.95,
    "oosSetsWon": 2,
    "maxDD": 44.41
+  },
+  "wave_flats": {
+   "trades": 45,
+   "winRate": 13.3,
+   "pf": 0.73,
+   "pnl": -19.58,
+   "setsWon": 3,
+   "oosPnl": 2.0,
+   "oosSetsWon": 1,
+   "maxDD": 24.9
   }
  }
 }

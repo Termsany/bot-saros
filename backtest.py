@@ -375,6 +375,24 @@ def run_backtest(df, amount_usdt=20, leverage=5, fee_pct=0.0004, warmup=60, enab
     return {"trades":trades,"equity_curve":equity_curve,"stats":{"total":len(trades),"wins":wins,"losses":losses,"win_rate":win_rate,"pnl":total_pnl,"avg_win":avg_win,"avg_loss":avg_loss,"profit_factor":pf,"max_dd":max_dd,"equity":eq}}
 
 
+def run_backtest_wave(df, timeframe, amount_usdt=20, leverage=5, fee_pct=0.0004):
+    """Wave Flats has its own entries, stops and targets (strategies_wave.py) — same result format as run_backtest."""
+    import strategies_wave as wf
+    ms = [int(t.value // 10**6) for t in pd.to_datetime(df.ts)]
+    raw = wf.run_wave_flats(list(df.open), list(df.high), list(df.low), list(df.close), ms, timeframe, amount_usdt, leverage, fee_pct)
+    trades = [{**t, "entry_ts": pd.to_datetime(t["entry_ts"], unit="ms"), "exit_ts": pd.to_datetime(t["exit_ts"], unit="ms"),
+               "score": 0, "breakdown": {}} for t in raw]
+    p = [t["pnl"] for t in trades]; gw = sum(x for x in p if x > 0); gl = -sum(x for x in p if x < 0)
+    eq = list(np.cumsum([0.0] + p)); peak = 0; max_dd = 0
+    for v in eq: peak = max(peak, v); max_dd = max(max_dd, peak - v)
+    wins = sum(x > 0 for x in p)
+    curve = [{"ts": df.ts.iloc[0], "equity": 0.0}] + [{"ts": t["exit_ts"], "equity": e} for t, e in zip(trades, eq[1:])]
+    return {"trades": trades, "equity_curve": curve, "stats": {
+        "total": len(p), "wins": wins, "losses": len(p) - wins, "win_rate": wins / len(p) * 100 if p else 0, "pnl": sum(p),
+        "avg_win": float(np.mean([x for x in p if x > 0])) if wins else 0, "avg_loss": float(np.mean([x for x in p if x <= 0])) if len(p) > wins else 0,
+        "profit_factor": gw / gl if gl else float("inf"), "max_dd": max_dd, "equity": eq}}
+
+
 # === Phase 1: ATR + Regime + Dynamic SL/TP ===
 
 def atr_value_bt2(df, period=14):
@@ -624,7 +642,10 @@ def main():
         print(f"جلب {args.symbol} {args.timeframe} x{args.limit} ...")
         df=fetch_ohlcv(args.symbol, args.timeframe, args.limit)
     print(f"Loaded {len(df)} bars: {df.ts.iloc[0]} → {df.ts.iloc[-1]}")
-    res=run_backtest(df, amount_usdt=args.amount, leverage=args.leverage, fee_pct=args.fee, enabled=enabled)
+    if enabled and "wave_flats" in enabled:  # runs alone: its own stops and targets
+        res=run_backtest_wave(df, args.timeframe, amount_usdt=args.amount, leverage=args.leverage, fee_pct=args.fee)
+    else:
+        res=run_backtest(df, amount_usdt=args.amount, leverage=args.leverage, fee_pct=args.fee, enabled=enabled)
     print_report(res, df, args.symbol, args.timeframe, args.amount, args.leverage)
     # Save JSON
     out_json=Path(args.out_json) if args.out_json else Path(__file__).parent / f"backtest_{args.symbol.replace('/','')}_{args.timeframe}.json"
