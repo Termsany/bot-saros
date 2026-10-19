@@ -143,6 +143,26 @@ async def bot_stop():
     if bot_task: bot_task.cancel()
     return {"ok": True}
 
+
+def _get_exchanges_for_cycle(paper: bool):
+    """Returns list of (name, instance) for this cycle"""
+    if paper:
+        # Paper: single bybit public instance (shared)
+        import ccxt as _ccxt
+        return [("paper", _ccxt.bybit({"enableRateLimit": True}))]
+    try:
+        from app.exchange_manager import get_all_instances
+        instances = get_all_instances("live")
+        if not instances:
+            # No LIVE configured — fallback to paper
+            import ccxt as _ccxt
+            return [("paper", _ccxt.bybit({"enableRateLimit": True}))]
+        return list(instances.items())
+    except Exception as e:
+        print(f"exchange_manager fail {e}")
+        import ccxt as _ccxt
+        return [("paper", _ccxt.bybit({"enableRateLimit": True}))]
+
 async def bot_loop(cfg):
     """Paper loop: يحلل كل 60s ويحفظ في DB + يرسل تليجرام"""
     import strategies_advanced as adv
@@ -154,16 +174,22 @@ async def bot_loop(cfg):
     botmod.CONFIG["paper_trading"] = cfg.get("paper", True)
     from app.telegram_bot import send_telegram, format_entry, format_exit
     from app.oco import place_oco_orders
-    print(f"Bot loop started {cfg}")
+    print(f"Bot loop started {cfg} — multi-exchange")
+    # Determine if we are paper or live from cfg
+    is_paper = bool(cfg.get("paper", True))
     while True:
         try:
             state = botmod.load_state()
-            ex, err = botmod.get_exchange(auth=not botmod.CONFIG["paper_trading"])
-            if err: ex = ccxt.binance({"enableRateLimit": True})
+            exchanges = _get_exchanges_for_cycle(is_paper)
+            # Use first exchange for analysis (shared signals), but execute per-exchange
+            primary_ex = exchanges[0][1] if exchanges else None
+            if primary_ex is None:
+                import ccxt as _ccxt
+                primary_ex = _ccxt.bybit({"enableRateLimit": True})
             prices={}; analyses={}
             for sym in botmod.CONFIG["symbols"]:
                 try:
-                    df=botmod.fetch_ohlcv(sym, botmod.CONFIG["timeframe"], limit=300, ex=ex)
+                    df=botmod.fetch_ohlcv(sym, botmod.CONFIG["timeframe"], limit=300, ex=primary_ex)
                     a=botmod.analyze(sym, df); analyses[sym]=a; prices[sym]=a["price"]
                 except Exception as e: print(f"{sym} {e}")
             # Save to DB + check OCO: for opens, place SL/TP if live
@@ -380,6 +406,54 @@ async def llm_promoted():
         return []
     try: return _js.loads(reg.read_text(encoding="utf-8"))
     except: return []
+
+
+# ── Keys Vault — Multi-Exchange (encrypted, never expose secrets)
+from pydantic import BaseModel as _BM2
+
+class SaveKeyReq(_BM2):
+    exchange: str
+    apiKey: str
+    secret: str
+    passphrase: str = ""
+
+@app.get("/api/keys/status")
+async def keys_status():
+    from app.keys_vault import load_all_status
+    return load_all_status()
+
+@app.post("/api/keys/save")
+async def keys_save(req: SaveKeyReq):
+    from app.keys_vault import save_keys
+    try:
+        save_keys(req.exchange.lower().strip(), req.apiKey.strip(), req.secret.strip(), req.passphrase.strip())
+        return {"ok": True}
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+@app.post("/api/keys/delete")
+async def keys_delete(exchange: str = "", body: dict = None):
+    from app.keys_vault import delete_keys
+    ex = (body or {}).get("exchange") or exchange
+    ex = str(ex).lower().strip()
+    if not ex: raise HTTPException(400, "exchange required")
+    ok = delete_keys(ex)
+    return {"ok": bool(ok)}
+
+@app.post("/api/keys/paper")
+async def keys_paper(body: dict):
+    from app.keys_vault import set_paper
+    ex = str(body.get("exchange","")).lower().strip()
+    paper = bool(body.get("paper", True))
+    if not ex: raise HTTPException(400, "exchange required")
+    ok = set_paper(ex, paper)
+    return {"ok": bool(ok), "paper": paper}
+
+@app.get("/api/keys/live")
+async def keys_live():
+    """Which exchanges are LIVE (for bot)"""
+    from app.keys_vault import get_exchanges_for_trading
+    return {"live": get_exchanges_for_trading()}
 
 @app.get("/api/trades")
 async def api_trades(limit: int = 50):

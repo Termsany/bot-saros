@@ -13,3 +13,4 @@ matplotlib
 supabase
 stripe
 openai
+cryptography
