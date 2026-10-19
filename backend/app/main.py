@@ -97,6 +97,22 @@ def rate_limit(user_id: str, key: str, max_calls: int, per_s: int):
 STRATEGY_ORDER = ["rsi_macd", "classical", "ichimoku", "dow", "gann", "sr", "elliott", "smc", "vwap",
                   "supertrend", "bollinger", "harmonic", "ict", "heikin", "ai"]
 TIER_STRATEGY_COUNT = {"free": 2, "starter": 6, "pro": 7, "elite": 15}
+# Max backtest range in days (end date inclusive). None = unlimited. Keep in sync with lib/strategies.ts BACKTEST_DAYS.
+TIER_BACKTEST_DAYS = {"free": 7, "starter": 30, "pro": 90, "elite": None}
+TF_MINUTES = {"1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "2h": 120, "4h": 240, "1d": 1440}
+
+def backtest_span_days(req) -> float:
+    """Days of history a backtest request covers, counted the way backtest.py fetches it."""
+    from datetime import date
+    if req.to_date and not req.from_date:
+        raise HTTPException(422, "from date is required when to date is given")
+    if req.from_date:
+        start = date.fromisoformat(req.from_date)
+        end = date.fromisoformat(req.to_date) if req.to_date else datetime.now(timezone.utc).date()
+        if end < start: raise HTTPException(422, "to date is before from date")
+        return (end - start).days + 1  # backtest.py includes the whole end day
+    # no start date: backtest.py fetches the last `limit` candles
+    return req.limit * TF_MINUTES[req.timeframe] / 1440
 _tier_cache: dict = {}
 
 async def get_tier(user: dict) -> str:
@@ -174,6 +190,9 @@ class BacktestReq(BaseModel):
     @classmethod
     def _date(cls, v):
         if v and not re.match(r"^\d{4}-\d{2}-\d{2}$", v): raise ValueError("date must be YYYY-MM-DD")
+        if v:
+            from datetime import date
+            date.fromisoformat(v)  # rejects impossible dates like 2026-13-45 (ValueError -> 422)
         return v or None
 
     @field_validator("strategies")
@@ -185,7 +204,13 @@ class BacktestReq(BaseModel):
 @app.post("/api/backtest")
 async def api_backtest(req: BacktestReq, user: dict = Depends(require_user)):
     rate_limit(user["id"], "backtest", int(os.getenv("BACKTEST_PER_MIN", "5")), 60)
-    allowed = STRATEGY_ORDER[:TIER_STRATEGY_COUNT[await get_tier(user)]]
+    tier = await get_tier(user)
+    max_days = TIER_BACKTEST_DAYS[tier]
+    if max_days is not None:
+        span = backtest_span_days(req)
+        if span > max_days:
+            raise HTTPException(403, f"backtest range is {span:g} days — your {tier} plan allows up to {max_days} days. Upgrade for longer backtests")
+    allowed = STRATEGY_ORDER[:TIER_STRATEGY_COUNT[tier]]
     if req.strategies:
         locked = [s for s in req.strategies if s not in allowed]
         if locked:

@@ -21,6 +21,10 @@ export async function apiBotStop(){
   const r=await fetch(`${API}/api/bot/stop`, {method:"POST", headers: await authHeaders()})
   return r.json()
 }
+/** Plan as the backend sees it (admins count as elite) — same source the server limits use. */
+export async function apiUserTier(): Promise<string|null>{
+  try{ const r=await fetch(`${API}/api/user/tier`, { headers: await authHeaders() }); return r.ok ? (await r.json()).tier : null }catch{ return null }
+}
 export function chartUrl(file:string){ return `${API}/api/chart?file=${encodeURIComponent(file)}` }
 export const API_URL = API
 

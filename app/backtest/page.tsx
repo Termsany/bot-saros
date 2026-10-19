@@ -1,9 +1,10 @@
 "use client"
-import { useState } from "react"
-import { STRATEGIES } from "@/lib/strategies"
+import { useEffect, useState } from "react"
+import { STRATEGIES, BACKTEST_DAYS, backtestSpanDays } from "@/lib/strategies"
+import { getMyTier } from "@/lib/supabase"
 import { PAIRS, NAMES } from "@/lib/pairs"
 import { Logo } from "@/components/Logo"
-import { apiBacktest, chartUrl } from "@/lib/api"
+import { apiBacktest, apiUserTier, chartUrl } from "@/lib/api"
 import { runBacktestClient } from "@/lib/backtest-client"
 import { Activity, Wifi, TrendingUp, Layers, Clock3, Zap, BarChart3 } from "lucide-react"
 
@@ -38,10 +39,29 @@ export default function BacktestPage(){
   const [chartKey, setChartKey] = useState(0)
   // server chart name comes from the backend (unique per run); browser backtests have no server chart
   const [chartFile, setChartFile] = useState("")
+  // plan's max range — the server enforces it too; here it just keeps the UI honest
+  const [maxDays, setMaxDays] = useState<number|null>(BACKTEST_DAYS.free)
+  useEffect(()=>{
+    // backend first (knows admins); Supabase profile if the backend is asleep/unreachable
+    apiUserTier().then(t=> t ?? getMyTier()).catch(()=>"free").then(t=>{
+      const days = t in BACKTEST_DAYS ? BACKTEST_DAYS[t] : BACKTEST_DAYS.free
+      setMaxDays(days)
+      // default range is a month — shrink it to fit the plan
+      if(days !== null) setFrom(f=>{
+        if(backtestSpanDays(f, to) <= days) return f
+        const d = new Date(Date.parse(to)); d.setUTCDate(d.getUTCDate() - (days - 1)); return toISODate(d)
+      })
+    })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   function toggle(id:string){ if(single) setSelected([id]); else setSelected(s=> s.includes(id) ? s.filter(x=>x!==id) : [...s, id]) }
   async function run(){
     if(from > to){ setError("التاريخ معكوس — من يجب أن يكون قبل إلى"); return }
+    if(maxDays !== null && backtestSpanDays(from, to) > maxDays){
+      setError(`المدة ${backtestSpanDays(from, to)} يوم — باقتك تسمح بـ ${maxDays} يوم كحد أقصى. رقّي باقتك لباك تست أطول`)
+      return
+    }
     setLoading(true); setError(""); setResult(null); setChartFile("")
     try{
       // Try browser-direct first (Bybit/OKX — no Render, no ban)

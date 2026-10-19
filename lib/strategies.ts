@@ -17,8 +17,14 @@ export const STRATEGIES: Strategy[] = [
   { id:"ai", name:"AI Ensemble", nameAr:"AI", desc:"تكيف تلقائي", method:"متوسط مرجح لكل الاستراتيجيات + تعزيز إذا 4+ استراتيجيات متفقة (×1.3). إجماع قوي = إشارة أقوى.", tier:"elite", winRate:50, pf:1.9, icon:"✦" },
 ]
 export const TIERS = [
-  { id:"free", name:"Free", price:"0$", per:"/شهر", cta:"ابدأ مجانا", features:["استراتيجيتان","Spot فقط","Backtest محدود"], count:2, color:"#8A9AB0" },
+  { id:"free", name:"Free", price:"0$", per:"/شهر", cta:"ابدأ مجانا", features:["استراتيجيتان","Spot فقط","Backtest 7 أيام"], count:2, color:"#8A9AB0" },
   { id:"starter", name:"Starter", price:"29$", per:"/شهر", cta:"اشترك", features:["6 استراتيجيات","Spot","Backtest 30 يوم"], count:6, color:"#60A5FA" },
   { id:"pro", name:"Pro", price:"59$", per:"/شهر", cta:"اشترك Pro", features:["7 استراتيجيات","Futures LONG/SHORT x5","Backtest 90 يوم"], count:7, color:"#00D395", popular:true },
   { id:"elite", name:"Elite", price:"99$", per:"/شهر", cta:"اشترك Elite", features:["15 استراتيجية","AI + SMC + ICT","Backtest غير محدود"], count:15, color:"#FFB800" },
 ]
+// Max backtest range in days, end date inclusive (null = unlimited). The backend enforces the same
+// numbers (TIER_BACKTEST_DAYS in backend/app/main.py) — keep them in sync.
+export const BACKTEST_DAYS: Record<string, number|null> = { free: 7, starter: 30, pro: 90, elite: null }
+export function backtestSpanDays(from: string, to: string){
+  return Math.round((Date.parse(to) - Date.parse(from)) / 86400000) + 1
+}

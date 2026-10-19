@@ -107,12 +107,29 @@ class ApiAuthTests(unittest.TestCase):
         from app import main
         main._rate_hits.clear(); main._tier_cache.clear()
         with mock.patch.dict(os.environ, {"SUPABASE_SERVICE_KEY": ""}):  # no tier lookup -> free
-            r = self.c.post("/api/backtest", headers=self.h("user-token"), json={"strategies": ["ict"]})
+            r = self.c.post("/api/backtest", headers=self.h("user-token"), json={"strategies": ["ict"], "from": "2026-10-13", "to": "2026-10-19"})
             self.assertEqual(r.status_code, 403)
             self.assertIn("ict", r.json()["detail"])
             self.assertEqual(asyncio.run(main.get_tier(USER)), "free")
             self.assertEqual(asyncio.run(main.get_tier(ADMIN)), "elite")
             self.assertEqual(asyncio.run(main.get_tier(SQUATTER)), "free")
+
+    def test_backtest_day_limits_per_plan(self):
+        from app import main
+        main._rate_hits.clear(); main._tier_cache.clear()
+        span = lambda **kw: main.backtest_span_days(main.BacktestReq(**kw))
+        self.assertEqual(span(**{"from": "2026-10-13", "to": "2026-10-19"}), 7)  # end day inclusive
+        self.assertEqual(span(**{"from": "2026-09-19", "to": "2026-10-19"}), 31)  # the old default range
+        self.assertEqual(span(timeframe="1h", limit=168), 7)  # no dates: limit candles
+        with mock.patch.dict(os.environ, {"SUPABASE_SERVICE_KEY": ""}):  # -> free = 7 days
+            body = {"from": "2026-10-12", "to": "2026-10-19", "strategies": ["rsi_macd"]}  # 8 days
+            r = self.c.post("/api/backtest", headers=self.h("user-token"), json=body)
+            self.assertEqual(r.status_code, 403)
+            self.assertIn("7 days", r.json()["detail"])
+            for bad in [{"from": "2026-13-45", "to": "2026-10-19"}, {"to": "2026-10-19"},
+                        {"from": "2026-10-19", "to": "2026-10-01"}]:
+                self.assertEqual(self.c.post("/api/backtest", headers=self.h("user-token"), json=bad).status_code, 422, bad)
+        self.assertIsNone(main.TIER_BACKTEST_DAYS["elite"])
 
     def test_supabase_key_check_detects_wrong_key_without_logging_it(self):
         import base64, io, json as _j, contextlib
