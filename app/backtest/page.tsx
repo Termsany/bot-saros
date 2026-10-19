@@ -1,260 +1,373 @@
 "use client"
-import { useEffect, useState } from "react"
-import { BRAND } from "@/lib/brand"
+import { useEffect, useMemo, useState } from "react"
+import { Area, AreaChart, CartesianGrid, ComposedChart, Line, ReferenceLine, ResponsiveContainer, Scatter, Tooltip, XAxis, YAxis } from "recharts"
 import { STRATEGIES, BACKTEST_DAYS, backtestSpanDays } from "@/lib/strategies"
 import { getMyTier } from "@/lib/supabase"
-import { PAIRS, NAMES } from "@/lib/pairs"
-import { Logo } from "@/components/Logo"
+import { PAIRS } from "@/lib/pairs"
+import { AppShell } from "@/components/AppShell"
+import { Kpi } from "@/components/Kpi"
+import { RaqmMark } from "@/components/Logo"
 import { apiBacktest, apiUserTier, chartUrl } from "@/lib/api"
 import { runBacktestClient } from "@/lib/backtest-client"
-import { Activity, Wifi, TrendingUp, Layers, Clock3, Zap, BarChart3 } from "lucide-react"
+import { Check, Play, TriangleAlert } from "lucide-react"
 
+type BTrade = { entry_ts:string; exit_ts:string; side:string; entry:number; exit:number; qty:number; pnl:number; reason:string }
 type BacktestData = {
   symbol: string
   timeframe: string
   stats: { total:number; wins:number; losses:number; win_rate:number; pnl:number; avg_win:number; avg_loss:number; profit_factor:number; max_dd:number }
-  trades: { entry_ts:string; exit_ts:string; side:string; entry:number; exit:number; qty:number; pnl:number; reason:string }[]
+  trades: BTrade[]
+  prices?: { t:number; c:number }[]
 }
 
-const TIMEFRAMES = [
-  { value:"15m", label:"15m" },
-  { value:"1h", label:"1h" },
-  { value:"4h", label:"4h" },
-  { value:"1d", label:"1d" },
-]
-function fmt(n:number){ if(n>=1000) return n.toFixed(2); if(n>=1) return n.toFixed(2); if(n>=0.01) return n.toFixed(4); return n.toExponential(2) }
+const PROFIT = "#22D3A0", LOSS = "#FF5470", CORONA = "#F5B841", LINE = "#232838", FAINT = "#5D6378", INK = "#F2F3F7"
+const TIMEFRAMES = ["15m","1h","4h","1d"]
+const REASONS: Record<string,string> = { SL: "وقف خسارة", TP: "هدف", reverse: "إشارة عكسية", close: "نهاية المدة" }
+
+function fmt(n: number|null|undefined, d?: number){
+  if(n===null || n===undefined || !isFinite(n)) return "—"
+  const digits = d ?? (Math.abs(n) >= 1 ? 2 : 5)
+  return n.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits })
+}
+const signed = (v: number) => `${v>=0?"+":""}${fmt(v, 2)}`
 function toISODate(d: Date){ return d.toISOString().slice(0,10) }
+const daysBack = (to: string, n: number) => { const d = new Date(Date.parse(to)); d.setUTCDate(d.getUTCDate() - (n - 1)); return toISODate(d) }
+const shortTs = (s: string) => String(s).slice(5,16).replace("T"," ")
+
+function Field({ label, children }: { label: string, children: React.ReactNode }){
+  return <label className="block"><span className="mb-1.5 block text-xs font-semibold text-muted">{label}</span>{children}</label>
+}
+const inputCls = "w-full rounded-lg border border-line bg-surface2 px-3 py-2 text-sm outline-none transition focus:border-corona/50"
 
 export default function BacktestPage(){
   const [symbol, setSymbol] = useState("BTC/USDT")
   const [timeframe, setTimeframe] = useState("1h")
-  const [from, setFrom] = useState(()=>{ const d=new Date(); d.setMonth(d.getMonth()-1); return toISODate(d) })
+  const [from, setFrom] = useState(()=> daysBack(toISODate(new Date()), 31))
   const [to, setTo] = useState(()=> toISODate(new Date()))
   const [amount, setAmount] = useState(20)
   const [selected, setSelected] = useState<string[]>(["rsi_macd"])
   const [single, setSingle] = useState(true)
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<BacktestData|null>(null)
+  const [ran, setRan] = useState<{from:string,to:string,strategies:string[]}|null>(null)
   const [stdout, setStdout] = useState("")
   const [error, setError] = useState("")
   const [chartKey, setChartKey] = useState(0)
   // server chart name comes from the backend (unique per run); browser backtests have no server chart
   const [chartFile, setChartFile] = useState("")
+  const [tier, setTier] = useState("free")
   // plan's max range — the server enforces it too; here it just keeps the UI honest
   const [maxDays, setMaxDays] = useState<number|null>(BACKTEST_DAYS.free)
   useEffect(()=>{
     // backend first (knows admins); Supabase profile if the backend is asleep/unreachable
     apiUserTier().then(t=> t ?? getMyTier()).catch(()=>"free").then(t=>{
       const days = t in BACKTEST_DAYS ? BACKTEST_DAYS[t] : BACKTEST_DAYS.free
+      setTier(t in BACKTEST_DAYS ? t : "free")
       setMaxDays(days)
       // default range is a month — shrink it to fit the plan
-      if(days !== null) setFrom(f=>{
-        if(backtestSpanDays(f, to) <= days) return f
-        const d = new Date(Date.parse(to)); d.setUTCDate(d.getUTCDate() - (days - 1)); return toISODate(d)
-      })
+      if(days !== null) setFrom(f=> backtestSpanDays(f, to) <= days ? f : daysBack(to, days))
     })
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  const span = from && to ? backtestSpanDays(from, to) : 0
+  const overLimit = maxDays !== null && span > maxDays
+
   function toggle(id:string){ if(single) setSelected([id]); else setSelected(s=> s.includes(id) ? s.filter(x=>x!==id) : [...s, id]) }
   async function run(){
-    if(from > to){ setError("التاريخ معكوس — من يجب أن يكون قبل إلى"); return }
-    if(maxDays !== null && backtestSpanDays(from, to) > maxDays){
-      setError(`المدة ${backtestSpanDays(from, to)} يوم — باقتك تسمح بـ ${maxDays} يوم كحد أقصى. رقّي باقتك لباك تست أطول`)
-      return
-    }
-    setLoading(true); setError(""); setResult(null); setChartFile("")
+    if(from > to){ setError("التاريخ معكوس — «من» لازم يكون قبل «إلى»"); return }
+    if(overLimit){ setError(`المدة ${span} يوم — باقتك تسمح بـ ${maxDays} يوم كحد أقصى. رقّي باقتك لباك تست أطول`); return }
+    setLoading(true); setError(""); setResult(null); setChartFile(""); setStdout("")
     try{
       // Try browser-direct first (Bybit/OKX — no Render, no ban)
       const client = await runBacktestClient({ symbol, timeframe, from, to, strategies: selected, amount, leverage: 5 })
       if(client.ok && client.data){
         setResult(client.data as unknown as BacktestData)
-        setStdout(`Client backtest — ${client.data.candles} candles from Bybit/OKX`)
-        setChartKey(k=>k+1)
-        setLoading(false)
+        setRan({ from, to, strategies: selected })
         return
       }
-      // Fallback: backend (Render) for chart image
+      // Fallback: backend (Render), which also renders a chart image
       const j = await apiBacktest({ symbol, timeframe, from, to, strategies: selected, amount, leverage: 5 })
       setStdout((j.stdout||"") + (j.stderr ? "\n"+j.stderr : "") + (client.error ? "\nClient: "+client.error : ""))
-      if(j.data){ setResult(j.data as BacktestData); if(typeof j.chart === "string") setChartFile(j.chart) }
+      if(j.data){ setResult(j.data as BacktestData); setRan({ from, to, strategies: selected }); if(typeof j.chart === "string") setChartFile(j.chart) }
       else if(client.error) setError(client.error)
       else if(!j.ok) setError(j.error || (typeof j.detail === "string" ? j.detail : "") || j.stdout || "فشل")
       setChartKey(k=>k+1)
     }catch(e:any){ setError(String(e?.message||e)) }
     finally{ setLoading(false) }
   }
-  const selStrategies = STRATEGIES.filter(s=> selected.includes(s.id))
+
+  const ranStrategies = STRATEGIES.filter(s=> (ran?.strategies || []).includes(s.id))
+  const equity = useMemo(()=>{
+    let cum = 0
+    return [{ i: 0, v: 0 }, ...(result?.trades || []).map((t,i)=> ({ i: i+1, v: (cum += t.pnl) }))]
+  }, [result])
+  const marks = useMemo(()=>{
+    const tr = result?.trades || []
+    return {
+      longIn: tr.filter(t=> t.side==="long").map(t=> ({ t: Date.parse(t.entry_ts), c: t.entry })),
+      shortIn: tr.filter(t=> t.side!=="long").map(t=> ({ t: Date.parse(t.entry_ts), c: t.entry })),
+      win: tr.filter(t=> t.pnl>=0).map(t=> ({ t: Date.parse(t.exit_ts), c: t.exit })),
+      lose: tr.filter(t=> t.pnl<0).map(t=> ({ t: Date.parse(t.exit_ts), c: t.exit })),
+    }
+  }, [result])
+  const s = result?.stats
+  const roi = s ? s.pnl / amount * 100 : 0
 
   return (
-    <div className="min-h-screen bg-void text-ink">
-      <header className="flex h-16 items-center justify-between border-b border-line bg-surface/90 backdrop-blur px-5 lg:px-8 sticky top-0 z-30">
-        <Logo />
-        <div className="flex items-center gap-3">
-          <span className="hidden md:flex items-center gap-2 text-[11px] text-profit font-mono"><Wifi size={13}/> BINANCE SPOT <i className="h-1.5 w-1.5 rounded-full bg-profit animate-pulse"/></span>
-          <a href="/dashboard" className="px-4 py-2 rounded bg-corona text-void text-xs font-bold hover:bg-corona-deep">المنصة</a>
-          <a href="/" className="hidden md:block text-[11px] text-muted hover:text-white">الرئيسية</a>
+    <AppShell active="/backtest" tier={tier}>
+      <header className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h1 className="text-[26px] font-bold">Backtest</h1>
+          <p className="text-[13px] text-muted">اختبر أي استراتيجية على بيانات السوق الحقيقية قبل ما تخاطر بفلوسك</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2" dir="ltr">
+          <span className="flex items-center gap-1.5 rounded-full border border-line bg-surface px-3 py-1.5 font-mono text-[11px] font-bold text-profit"><i className="h-1.5 w-1.5 rounded-full bg-profit"/> BYBIT · OKX · BINANCE</span>
+          <span className="rounded-full border border-line bg-surface px-3 py-1.5 font-mono text-[11px] font-bold text-corona">{maxDays===null ? "∞ DAYS" : `MAX ${maxDays} DAYS`}</span>
         </div>
       </header>
 
-      <div className="mx-auto max-w-[1600px] p-4 lg:p-6 space-y-5">
-        {/* Step 1 */}
-        <section className="rounded border border-line bg-surface p-5">
-          <div className="flex items-center gap-2 mb-1"><span className="h-6 w-6 grid place-items-center rounded bg-corona/10 text-corona text-xs font-black">1</span><h2 className="text-xs font-semibold tracking-[0.14em]">اختر العملة والفريم والمدة</h2></div>
-          <p className="font-mono text-[11px] text-faint">العملة + الفريم + التقويم — كل شيء هنا قبل اختيار الاستراتيجية</p>
-          <div className="grid md:grid-cols-4 gap-3 mt-4">
-            <div><label className="font-mono text-[10px] tracking-[0.14em] text-faint">العملة</label>
-              <select value={symbol} onChange={e=>setSymbol(e.target.value)} className="w-full mt-1 bg-surface border border-line rounded px-3 py-2.5 text-xs focus:border-corona/40 outline-none">
-                {PAIRS.map(p=> <option key={p} value={p}>{NAMES[p]||p}</option>)}
-              </select></div>
-            <div><label className="font-mono text-[10px] tracking-[0.14em] text-faint">الفريم</label>
-              <select value={timeframe} onChange={e=>setTimeframe(e.target.value)} className="w-full mt-1 bg-surface border border-line rounded px-3 py-2.5 text-xs focus:border-corona/40 outline-none">
-                {TIMEFRAMES.map(t=> <option key={t.value} value={t.value}>{t.label} — {t.value}</option>)}
-              </select></div>
-            <div><label className="font-mono text-[10px] tracking-[0.14em] text-faint">من</label>
-              <input type="date" value={from} onChange={e=>setFrom(e.target.value)} className="w-full mt-1 bg-surface border border-line rounded px-3 py-2.5 text-xs" /></div>
-            <div><label className="font-mono text-[10px] tracking-[0.14em] text-faint">إلى</label>
-              <input type="date" value={to} onChange={e=>setTo(e.target.value)} className="w-full mt-1 bg-surface border border-line rounded px-3 py-2.5 text-xs" /></div>
-          </div>
-          <div className="mt-3 flex items-center gap-2 font-mono text-[11px] text-faint"><BarChart3 size={12}/><span>{NAMES[symbol]||symbol}</span><span className="text-line">·</span><span className="text-corona">{timeframe}</span><span className="text-line">·</span><span>{from} → {to}</span></div>
-        </section>
-
-        {/* Step 2 */}
-        <section className="rounded border border-line bg-surface p-5">
-          <div className="flex justify-between items-start gap-4">
-            <div className="flex items-center gap-2"><span className="h-6 w-6 grid place-items-center rounded bg-corona/10 text-corona text-xs font-black">2</span><div><h2 className="text-xs font-semibold tracking-[0.14em]">اختر الاستراتيجية</h2><p className="font-mono text-[11px] text-faint">واحدة لوحدها أو مجموعة — كل واحدة نسبة ربح منفصلة</p></div></div>
-            <div className="flex gap-1.5 shrink-0">
-              <button onClick={()=>{ setSingle(true); setSelected(s=> s.slice(0,1)) }} className={`px-3 py-1.5 rounded text-xs font-bold ${single?"bg-corona text-void":"bg-surface2 text-muted"}`}>واحدة</button>
-              <button onClick={()=>setSingle(false)} className={`px-3 py-1.5 rounded text-xs font-bold ${!single?"bg-corona text-void":"bg-surface2 text-muted"}`}>مجموعة</button>
-            </div>
-          </div>
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2 mt-4 max-h-[380px] overflow-auto pr-1">
-            {STRATEGIES.map(s=>{
-              const active = selected.includes(s.id)
-              return (
-                <button key={s.id} onClick={()=>toggle(s.id)}
-                  className={`text-right p-3 rounded border text-xs text-left transition ${active ? "border-corona/40 bg-corona/[0.06]" : "border-line bg-surface hover:border-faint/50"}`}>
-                  <div className="flex justify-between items-start"><span className="text-base">{s.icon}</span>{active && <span className="h-2 w-2 rounded-full bg-corona mt-1"/>}</div>
-                  <div className="font-bold mt-1.5 leading-tight">{s.nameAr}</div>
-                  <div className="font-mono text-[10px] text-faint leading-tight">{s.desc}</div>
-                  <div className="mt-2 font-mono text-[10px] flex gap-2"><span className={s.winRate>=45?"text-profit":s.winRate>=35?"text-corona":"text-loss"}>WR {s.winRate}%</span><span className="text-faint">PF {s.pf}</span></div>
-                </button>
-              )
-            })}
-          </div>
-          {/* Amount — وهمي */}
-          <div className="mt-4 rounded border border-line bg-surface p-4">
-            <div className="flex justify-between items-center">
-              <div><div className="text-xs font-bold">المبلغ الوهمي للصفقة</div><div className="font-mono text-[11px] text-faint">اختر كأنك داخل بكام — وهمي 100% بدون فلوس حقيقية</div></div>
-              <span className="font-mono text-lg font-black text-corona">{amount}$</span>
-            </div>
-            <input type="range" min={10} max={200} step={10} value={amount} onChange={e=>setAmount(parseInt(e.target.value))} className="w-full mt-3 accent-corona" />
-            <div className="flex justify-between font-mono text-[10px] text-faint mt-1"><span>10$</span><span>100$</span><span>200$</span></div>
-            <div className="mt-2 font-mono text-[11px] text-faint">هامش وهمي <b className="text-white">{amount}$</b> × رافعة x5 = <b className="text-corona">{amount*5}$</b> حجم الصفقة</div>
-          </div>
-
-          <button onClick={run} disabled={loading || selected.length===0}
-            className={`w-full mt-4 py-3 rounded text-sm font-black flex items-center justify-center gap-2 ${loading ? "bg-line text-faint" : "bg-corona text-void hover:bg-corona-deep"}`}>
-            <Zap size={14}/>{loading ? "جاري التحليل..." : `شغّل الـ Backtest — ${selected.length} استراتيجية · ${amount}$ · ${symbol} ${timeframe} ${from} → ${to}`}
-          </button>
-          <div className="mt-2 font-mono text-[10px] text-faint">python backtest.py --symbol {symbol} --timeframe {timeframe} --from {from} --to {to} --strategies {selected.join(",")} --leverage 5</div>
-        </section>
-
-        {loading && (
-          <section className="rounded border border-line bg-surface p-8 text-center">
-            <div className="w-10 h-10 mx-auto rounded-full border-2 border-line border-t-corona animate-spin"/>
-            <div className="text-sm font-bold mt-3">جاري جلب الشموع وتشغيل الـ Backtest...</div>
-            <div className="font-mono text-xs text-faint mt-1">{symbol} — {timeframe} — {from} → {to} — {selected.join(", ")}</div>
-            <div className="font-mono text-[11px] text-faint mt-2">قد يستغرق 10-30 ثانية</div>
-          </section>
-        )}
-
-        {result && !loading && (
-          <section className="rounded border border-line bg-surface p-5">
-            <div className="flex flex-wrap justify-between gap-3">
-              <div><h3 className="text-sm font-bold">التقرير — {result.symbol} {result.timeframe} — {from} → {to}</h3>
-                <p className="font-mono text-xs text-faint mt-1">{selected.length} استراتيجية: {selStrategies.map(s=> s.nameAr).join(" + ")} — {timeframe} — {from} إلى {to}</p></div>
-              <span className={`px-4 py-1.5 rounded-full text-xs font-black border ${result.stats.pnl>=0 ? "bg-profit/10 text-profit border-profit/30" : "bg-loss/10 text-loss border-loss/30"}`}>
-                المحصلة: {result.stats.pnl>=0 ? "مكسب" : "خسارة"} {result.stats.pnl>=0?"+":""}{result.stats.pnl.toFixed(2)} USDT {result.stats.pnl>=0?"🟢":"🔴"}
-              </span>
-            </div>
-
-            <div className="mt-4">
-              <h4 className="text-xs font-semibold tracking-[0.14em] mb-2">طريقة الاستراتيجية</h4>
-              <div className="grid md:grid-cols-2 gap-2">
-                {selStrategies.map(s=>(
-                  <div key={s.id} className="rounded border border-line bg-surface p-3">
-                    <div className="text-xs font-bold">{s.icon} {s.nameAr} — {s.name}</div>
-                    <div className="font-mono text-[11px] text-muted mt-1.5 leading-relaxed">{s.method}</div>
-                    <div className="font-mono text-[11px] mt-2 flex gap-2"><span className={s.winRate>=45?"text-profit":s.winRate>=35?"text-corona":"text-loss"}>WR {s.winRate}%</span><span className="text-faint">PF {s.pf}</span></div>
-                  </div>
+      <div className="grid items-start gap-4 lg:grid-cols-[380px_minmax(0,1fr)]">
+        {/* settings — right column in RTL */}
+        <section className="space-y-5 rounded-2xl border border-line bg-surface p-5 lg:sticky lg:top-8">
+          <div className="space-y-3">
+            <h2 className="text-sm font-bold">السوق</h2>
+            <Field label="العملة">
+              <select value={symbol} onChange={e=>setSymbol(e.target.value)} className={`${inputCls} font-display font-bold`} dir="ltr">
+                {PAIRS.map(p=> <option key={p} value={p}>{p}</option>)}
+              </select>
+            </Field>
+            <div>
+              <span className="mb-1.5 block text-xs font-semibold text-muted">الفريم</span>
+              <div className="grid grid-cols-4 gap-0.5 rounded-[10px] bg-surface2 p-[3px]" dir="ltr">
+                {TIMEFRAMES.map(tf=>(
+                  <button key={tf} onClick={()=>setTimeframe(tf)} className={`rounded-lg py-1.5 font-mono text-xs font-bold transition ${timeframe===tf ? "bg-corona text-void" : "text-muted hover:text-ink"}`}>{tf}</button>
                 ))}
               </div>
             </div>
+          </div>
 
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-4">
-              <div className="rounded border border-line bg-surface p-4 text-center">
-                <div className="font-mono text-[10px] tracking-[0.14em] text-faint">الصفقات</div><div className="text-xl font-black font-mono">{result.stats.total}</div>
-                <div className="font-mono text-[11px] text-faint">{result.stats.wins} رابحة · {result.stats.losses} خاسرة</div>
-              </div>
-              <div className="rounded border border-line bg-surface p-4 text-center">
-                <div className="font-mono text-[10px] tracking-[0.14em] text-faint">نسبة الربح</div><div className={`text-xl font-black font-mono ${result.stats.win_rate>=45?"text-profit":result.stats.win_rate>=35?"text-corona":"text-loss"}`}>{result.stats.win_rate.toFixed(1)}%</div>
-                <div className="font-mono text-[11px] text-faint">PF {result.stats.profit_factor.toFixed(2)}</div>
-              </div>
-              <div className="rounded border border-line bg-surface p-4 text-center">
-                <div className="font-mono text-[10px] tracking-[0.14em] text-faint">المكسب / الخسارة</div>
-                <div className="font-mono text-xs font-bold text-profit">مكسب +{(result.stats.avg_win||0).toFixed(2)}</div>
-                <div className="font-mono text-xs font-bold text-loss">خسارة {(result.stats.avg_loss||0).toFixed(2)}</div>
-              </div>
-              <div className={`rounded border p-4 text-center ${result.stats.pnl>=0 ? "bg-profit/[0.06] border-profit/30" : "bg-loss/[0.06] border-loss/30"}`}>
-                <div className="font-mono text-[10px] tracking-[0.14em] text-faint">المحصلة النهائية</div>
-                <div className={`text-xl font-black font-mono ${result.stats.pnl>=0?"text-profit":"text-loss"}`}>{result.stats.pnl>=0?"+":""}{result.stats.pnl.toFixed(2)} USDT</div>
-                <div className="font-mono text-[11px] text-faint">{result.stats.pnl>=0 ? "مكسب" : "خسارة"} · Max DD {result.stats.max_dd.toFixed(2)}</div>
+          <div className="space-y-3 border-t border-line pt-5">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-bold">المدة</h2>
+              <span className={`font-mono text-[11px] font-bold ${overLimit ? "text-loss" : "text-muted"}`}>{span} يوم{maxDays!==null && ` / ${maxDays}`}</span>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <Field label="من"><input type="date" value={from} max={to} onChange={e=>setFrom(e.target.value)} className={inputCls}/></Field>
+              <Field label="إلى"><input type="date" value={to} min={from} onChange={e=>setTo(e.target.value)} className={inputCls}/></Field>
+            </div>
+            <div className="flex gap-1.5">
+              {[7, 30, 90].map(n=>{
+                const locked = maxDays!==null && n > maxDays
+                return (
+                  <button key={n} disabled={locked} onClick={()=>setFrom(daysBack(to, n))} title={locked ? "محتاج باقة أعلى" : undefined}
+                    className={`flex-1 rounded-lg border py-1.5 text-xs font-semibold transition ${span===n ? "border-corona/50 bg-corona/10 text-corona" : "border-line text-muted hover:text-ink"} disabled:cursor-not-allowed disabled:opacity-40`}>
+                    آخر {n} يوم
+                  </button>
+                )
+              })}
+            </div>
+            {overLimit && <p className="text-xs text-loss">المدة أطول من حد باقتك — <a href="/#pricing" className="underline">رقّي باقتك</a> أو قصّر المدة</p>}
+          </div>
+
+          <div className="space-y-3 border-t border-line pt-5">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-bold">مبلغ الصفقة</h2>
+              <span className="font-mono text-lg font-bold text-corona" dir="ltr">${amount}</span>
+            </div>
+            <input type="range" min={10} max={200} step={10} value={amount} onChange={e=>setAmount(parseInt(e.target.value))} className="w-full accent-corona" aria-label="مبلغ الصفقة"/>
+            <p className="text-xs text-faint">هامش <b className="font-mono text-ink">${amount}</b> × رافعة x5 = حجم صفقة <b className="font-mono text-corona">${amount*5}</b> · فلوس وهمية 100%</p>
+          </div>
+
+          <div className="space-y-3 border-t border-line pt-5">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-bold">الاستراتيجيات <span className="font-mono text-xs text-muted">({selected.length})</span></h2>
+              <div className="flex gap-0.5 rounded-[10px] bg-surface2 p-[3px]">
+                <button onClick={()=>{ setSingle(true); setSelected(s=> s.slice(0,1)) }} className={`rounded-lg px-3 py-1 text-xs font-semibold ${single ? "bg-line text-ink" : "text-muted"}`}>واحدة</button>
+                <button onClick={()=>setSingle(false)} className={`rounded-lg px-3 py-1 text-xs font-semibold ${!single ? "bg-line text-ink" : "text-muted"}`}>مجموعة</button>
               </div>
             </div>
+            <div className="max-h-[300px] space-y-1.5 overflow-y-auto pl-1">
+              {STRATEGIES.map(st=>{
+                const on = selected.includes(st.id)
+                return (
+                  <button key={st.id} onClick={()=>toggle(st.id)} aria-pressed={on}
+                    className={`flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2 text-right transition ${on ? "bg-surface2 ring-1 ring-corona/30" : "border border-line hover:bg-surface2/60"}`}>
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-bold">{st.nameAr}</div>
+                      <div className="font-mono text-[11px] text-muted"><span className={st.winRate>=45 ? "text-profit" : st.winRate>=35 ? "text-corona" : "text-loss"}>WR {st.winRate}%</span><span className="mx-1.5 text-faint">·</span>PF {st.pf}</div>
+                    </div>
+                    <span className={`grid h-5 w-5 shrink-0 place-items-center ${single ? "rounded-full" : "rounded-md"} border ${on ? "border-corona bg-corona text-void" : "border-faint"}`}>{on && <Check size={13} strokeWidth={3}/>}</span>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
 
-            {chartFile && (
-              <div className="mt-5">
-                <h4 className="text-xs font-semibold tracking-[0.14em] mb-2 flex items-center gap-2"><TrendingUp size={12} className="text-profit"/> الشارت — السعر + الصفقات + Equity</h4>
-                <img key={chartKey} src={`${chartUrl(chartFile)}&k=${chartKey}`} alt="chart" className="w-full rounded border border-line" />
-              </div>
-            )}
+          <button onClick={run} disabled={loading || selected.length===0 || overLimit}
+            className="flex w-full items-center justify-center gap-2 rounded-xl bg-corona py-3 text-sm font-bold text-void transition hover:bg-corona-soft disabled:cursor-not-allowed disabled:bg-line disabled:text-faint">
+            <Play size={15} fill="currentColor"/>{loading ? "جاري التحليل..." : "شغّل الـ Backtest"}
+          </button>
+        </section>
 
-            <div className="mt-5">
-              <h4 className="text-xs font-semibold tracking-[0.14em] mb-2">آخر الصفقات</h4>
-              <div className="overflow-auto rounded border border-line">
-                <table className="w-full text-xs font-mono">
-                  <thead className="bg-surface text-faint"><tr><th className="p-2.5 text-right font-normal tracking-[0.1em]">دخول</th><th className="p-2.5 text-right font-normal tracking-[0.1em]">خروج</th><th className="p-2.5 font-normal">اتجاه</th><th className="p-2.5 font-normal">دخول</th><th className="p-2.5 font-normal">خروج</th><th className="p-2.5 font-normal">النتيجة</th><th className="p-2.5 font-normal">السبب</th></tr></thead>
-                  <tbody>
-                    {result.trades.slice(-12).reverse().map((t,i)=>(
-                      <tr key={i} className="border-t border-line">
-                        <td className="p-2.5 text-[11px]">{String(t.entry_ts).slice(5,16).replace("T"," ")}</td>
-                        <td className="p-2.5 text-[11px]">{String(t.exit_ts).slice(5,16).replace("T"," ")}</td>
-                        <td className="p-2.5"><span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${t.side==="long"?"bg-profit/10 text-profit border-profit/30":"bg-loss/10 text-loss border-loss/30"}`}>{t.side==="long"?"LONG":"SHORT"}</span></td>
-                        <td className="p-2.5">{fmt(t.entry)}</td><td className="p-2.5">{fmt(t.exit)}</td>
-                        <td className={`p-2.5 font-bold ${t.pnl>=0?"text-profit":"text-loss"}`}>{t.pnl>=0?"+":""}{t.pnl.toFixed(2)}</td>
-                        <td className="p-2.5 text-[11px] text-muted">{t.reason}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+        {/* results — left column */}
+        <section className="min-w-0 space-y-4">
+          {error && !loading && (
+            <div className="flex gap-3 rounded-2xl border border-loss/30 bg-loss/[0.06] p-4 text-sm text-loss"><TriangleAlert size={18} className="shrink-0"/><span className="whitespace-pre-wrap">{error}</span></div>
+          )}
+
+          {loading && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">{[0,1,2,3].map(i=> <div key={i} className="h-[120px] animate-pulse rounded-2xl border border-line bg-surface"/>)}</div>
+              <div className="grid h-[360px] place-items-center rounded-2xl border border-line bg-surface text-center">
+                <div>
+                  <div className="mx-auto h-10 w-10 animate-spin rounded-full border-2 border-line border-t-corona"/>
+                  <div className="mt-3 text-sm font-bold">جاري جلب الشموع وتشغيل الاختبار...</div>
+                  <div className="mt-1 font-mono text-xs text-faint" dir="ltr">{symbol} · {timeframe} · {from} → {to}</div>
+                </div>
               </div>
             </div>
-          </section>
-        )}
+          )}
 
-        {error && !loading && (
-          <div className="rounded border border-loss/30 bg-loss/[0.06] p-4 text-xs text-loss whitespace-pre-wrap">{error}</div>
-        )}
-        {!result && !loading && stdout && (
-          <div className="rounded border border-line bg-surface p-4 font-mono text-[11px] whitespace-pre-wrap text-muted">{stdout.slice(-4000)}</div>
-        )}
+          {!result && !loading && (
+            <div className="grid min-h-[480px] place-items-center rounded-2xl border border-dashed border-line bg-surface/50 p-8 text-center">
+              <div className="max-w-sm">
+                <RaqmMark size={64} className="mx-auto opacity-80"/>
+                <h2 className="mt-4 text-lg font-bold">جاهز للاختبار</h2>
+                <p className="mt-2 text-sm leading-6 text-muted">اختار العملة والمدة والاستراتيجية من اليمين، واضغط «شغّل». النتيجة هتظهر هنا: الأرقام، وشارت السعر بنقط الدخول والخروج، ومنحنى الأرباح، وكل صفقة.</p>
+              </div>
+            </div>
+          )}
+
+          {result && s && !loading && (
+            <>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h2 className="font-display text-lg font-bold" dir="ltr" style={{textAlign:"right"}}>{result.symbol} · {result.timeframe}</h2>
+                  <p className="font-mono text-xs text-muted" dir="ltr" style={{textAlign:"right"}}>{ran?.from} → {ran?.to} · {ranStrategies.map(x=> x.name).join(" + ")}</p>
+                </div>
+                <span className={`rounded-full px-4 py-1.5 text-sm font-bold ${s.pnl>=0 ? "bg-profit/10 text-profit" : "bg-loss/10 text-loss"}`}>
+                  {s.pnl>=0 ? "مكسب" : "خسارة"} <span className="font-mono" dir="ltr">{signed(s.pnl)} USDT</span>
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
+                <Kpi label="المحصلة" value={signed(s.pnl)} chip={`${roi>=0?"+":""}${roi.toFixed(1)}%`} tone={s.pnl>=0?"profit":"loss"} sub={`USDT · هامش $${amount}`} spark={equity.map(e=> e.v)}/>
+                <Kpi label="نسبة الفوز" value={s.total ? `${s.win_rate.toFixed(1)}%` : "—"} chip={`${s.wins}W · ${s.losses}L`} tone={!s.total ? "neutral" : s.win_rate>=50?"profit":"loss"} sub={`${s.total} صفقة`}/>
+                <Kpi label="Profit Factor" value={!s.profit_factor ? "—" : s.profit_factor >= 99 ? "∞" : fmt(s.profit_factor, 2)} chip={s.profit_factor ? (s.profit_factor>=1.5?"ممتاز":s.profit_factor>=1?"جيد":"ضعيف") : undefined} tone={!s.profit_factor ? "neutral" : s.profit_factor>=1?"profit":"loss"} sub={`متوسط ربح ${fmt(s.avg_win,2)} · خسارة ${fmt(s.avg_loss,2)}`}/>
+                <Kpi label="أقصى تراجع" value={s.max_dd ? `-${fmt(s.max_dd, 2)}` : "0.00"} tone={s.max_dd > amount*0.2 ? "loss" : "neutral"} sub="Max Drawdown · USDT"/>
+              </div>
+
+              {result.prices && result.prices.length > 1 && (
+                <div className="rounded-2xl border border-line bg-surface p-5">
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                    <h3 className="text-base font-bold">السعر والصفقات</h3>
+                    <div className="flex flex-wrap gap-3 text-[11px] text-muted">
+                      <span className="flex items-center gap-1"><i className="h-2 w-2 rounded-full bg-profit"/> دخول LONG</span>
+                      <span className="flex items-center gap-1"><i className="h-2 w-2 rounded-full bg-loss"/> دخول SHORT</span>
+                      <span className="flex items-center gap-1"><i className="h-2 w-2 rounded-full border border-ink"/> خروج</span>
+                    </div>
+                  </div>
+                  <div className="h-[300px]" dir="ltr">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <ComposedChart data={result.prices} margin={{top:8, right:8, left:0, bottom:0}}>
+                        <CartesianGrid stroke={LINE} vertical={false}/>
+                        <XAxis dataKey="t" type="number" domain={["dataMin","dataMax"]} tickFormatter={(v)=> new Date(v).toLocaleDateString("en-GB",{day:"2-digit",month:"short"})} tick={{fill:FAINT,fontSize:10}} axisLine={false} tickLine={false} minTickGap={50}/>
+                        <YAxis dataKey="c" domain={["auto","auto"]} orientation="right" tickFormatter={(v)=>fmt(v)} tick={{fill:FAINT,fontSize:10}} axisLine={false} tickLine={false} width={64}/>
+                        <Tooltip cursor={{stroke:LINE}} contentStyle={{background:"#161A25", border:`1px solid ${LINE}`, borderRadius:8, fontSize:11}} labelFormatter={(v)=> new Date(v as number).toLocaleString()} formatter={(v:any)=> [fmt(v), "السعر"]}/>
+                        <Line dataKey="c" stroke={INK} strokeOpacity={0.55} strokeWidth={1.4} dot={false} isAnimationActive={false}/>
+                        {/* an empty Scatter falls back to the chart data and marks every candle — render only non-empty sets */}
+                        {marks.longIn.length > 0 && <Scatter data={marks.longIn} dataKey="c" fill={PROFIT} shape="triangle" isAnimationActive={false}/>}
+                        {marks.shortIn.length > 0 && <Scatter data={marks.shortIn} dataKey="c" fill={LOSS} shape="diamond" isAnimationActive={false}/>}
+                        {marks.win.length > 0 && <Scatter data={marks.win} dataKey="c" fill="#07080D" stroke={PROFIT} isAnimationActive={false}/>}
+                        {marks.lose.length > 0 && <Scatter data={marks.lose} dataKey="c" fill="#07080D" stroke={LOSS} isAnimationActive={false}/>}
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              )}
+
+              <div className="rounded-2xl border border-line bg-surface p-5">
+                <div className="mb-3 flex items-center justify-between">
+                  <h3 className="text-base font-bold">منحنى الأرباح</h3>
+                  <span className="font-mono text-[11px] text-muted">بعد كل صفقة · USDT</span>
+                </div>
+                <div className="h-[200px]" dir="ltr">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart data={equity} margin={{top:8, right:8, left:0, bottom:0}}>
+                      <defs>
+                        <linearGradient id="eq" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor={s.pnl>=0 ? CORONA : LOSS} stopOpacity={0.35}/>
+                          <stop offset="100%" stopColor={s.pnl>=0 ? CORONA : LOSS} stopOpacity={0}/>
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid stroke={LINE} vertical={false}/>
+                      <XAxis dataKey="i" tick={{fill:FAINT,fontSize:10}} axisLine={false} tickLine={false} allowDecimals={false}/>
+                      <YAxis orientation="right" tickFormatter={(v)=>fmt(v,0)} tick={{fill:FAINT,fontSize:10}} axisLine={false} tickLine={false} width={48}/>
+                      <Tooltip contentStyle={{background:"#161A25", border:`1px solid ${LINE}`, borderRadius:8, fontSize:11}} labelFormatter={(v)=> `بعد صفقة ${v}`} formatter={(v:any)=> [signed(v), "الرصيد"]}/>
+                      <ReferenceLine y={0} stroke={FAINT} strokeDasharray="3 3"/>
+                      <Area dataKey="v" type="monotone" stroke={s.pnl>=0 ? CORONA : LOSS} strokeWidth={2} fill="url(#eq)" isAnimationActive={false}/>
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+
+              {chartFile && (
+                <div className="rounded-2xl border border-line bg-surface p-5">
+                  <h3 className="mb-3 text-base font-bold">شارت السيرفر</h3>
+                  <img key={chartKey} src={`${chartUrl(chartFile)}&k=${chartKey}`} alt="شارت الباك تست" className="w-full rounded-xl border border-line"/>
+                </div>
+              )}
+
+              <div className="grid gap-3 md:grid-cols-2">
+                {ranStrategies.map(st=>(
+                  <div key={st.id} className="rounded-2xl border border-line bg-surface p-4">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-sm font-bold">{st.nameAr} <span className="font-display font-medium text-muted">· {st.name}</span></span>
+                      <span className="font-mono text-[11px] text-muted"><span className={st.winRate>=45 ? "text-profit" : st.winRate>=35 ? "text-corona" : "text-loss"}>WR {st.winRate}%</span> · PF {st.pf}</span>
+                    </div>
+                    <p className="mt-2 text-xs leading-6 text-muted">{st.method}</p>
+                  </div>
+                ))}
+              </div>
+
+              <div className="overflow-hidden rounded-2xl border border-line bg-surface">
+                <div className="flex items-center justify-between px-5 py-4">
+                  <h3 className="text-base font-bold">الصفقات</h3>
+                  <span className="font-mono text-[11px] text-muted">{result.trades.length} صفقة</span>
+                </div>
+                <div className="max-h-[420px] overflow-auto">
+                  <table className="w-full min-w-[640px] text-[13px]">
+                    <thead className="sticky top-0 bg-surface2 text-[11px] text-muted">
+                      <tr>{["الاتجاه","الدخول","الخروج","السبب","النتيجة"].map(h=> <th key={h} className="px-5 py-2.5 text-right font-semibold">{h}</th>)}</tr>
+                    </thead>
+                    <tbody>
+                      {result.trades.length===0 ? (
+                        <tr><td colSpan={5} className="px-5 py-10 text-center text-sm text-faint">الاستراتيجية ما دخلتش أي صفقة في المدة دي — جرّب مدة أطول أو فريم أصغر</td></tr>
+                      ) : [...result.trades].reverse().map((t,i)=>(
+                        <tr key={i} className="border-t border-line">
+                          <td className="px-5 py-3"><span className={`rounded-md px-1.5 py-0.5 font-mono text-[10px] font-bold ${t.side==="long" ? "bg-profit/10 text-profit" : "bg-loss/10 text-loss"}`}>{t.side==="long" ? "LONG" : "SHORT"}</span></td>
+                          <td className="px-5 py-3 font-mono tabular" dir="ltr" style={{textAlign:"right"}}>{fmt(t.entry)} <span className="text-[11px] text-faint">{shortTs(t.entry_ts)}</span></td>
+                          <td className="px-5 py-3 font-mono tabular" dir="ltr" style={{textAlign:"right"}}>{fmt(t.exit)} <span className="text-[11px] text-faint">{shortTs(t.exit_ts)}</span></td>
+                          <td className="px-5 py-3 text-muted">{REASONS[t.reason] || t.reason}</td>
+                          <td className={`px-5 py-3 font-mono font-bold tabular ${t.pnl>=0 ? "text-profit" : "text-loss"}`} dir="ltr" style={{textAlign:"right"}}>{signed(t.pnl)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </>
+          )}
+
+          {stdout && !loading && (
+            <details className="rounded-2xl border border-line bg-surface p-4 text-xs text-muted">
+              <summary className="cursor-pointer font-semibold">تفاصيل تقنية من السيرفر</summary>
+              <pre className="mt-3 max-h-[240px] overflow-auto whitespace-pre-wrap font-mono text-[11px]" dir="ltr">{stdout.slice(-4000)}</pre>
+            </details>
+          )}
+        </section>
       </div>
-
-      <footer className="mx-auto max-w-[1600px] px-5 lg:px-8 border-t border-line mt-6 py-6 flex flex-wrap justify-between gap-3 font-mono text-[11px] text-faint">
-        <span>{BRAND.footer}</span>
-        <span>ENGINE STATUS <b className="text-profit">● OPERATIONAL</b> · {BRAND.domain}</span>
-      </footer>
-    </div>
+    </AppShell>
   )
 }

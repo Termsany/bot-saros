@@ -1,10 +1,10 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { BRAND } from "@/lib/brand"
 import { Bar, BarChart, CartesianGrid, ComposedChart, Line, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
-import { Logo } from "@/components/Logo"
-import { Bell, CandlestickChart, House, KeyRound, Layers, LayoutDashboard, RefreshCw, Sparkles } from "lucide-react"
+import { AppShell } from "@/components/AppShell"
+import { Kpi } from "@/components/Kpi"
+import { Bell, RefreshCw } from "lucide-react"
 import { StrategyPicker } from "@/components/StrategyPicker"
 import { PaperWallet } from "@/components/PaperWallet"
 import { PAIRS, NAMES } from "@/lib/pairs"
@@ -55,46 +55,6 @@ function CandleShape(p: any){
       <rect x={x + width * 0.12} y={top} width={width * 0.76} height={bh} rx={1} fill={color}/>
     </g>
   )
-}
-
-function Sparkline({ values, color }: { values: number[], color: string }){
-  const w = 110, h = 30
-  const vals = values.length >= 2 ? values : [0, 0]
-  const mn = Math.min(...vals), mx = Math.max(...vals)
-  const pts = vals.map((v, i) => `${(i / (vals.length - 1) * w).toFixed(1)},${(h - 3 - (v - mn) / ((mx - mn) || 1) * (h - 6)).toFixed(1)}`)
-  return <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} className="shrink-0"><polyline points={pts.join(" ")} fill="none" stroke={color} strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round"/></svg>
-}
-
-function Kpi({ label, value, chip, tone, sub, spark }: { label: string, value: string, chip?: string, tone: "profit"|"loss"|"neutral", sub: string, spark?: number[] }){
-  const chipCls = tone==="profit" ? "bg-profit/10 text-profit" : tone==="loss" ? "bg-loss/10 text-loss" : "bg-line text-muted"
-  return (
-    <div className="min-w-0 rounded-2xl border border-line bg-surface p-4 sm:p-5">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="text-[13px] font-semibold text-muted">{label}</span>
-        {chip && <span className={`rounded-full px-2 py-0.5 font-mono text-[11px] font-bold tabular ${chipCls}`}>{chip}</span>}
-      </div>
-      <div className={`mt-2 truncate font-mono text-xl font-bold leading-tight tabular sm:text-[26px] ${tone==="loss" ? "text-loss" : "text-ink"}`} dir="ltr" style={{textAlign:"right"}}>{value}</div>
-      <div className="mt-2 flex items-center justify-between gap-2">
-        <span className="text-[11px] text-faint">{sub}</span>
-        {spark && spark.length >= 2 && <Sparkline values={spark} color={tone==="loss" ? LOSS : CORONA}/>}
-      </div>
-    </div>
-  )
-}
-
-const NAV = [
-  { href: "/dashboard", label: "لوحة التحكم", icon: LayoutDashboard, active: true },
-  { href: "/backtest", label: "Backtest", icon: CandlestickChart },
-  { href: "#strategies", label: "الاستراتيجيات", icon: Layers },
-  { href: "/llm-lab", label: "مختبر AI", icon: Sparkles },
-  { href: "/settings/keys", label: "مفاتيح المنصات", icon: KeyRound },
-  { href: "/", label: "الرئيسية", icon: House },
-]
-const PLAN_COPY: Record<string, string> = {
-  free: "استراتيجيتان · Backtest 7 أيام",
-  starter: "6 استراتيجيات · Backtest 30 يوم",
-  pro: "7 استراتيجيات · Backtest 90 يوم · Futures",
-  elite: "15 استراتيجية · Backtest بلا حدود · ذكاء اصطناعي",
 }
 
 export default function Dashboard(){
@@ -200,40 +160,7 @@ export default function Dashboard(){
   const rows = tab==="open" ? openTrades : [...closedTrades].reverse()
 
   return (
-    <main className="min-h-screen bg-void text-ink lg:flex">
-      {/* Sidebar — first child = right side in RTL */}
-      <aside className="sticky top-0 hidden h-screen w-[248px] shrink-0 flex-col justify-between border-l border-line bg-surface px-4 py-7 lg:flex">
-        <div className="space-y-7">
-          <div className="flex justify-end px-2"><Logo size="sm"/></div>
-          <nav className="space-y-1">
-            {NAV.map(({ href, label, icon: Icon, active })=>(
-              <a key={href} href={href} className={`flex items-center justify-between gap-3 rounded-xl px-3 py-2.5 text-sm transition ${active ? "bg-surface2 font-bold text-corona" : "text-muted hover:bg-surface2/60 hover:text-ink"}`}>
-                <span>{label}</span><Icon size={18} strokeWidth={1.8}/>
-              </a>
-            ))}
-          </nav>
-        </div>
-        <div className="space-y-3 rounded-2xl border border-umbra/40 bg-gradient-to-br from-[#1E1846] to-surface p-4">
-          <div className="flex items-center justify-between">
-            <span className="text-sm font-bold">باقتك</span>
-            <span className="rounded-full bg-corona px-2 py-0.5 font-mono text-[10px] font-bold uppercase tracking-wider text-void">{tier}</span>
-          </div>
-          <p className="text-xs leading-5 text-muted">{PLAN_COPY[tier] || PLAN_COPY.free}</p>
-          {tier!=="elite" && <a href="/#pricing" className="block rounded-lg bg-corona py-2 text-center text-xs font-bold text-void transition hover:bg-corona-soft">رقّي باقتك</a>}
-          <div className={`flex items-center justify-between rounded-lg px-3 py-2 text-xs ${engine.running ? "bg-profit/10 text-profit" : "bg-line/60 text-muted"}`}>
-            <span className="font-semibold">{engine.running ? "● المحرك يعمل" : "○ المحرك متوقف"}</span>
-            <span className="font-mono tabular">{nextIn!==null ? `00:${String(nextIn).padStart(2,"0")}` : "--:--"}</span>
-          </div>
-        </div>
-      </aside>
-
-      <div className="min-w-0 flex-1 space-y-5 p-4 lg:p-8">
-        {/* mobile header */}
-        <div className="flex items-center justify-between lg:hidden">
-          <Logo size="sm"/>
-          <div className="hidden gap-3 text-xs text-muted min-[360px]:flex"><a href="/backtest">Backtest</a><a href="/">الرئيسية</a></div>
-        </div>
-
+    <AppShell active="/dashboard" tier={tier} engine={engine} nextIn={nextIn}>
         {activating && (
           <div className={`rounded-xl px-4 py-2.5 text-center text-sm ${activating==="timeout" ? "bg-loss/10 text-loss" : "bg-profit/10 text-profit"}`}>
             {activating==="waiting" && "⏳ جاري تفعيل باقتك..."}
@@ -261,7 +188,7 @@ export default function Dashboard(){
         <section className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
           <Kpi label="إجمالي الربح" value={`${signed(stats.pnl)}`} chip={`${stats.wins}W · ${stats.losses}L`} tone={stats.pnl>=0?"profit":"loss"} sub="USDT · الصفقات المقفولة" spark={stats.equity}/>
           <Kpi label="نسبة الفوز" value={stats.total ? `${stats.winRate.toFixed(1)}%` : "—"} chip={stats.total ? (stats.winRate>=50?"قوية":"تحت 50%") : undefined} tone={!stats.total ? "neutral" : stats.winRate>=50?"profit":"loss"} sub={`${stats.wins} من ${stats.total} صفقة`} spark={stats.wrSeries}/>
-          <Kpi label="Profit Factor" value={stats.pf ? fmt(stats.pf, 2) : "—"} chip={stats.pf ? (stats.pf>=1.5?"ممتاز":stats.pf>=1?"جيد":"ضعيف") : undefined} tone={!stats.pf ? "neutral" : stats.pf>=1?"profit":"loss"} sub="الهدف ≥ 1.5" spark={stats.equity}/>
+          <Kpi label="Profit Factor" value={!stats.pf ? "—" : stats.pf >= 99 ? "∞" : fmt(stats.pf, 2)} chip={stats.pf ? (stats.pf>=1.5?"ممتاز":stats.pf>=1?"جيد":"ضعيف") : undefined} tone={!stats.pf ? "neutral" : stats.pf>=1?"profit":"loss"} sub="الهدف ≥ 1.5" spark={stats.equity}/>
           <Kpi label="الصفقات" value={`${openTrades.length} / ${closedTrades.length}`} chip={openTrades.length ? `${openTrades.length} مفتوحة` : undefined} tone="neutral" sub="مفتوحة / مقفولة"/>
         </section>
 
@@ -401,11 +328,6 @@ export default function Dashboard(){
           </div>
         </section>
 
-        <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4 font-mono text-[10px] text-faint">
-          <span>{BRAND.footer}</span>
-          <span dir="ltr">{BRAND.domain}</span>
-        </footer>
-      </div>
-    </main>
+    </AppShell>
   )
 }

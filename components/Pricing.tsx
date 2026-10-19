@@ -1,6 +1,7 @@
 "use client"
 import { useState } from "react"
-import { TIERS, STRATEGIES } from "@/lib/strategies"
+import { Check } from "lucide-react"
+import { TIERS } from "@/lib/strategies"
 import { authHeaders } from "@/lib/supabase"
 
 export function Pricing(){
@@ -25,23 +26,29 @@ export function Pricing(){
 
   return (
     <>
-      <div className="grid md:grid-cols-4 gap-4">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {TIERS.map(t=>(
-          <div key={t.id} className={`rounded-2xl border p-5 flex flex-col ${t.popular ? "border-corona bg-corona/[0.06] relative" : "border-line bg-surface"}`}>
-            {t.popular && <span className="absolute -top-3 left-1/2 -translate-x-1/2 text-[10px] px-2 py-1 rounded-full bg-corona text-void font-bold">الأكثر طلبا</span>}
-            <div className="text-sm font-bold" style={{color:t.color}}>{t.name}</div>
-            <div className="mt-1"><span className="text-2xl font-black">{t.price}</span><span className="text-xs text-muted">{t.per}</span></div>
-            <div className="text-xs text-muted mt-1">{t.count} استراتيجية</div>
-            <ul className="mt-3 space-y-1 text-xs flex-1">
-              {t.features.map(f=><li key={f} className="flex gap-1.5"><span className="text-corona">✓</span>{f}</li>)}
+          <div key={t.id} className={`relative flex flex-col rounded-2xl border p-6 ${t.popular ? "border-corona/60 bg-gradient-to-b from-corona/[0.08] to-surface shadow-[0_20px_60px_-30px_rgba(245,184,65,0.5)]" : "border-line bg-surface"}`}>
+            {t.popular && <span className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-corona px-3 py-1 text-[11px] font-bold text-void">الأكثر طلباً</span>}
+            <div className="flex items-center gap-2">
+              <i className="h-2.5 w-2.5 rounded-full" style={{background: t.color}}/>
+              <span className="font-display text-base font-bold">{t.name}</span>
+            </div>
+            <div className="mt-4 flex items-baseline gap-1" dir="ltr" style={{justifyContent:"flex-end"}}>
+              <span className="font-display text-[40px] font-bold leading-none">{t.price}</span>
+              <span className="text-sm text-muted">{t.per}</span>
+            </div>
+            <ul className="mt-6 flex-1 space-y-2.5 text-sm">
+              {t.features.map(f=> <li key={f} className="flex items-start gap-2"><Check size={16} className="mt-0.5 shrink-0 text-corona"/>{f}</li>)}
             </ul>
-            <button onClick={()=>checkout(t.id)} disabled={loading===t.id} className={`mt-4 w-full py-2 rounded-xl text-sm font-bold disabled:opacity-50 ${t.popular ? "bg-corona text-void" : "bg-line text-white border border-faint/50"}`}>
-              {loading===t.id ? "جاري..." : t.cta}
+            <button onClick={()=>checkout(t.id)} disabled={loading===t.id}
+              className={`mt-6 w-full rounded-xl py-2.5 text-sm font-bold transition disabled:opacity-50 ${t.popular ? "bg-corona text-void hover:bg-corona-soft" : "border border-line bg-surface2 hover:bg-line"}`}>
+              {loading===t.id ? "جاري التحويل للدفع..." : t.cta}
             </button>
           </div>
         ))}
       </div>
-      {err && <div className="mt-3 text-xs text-loss bg-loss/10 border border-loss/30 rounded-xl px-3 py-2">{err}</div>}
+      {err && <div className="mt-4 rounded-xl border border-loss/30 bg-loss/10 px-4 py-3 text-sm text-loss">{err}</div>}
     </>
   )
 }

@@ -268,6 +268,8 @@ export async function runBacktestClient(opts: {
       stats: { total: trades.length, wins, losses, win_rate: winRate, pnl: totalPnl, avg_win: avgWin, avg_loss: avgLoss, profit_factor: pf, max_dd: maxDD },
       trades: trades.map(t=> ({ ...t, entry_ts: new Date(t.entry_ts).toISOString(), exit_ts: new Date(t.exit_ts).toISOString() })),
       candles: candles.length,
+      // close per candle for the report's price chart (trades are plotted on it)
+      prices: candles.map(c=> ({ t: c.ts, c: c.close })),
     }
   }
 }
