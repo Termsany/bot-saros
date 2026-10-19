@@ -1,0 +1,14 @@
+fastapi
+uvicorn[standard]
+sqlalchemy
+aiosqlite
+greenlet
+pydantic
+python-dotenv
+httpx
+ccxt
+pandas
+numpy
+matplotlib
+supabase
+stripe
