@@ -77,7 +77,14 @@ export async function POST(req: NextRequest){
       const userId = await findUserId({ userId: sub.metadata?.user_id, customer })
       if(userId){
         if(event.type==="customer.subscription.deleted" || ENDED.includes(sub.status)){
-          await setTier(userId, "free", customer)
+          // don't downgrade if the same user still has another active subscription
+          const others = customer ? (await stripe.subscriptions.list({ customer, status: "active", limit: 10 })).data : []
+          const rank = (t?: string)=> PAID_TIERS.indexOf(t || "")
+          const best = others
+            .map((o:any)=> priceToTier[o.items?.data?.[0]?.price?.id] || o.metadata?.tier)
+            .filter((t:any)=> PAID_TIERS.includes(t))
+            .sort((a:any,b:any)=> rank(b)-rank(a))[0]
+          await setTier(userId, best || "free", customer)
         } else if(ACTIVE.includes(sub.status)){
           const tier = priceToTier[sub.items?.data?.[0]?.price?.id] || sub.metadata?.tier
           if(PAID_TIERS.includes(tier)) await setTier(userId, tier, customer)

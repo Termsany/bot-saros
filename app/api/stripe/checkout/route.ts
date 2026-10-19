@@ -42,13 +42,28 @@ export async function POST(req: NextRequest){
   // fixed origin — the request's Origin header is attacker-controlled
   const origin = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000"
   try{
+    // One subscription per user: reuse the Stripe customer and refuse a second active subscription
+    // (paying twice created two customers + two subscriptions for the same account)
+    let customerId: string | undefined
+    const serviceKey = process.env.SUPABASE_SERVICE_KEY
+    if(serviceKey){
+      const admin = createClient(supabaseUrl, serviceKey)
+      const { data: prof } = await admin.from("profiles").select("stripe_customer_id").eq("id", user.id).maybeSingle()
+      customerId = prof?.stripe_customer_id || undefined
+    }
+    if(customerId){
+      const subs = await stripe.subscriptions.list({ customer: customerId, status: "active", limit: 1 })
+      if(subs.data.length){
+        return NextResponse.json({ error: "عندك اشتراك فعّال بالفعل — لتغيير الباقة الغِ الحالي الأول" }, { status: 409 })
+      }
+    }
     const meta = { tier, user_id: user.id }
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
       line_items: [{ price: priceId, quantity: 1 }],
       success_url: `${origin}/dashboard?checkout=success`,
       cancel_url: `${origin}/#pricing`,
-      customer_email: user.email || undefined,
+      ...(customerId ? { customer: customerId } : { customer_email: user.email || undefined }),
       client_reference_id: user.id,
       metadata: meta,
       subscription_data: { metadata: meta },
