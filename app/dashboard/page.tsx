@@ -33,7 +33,24 @@ export default function Dashboard(){
   // Strategy + pair state (our logic)
   // tier comes from the user's profile row — not editable from the UI
   const [tier, setTier] = useState("free")
-  useEffect(()=>{ getMyTier().then(setTier).catch(()=>{}) }, [])
+  // after Stripe checkout the webhook lands a few seconds after the redirect — poll until the tier updates
+  const [activating, setActivating] = useState<"" | "waiting" | "done" | "timeout">("")
+  useEffect(()=>{
+    let stop = false
+    const fromCheckout = new URLSearchParams(window.location.search).get("checkout")==="success"
+    if(fromCheckout){ setActivating("waiting"); window.history.replaceState(null, "", "/dashboard") }
+    ;(async()=>{
+      for(let i=0; i < (fromCheckout ? 30 : 1); i++){
+        if(stop) return
+        const t = await getMyTier().catch(()=>"free")
+        setTier(t)
+        if(t!=="free"){ if(fromCheckout) setActivating("done"); return }
+        if(fromCheckout) await new Promise(r=>setTimeout(r, 2000))
+      }
+      if(fromCheckout && !stop) setActivating("timeout")
+    })()
+    return ()=>{ stop = true }
+  }, [])
   const [selected, setSelected] = useState<string[]>(["ict"])
   const [symbol, setSymbol] = useState("BTC/USDT")
   const [tf, setTf] = useState("4h")
@@ -104,6 +121,13 @@ export default function Dashboard(){
 
   return (
     <main className="min-h-screen bg-[#070B12] text-[#E8EEF5]">
+      {activating && (
+        <div className={`px-5 py-2 text-center text-xs ${activating==="timeout" ? "bg-[#2a0d14] text-[#FF8FA3]" : "bg-[#062016] text-[#00D395]"}`}>
+          {activating==="waiting" && "⏳ جاري تفعيل باقتك..."}
+          {activating==="done" && `✅ تم تفعيل باقة ${tier}`}
+          {activating==="timeout" && "⚠️ الدفع تم بس الباقة لسه ما اتفعلتش — حدّث الصفحة بعد دقيقة، ولو فضلت كده كلّمنا"}
+        </div>
+      )}
       <header className="flex h-16 items-center justify-between border-b border-[#1c2632] bg-[#0a1018] px-5 lg:px-8">
         <Logo />
         <div className="hidden items-center gap-4 md:flex">

@@ -24,3 +24,15 @@ revoke insert, update, delete on profiles from anon, authenticated;
 alter table profiles add column if not exists stripe_customer_id text;
 create index if not exists profiles_stripe_customer_idx on profiles(stripe_customer_id);
 create index if not exists profiles_email_idx on profiles(email);
+
+-- Backfill: users who signed up before the on_auth_user_created trigger existed have no profile row
+-- (they show as "free" and the webhook can't find them by email)
+insert into public.profiles (id, email, paper_balance)
+select u.id, u.email, 1000 from auth.users u
+on conflict (id) do nothing;
+
+-- make sure the signup trigger exists
+create or replace function handle_new_user() returns trigger as $$
+begin insert into public.profiles (id,email,paper_balance) values (new.id, new.email, 1000) on conflict (id) do nothing; return new; end; $$ language plpgsql security definer;
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created after insert on auth.users for each row execute function handle_new_user();

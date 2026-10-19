@@ -55,8 +55,7 @@ export async function POST(req: NextRequest){
     } else {
       // No profile yet (Stripe paid but Supabase has no row) — create it
       const { data: userData } = await admin.auth.admin.getUserById(userId)
-      const email = customer ? undefined : userData?.user?.email
-      const row: any = { id: userId, tier, email: email || null }
+      const row: any = { id: userId, tier, email: userData?.user?.email || null }
       if(customer) row.stripe_customer_id = customer
       const { error } = await admin.from("profiles").insert(row)
       if(error) throw new Error(error.message)
