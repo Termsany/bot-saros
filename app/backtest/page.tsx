@@ -56,7 +56,7 @@ export default function BacktestPage(){
       setStdout((j.stdout||"") + (j.stderr ? "\n"+j.stderr : "") + (client.error ? "\nClient: "+client.error : ""))
       if(j.data) setResult(j.data as BacktestData)
       else if(client.error) setError(client.error)
-      else if(!j.ok) setError(j.error || j.stdout || "فشل")
+      else if(!j.ok) setError(j.error || (typeof j.detail === "string" ? j.detail : "") || j.stdout || "فشل")
       setChartKey(k=>k+1)
     }catch(e:any){ setError(String(e?.message||e)) }
     finally{ setLoading(false) }

@@ -28,6 +28,8 @@ FORBIDDEN_ATTRS = {
     "savetxt", "loadtxt", "genfromtxt", "fromfile", "tofile", "memmap", "fromregex", "DataSource",
     "io", "lib", "api", "core", "compat", "util", "testing", "plotting", "ctypeslib", "os", "sys",
     "builtins", "system", "popen", "subprocess", "f2py", "distutils", "show_config",
+    # more file readers/writers: ndarray.dump(path), Excel/HDF5 readers-writers, Styler exports
+    "dump", "dumps", "ExcelWriter", "ExcelFile", "HDFStore", "style", "Styler", "ctypes", "mmap",
 }
 ALLOWED_PREFIXED_ATTRS = {"to_numpy", "to_list"}
 FORBIDDEN_ATTR_PREFIXES = ("read_", "to_", "from_")

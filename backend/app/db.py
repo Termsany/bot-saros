@@ -31,6 +31,7 @@ class Trade(Base):
 class BacktestRun(Base):
     __tablename__ = "backtest_runs"
     id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String, index=True, nullable=True)
     symbol = Column(String)
     timeframe = Column(String)
     from_date = Column(String, nullable=True)
@@ -45,3 +46,7 @@ async_session = async_sessionmaker(engine, expire_on_commit=False)
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # create_all doesn't add columns to an existing table — migrate older saros.db files
+        cols = [r[1] for r in (await conn.exec_driver_sql("PRAGMA table_info(backtest_runs)")).fetchall()]
+        if "user_id" not in cols:
+            await conn.exec_driver_sql("ALTER TABLE backtest_runs ADD COLUMN user_id VARCHAR")

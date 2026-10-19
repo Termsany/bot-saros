@@ -18,9 +18,11 @@ from app import auth, keys_vault
 from app.main import app, _get_exchange_for_cycle
 from app.llm_sandbox import validate_code, UnsafeCode, run_backtest_sandboxed
 
-ADMIN = {"id": "u-admin", "email": "admin@example.com"}
-USER = {"id": "u-user", "email": "user@example.com"}
-TOKENS = {"admin-token": ADMIN, "user-token": USER}
+ADMIN = {"id": "u-admin", "email": "admin@example.com", "email_confirmed": True}
+USER = {"id": "u-user", "email": "user@example.com", "email_confirmed": True}
+# attacker who signed up with the admin's address but never confirmed it
+SQUATTER = {"id": "u-squat", "email": "admin@example.com", "email_confirmed": False}
+TOKENS = {"admin-token": ADMIN, "user-token": USER, "squat-token": SQUATTER}
 
 
 async def fake_verify(token):
@@ -97,6 +99,21 @@ class ApiAuthTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"ADMIN_EMAILS": ""}):
             self.assertEqual(self.c.get("/api/keys/status", headers=self.h("admin-token")).status_code, 403)
 
+    def test_unconfirmed_admin_email_is_not_admin(self):
+        self.assertEqual(self.c.get("/api/keys/status", headers=self.h("squat-token")).status_code, 403)
+        self.assertEqual(self.c.get("/api/keys/status", headers=self.h("admin-token")).status_code, 200)
+
+    def test_backtest_plan_limits_enforced_server_side(self):
+        from app import main
+        main._rate_hits.clear(); main._tier_cache.clear()
+        with mock.patch.dict(os.environ, {"SUPABASE_SERVICE_KEY": ""}):  # no tier lookup -> free
+            r = self.c.post("/api/backtest", headers=self.h("user-token"), json={"strategies": ["ict"]})
+            self.assertEqual(r.status_code, 403)
+            self.assertIn("ict", r.json()["detail"])
+            self.assertEqual(asyncio.run(main.get_tier(USER)), "free")
+            self.assertEqual(asyncio.run(main.get_tier(ADMIN)), "elite")
+            self.assertEqual(asyncio.run(main.get_tier(SQUATTER)), "free")
+
     def test_cron_secret(self):
         self.assertEqual(self.c.post("/api/evolve", headers={"X-Cron-Secret": "wrong"}).status_code, 401)
         r = self.c.post("/api/evolve", headers={"X-Cron-Secret": "cron-s3cret"})
@@ -128,6 +145,20 @@ class ApiAuthTests(unittest.TestCase):
         for f in ["backtest_/../backend/vault.json", "backtest_..%2f..%2fx.json", "backtest_a.png/../../x.png", "x.png"]:
             self.assertEqual(self.c.get("/api/chart", params={"file": f}).status_code, 400, f)
 
+    def test_docs_hidden_by_default(self):
+        self.assertEqual(self.c.get("/docs").status_code, 404)
+        self.assertEqual(self.c.get("/openapi.json").status_code, 404)
+
+    def test_backtest_rate_limited(self):
+        from app import main
+        main._rate_hits.clear()
+        for _ in range(5):
+            main.rate_limit("u1", "backtest", 5, 60)
+        with self.assertRaises(auth.HTTPException) as cm:
+            main.rate_limit("u1", "backtest", 5, 60)
+        self.assertEqual(cm.exception.status_code, 429)
+        main.rate_limit("u2", "backtest", 5, 60)  # other users unaffected
+
     def test_backtest_input_validation(self):
         for body in [{"symbol": "--out=/tmp/x"}, {"timeframe": "--x"}, {"from": "2026/01/01"}, {"strategies": ["a;b"]}]:
             r = self.c.post("/api/backtest", headers=self.h("user-token"), json=body)
@@ -145,6 +176,8 @@ class SandboxTests(unittest.TestCase):
             "def llm_signal(df): return df.eval('1'), []",
             "def llm_signal(df): df.to_pickle('x'); return 0, []",
             "import numpy as np\ndef llm_signal(df): np.load('x'); return 0, []",
+            "def llm_signal(df): df['close'].values.dump('x'); return 0, []",
+            "import pandas as pd\ndef llm_signal(df): pd.ExcelWriter('x.xlsx'); return 0, []",
             "def llm_signal(df): return getattr(df, 'x'), []",
             "import subprocess\ndef llm_signal(df): return 0, []",
             "from os import path\ndef llm_signal(df): return 0, []",

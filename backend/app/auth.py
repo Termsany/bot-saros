@@ -45,7 +45,8 @@ async def _verify_token(token: str) -> dict:
     if r.status_code != 200:
         raise HTTPException(401, "invalid or expired session")
     j = r.json()
-    user = {"id": j.get("id"), "email": (j.get("email") or "").lower()}
+    user = {"id": j.get("id"), "email": (j.get("email") or "").lower(),
+            "email_confirmed": bool(j.get("email_confirmed_at") or j.get("confirmed_at"))}
     if not user["id"]:
         raise HTTPException(401, "invalid session")
     if len(_CACHE) > 1000:
@@ -71,6 +72,10 @@ async def require_admin(authorization: str = Header(default="")) -> dict:
         raise HTTPException(403, "ADMIN_EMAILS not set on the backend — admin endpoints are disabled")
     if user["email"] not in admins:
         raise HTTPException(403, "admin only")
+    # Without this, anyone could sign up with the admin's address (if it isn't registered yet,
+    # or "Confirm email" is off in Supabase) and get admin — i.e. control of the LIVE trading keys.
+    if not user.get("email_confirmed"):
+        raise HTTPException(403, "admin email not confirmed")
     return user
 
 

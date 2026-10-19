@@ -31,7 +31,10 @@ async def lifespan(app: FastAPI):
     print("DB ready")
     yield
 
-app = FastAPI(title="Bot Saros API", version="2.0.0", lifespan=lifespan)
+# API docs list every endpoint — off in production unless ENABLE_API_DOCS=true
+_docs = os.getenv("ENABLE_API_DOCS", "").lower() == "true"
+app = FastAPI(title="Bot Saros API", version="2.0.0", lifespan=lifespan,
+              docs_url="/docs" if _docs else None, redoc_url=None, openapi_url="/openapi.json" if _docs else None)
 
 ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "https://bot-saros.vercel.app,http://localhost:3000").split(",") if o.strip()]
 app.add_middleware(CORSMiddleware, allow_origins=ALLOWED_ORIGINS, allow_methods=["GET", "POST"], allow_headers=["Authorization", "Content-Type"])
@@ -43,6 +46,64 @@ def live_trading_allowed() -> bool:
 TIMEFRAMES = {"1m", "5m", "15m", "30m", "1h", "2h", "4h", "1d"}
 SYMBOL_RE = re.compile(r"^[A-Z0-9]{2,15}/[A-Z]{3,5}$")
 _backtest_slots = asyncio.Semaphore(int(os.getenv("MAX_CONCURRENT_BACKTESTS", "2")))
+
+# Per-user rate limit for expensive endpoints (signup is open, Render free has 0.1 CPU)
+import time as _time
+from collections import defaultdict, deque
+_rate_hits: dict = defaultdict(deque)
+def rate_limit(user_id: str, key: str, max_calls: int, per_s: int):
+    q = _rate_hits[(key, user_id)]
+    now = _time.monotonic()
+    while q and now - q[0] > per_s: q.popleft()
+    if len(q) >= max_calls:
+        raise HTTPException(429, f"too many requests — wait {int(per_s - (now - q[0])) + 1}s")
+    q.append(now)
+
+# Plan limits — enforced here, not only in the UI (StrategyPicker unlocks the first N of this list).
+# Keep in sync with lib/strategies.ts STRATEGIES order and TIERS counts.
+STRATEGY_ORDER = ["rsi_macd", "classical", "ichimoku", "dow", "gann", "sr", "elliott", "smc", "vwap",
+                  "supertrend", "bollinger", "harmonic", "ict", "heikin", "ai"]
+TIER_STRATEGY_COUNT = {"free": 2, "starter": 6, "pro": 7, "elite": 15}
+_tier_cache: dict = {}
+
+async def get_tier(user: dict) -> str:
+    """Tier from Supabase profiles (service key). Fails closed to 'free'; admins get everything."""
+    from app.auth import _admin_emails
+    if user.get("email") in _admin_emails() and user.get("email_confirmed"):
+        return "elite"
+    hit = _tier_cache.get(user["id"])
+    if hit and hit[0] > _time.monotonic():
+        return hit[1]
+    tier = "free"
+    url, key = os.getenv("SUPABASE_URL", "").rstrip("/"), os.getenv("SUPABASE_SERVICE_KEY", "")
+    if url and key:
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=8) as client:
+                r = await client.get(f"{url}/rest/v1/profiles", params={"id": f"eq.{user['id']}", "select": "tier"},
+                                     headers={"apikey": key, "Authorization": f"Bearer {key}"})
+            rows = r.json() if r.status_code == 200 else []
+            if rows and rows[0].get("tier") in TIER_STRATEGY_COUNT:
+                tier = rows[0]["tier"]
+        except Exception as e:
+            print(f"get_tier error: {e}")
+            return "free"  # don't cache failures
+    if len(_tier_cache) > 5000: _tier_cache.clear()
+    _tier_cache[user["id"]] = (_time.monotonic() + 60, tier)
+    return tier
+
+def _cleanup_backtest_files(max_age_s: int = 3600):
+    """Each backtest writes a .json + .png to BOT_DIR; without cleanup the disk fills up."""
+    cutoff = _time.time() - max_age_s
+    for p in BOT_DIR.glob("backtest_*_*.*"):
+        if p.suffix in (".json", ".png") and re.fullmatch(r"backtest_[A-Za-z0-9_]+_[0-9a-f]{10}", p.stem):
+            try:
+                if p.stat().st_mtime < cutoff: p.unlink()
+            except OSError: pass
+
+def _scrub(text: str) -> str:
+    """Don't show server paths (from tracebacks) to users."""
+    return text.replace(str(BOT_DIR), ".")
 
 # ── Health
 @app.get("/api/health")
@@ -90,6 +151,15 @@ class BacktestReq(BaseModel):
 
 @app.post("/api/backtest")
 async def api_backtest(req: BacktestReq, user: dict = Depends(require_user)):
+    rate_limit(user["id"], "backtest", int(os.getenv("BACKTEST_PER_MIN", "5")), 60)
+    allowed = STRATEGY_ORDER[:TIER_STRATEGY_COUNT[await get_tier(user)]]
+    if req.strategies:
+        locked = [s for s in req.strategies if s not in allowed]
+        if locked:
+            raise HTTPException(403, f"strategies not in your plan: {', '.join(locked)} — upgrade to unlock")
+    else:
+        req.strategies = allowed  # empty = "all", which must still mean all *allowed*
+    _cleanup_backtest_files()
     import json as js
     sym_file = req.symbol.replace("/","")
     # unique output per run so concurrent backtests don't read each other's results
@@ -122,17 +192,18 @@ async def api_backtest(req: BacktestReq, user: dict = Depends(require_user)):
     # Save to DB
     try:
         async with async_session() as sess:
-            rec = BacktestRun(symbol=req.symbol, timeframe=req.timeframe, from_date=req.from_date, to_date=req.to_date, strategies=js.dumps(req.strategies or []), stats=js.dumps(data.get("stats",{}) if data else {}), created_at=datetime.now(timezone.utc).isoformat())
+            rec = BacktestRun(user_id=user["id"], symbol=req.symbol, timeframe=req.timeframe, from_date=req.from_date, to_date=req.to_date, strategies=js.dumps(req.strategies or []), stats=js.dumps(data.get("stats",{}) if data else {}), created_at=datetime.now(timezone.utc).isoformat())
             sess.add(rec); await sess.commit()
     except: pass
 
-    return {"ok": proc.returncode==0, "code": proc.returncode, "stdout": out[-8000:], "stderr": err[-2000:], "data": data, "chart": f"{run_name}.png"}
+    return {"ok": proc.returncode==0, "code": proc.returncode, "stdout": _scrub(out[-8000:]), "stderr": _scrub(err[-2000:]), "data": data, "chart": f"{run_name}.png"}
 
 @app.get("/api/backtest/history")
 async def backtest_history(limit: int = 20, user: dict = Depends(require_user)):
     limit = max(1, min(limit, 100))
     async with async_session() as sess:
-        res = await sess.execute(select(BacktestRun).order_by(desc(BacktestRun.id)).limit(limit))
+        # only the caller's own runs (this used to list every user's backtests)
+        res = await sess.execute(select(BacktestRun).where(BacktestRun.user_id == user["id"]).order_by(desc(BacktestRun.id)).limit(limit))
         rows = res.scalars().all()
         return [{"id":r.id,"symbol":r.symbol,"timeframe":r.timeframe,"from":r.from_date,"to":r.to_date,"strategies":r.strategies,"stats":r.stats,"at":r.created_at} for r in rows]
 
@@ -167,6 +238,26 @@ class BotStartReq(BaseModel):
     strategies: Optional[List[str]] = None
     timeframe: str = "1h"
     paper: bool = True
+
+    @field_validator("symbols")
+    @classmethod
+    def _syms(cls, v):
+        if v is None: return v
+        v = [s.upper().strip() for s in v][:30]
+        if not all(SYMBOL_RE.match(s) for s in v): raise ValueError("bad symbol")
+        return v
+
+    @field_validator("strategies")
+    @classmethod
+    def _strats(cls, v):
+        if v and not all(re.match(r"^[a-z0-9_]{1,30}$", x) for x in v): raise ValueError("bad strategy name")
+        return v
+
+    @field_validator("timeframe")
+    @classmethod
+    def _tf(cls, v):
+        if v not in TIMEFRAMES: raise ValueError("bad timeframe")
+        return v
 
 @app.post("/api/bot/start")
 async def bot_start(req: BotStartReq, bg: BackgroundTasks, user: dict = Depends(require_admin)):
@@ -288,18 +379,7 @@ async def bot_loop(cfg):
 @app.get("/api/user/tier")
 async def user_tier(user: dict = Depends(require_user)):
     """يرجع باقة المستخدم الحالي من Supabase — server-side verification"""
-    user_id = user["id"]
-    try:
-        from supabase import create_client
-        url = os.getenv("SUPABASE_URL","")
-        key = os.getenv("SUPABASE_SERVICE_KEY","")
-        if url and key and user_id:
-            supa = create_client(url, key)
-            row = supa.table("profiles").select("tier").eq("id", user_id).single().execute()
-            if row.data: return {"tier": row.data.get("tier","free")}
-    except Exception as e:
-        return {"tier": "free", "note": str(e)[:100]}
-    return {"tier": "free"}
+    return {"tier": await get_tier(user)}
 
 
 @app.post("/api/optimizer/run")

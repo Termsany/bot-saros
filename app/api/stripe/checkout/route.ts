@@ -70,6 +70,8 @@ export async function POST(req: NextRequest){
     })
     return NextResponse.json({ url: session.url })
   }catch(e:any){
-    return NextResponse.json({ error: e.message }, { status: 500 })
+    // Stripe errors can include account/price details — log them, don't send them to the browser
+    console.error("stripe checkout:", e?.message)
+    return NextResponse.json({ error: "تعذر إنشاء جلسة الدفع — حاول مرة أخرى" }, { status: 500 })
   }
 }

@@ -65,6 +65,12 @@ export async function POST(req: NextRequest){
   try{
     if(event.type==="checkout.session.completed"){
       const s = event.data.object
+      // async payment methods complete checkout before the money arrives — only upgrade once paid
+      // (the later customer.subscription.updated -> active event covers the delayed case)
+      if(!["paid","no_payment_required"].includes(s.payment_status)){
+        console.warn("checkout.session.completed: not paid yet", s.id, s.payment_status)
+        return NextResponse.json({ received: true })
+      }
       const tier = s.metadata?.tier
       const userId = await findUserId({ userId: s.client_reference_id || s.metadata?.user_id, email: s.customer_details?.email || s.customer_email })
       if(userId && PAID_TIERS.includes(tier)) await setTier(userId, tier, typeof s.customer === "string" ? s.customer : undefined)
