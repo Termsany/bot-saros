@@ -21,24 +21,33 @@ export function TradingChart({ candles, markers, height=380 }: { candles: Candle
 
     async function init(){
       try{
-        const { createChart, ColorType } = await import("lightweight-charts")
+        const lwc: any = await import("lightweight-charts")
         if(!ref.current) return
         ref.current.innerHTML = ""
-        chart = createChart(ref.current, {
+        chart = lwc.createChart(ref.current, {
           width: ref.current.clientWidth,
           height,
-          layout: { background: { type: ColorType.Solid, color: "#0A0F1A" }, textColor: "#8A9AB0" },
+          layout: { background: { type: lwc.ColorType.Solid, color: "#0A0F1A" }, textColor: "#8A9AB0" },
           grid: { vertLines: { color: "#1E2A3A" }, horzLines: { color: "#1E2A3A" } },
           rightPriceScale: { borderColor: "#1E2A3A" },
           timeScale: { borderColor: "#1E2A3A", timeVisible: true, secondsVisible: false },
           crosshair: { mode: 1 },
           handleScroll: true, handleScale: true,
         })
-        series = chart.addCandlestickSeries({
-          upColor: "#00D395", downColor: "#FF3B5C",
-          borderUpColor: "#00D395", borderDownColor: "#FF3B5C",
-          wickUpColor: "#00D395", wickDownColor: "#FF3B5C",
-        })
+        // v5: addSeries(CandlestickSeries), v4: addCandlestickSeries
+        if(typeof chart.addCandlestickSeries === "function"){
+          series = chart.addCandlestickSeries({
+            upColor: "#00D395", downColor: "#FF3B5C",
+            borderUpColor: "#00D395", borderDownColor: "#FF3B5C",
+            wickUpColor: "#00D395", wickDownColor: "#FF3B5C",
+          })
+        } else {
+          series = chart.addSeries(lwc.CandlestickSeries, {
+            upColor: "#00D395", downColor: "#FF3B5C",
+            borderUpColor: "#00D395", borderDownColor: "#FF3B5C",
+            wickUpColor: "#00D395", wickDownColor: "#FF3B5C",
+          })
+        }
         // Ensure sorted ascending
         const sorted = [...candles].sort((a,b)=> a.time - b.time)
         series.setData(sorted)
