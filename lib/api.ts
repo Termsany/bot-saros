@@ -26,18 +26,34 @@ export async function apiTrades(limit=20){
   try{ const r=await fetch(`${API}/api/trades?limit=${limit}`); return r.json() }catch{ return [] }
 }
 export async function apiKlines(symbol: string, interval: string, limit=200){
-  // Try backend proxy first, fallback to Binance directly
   const sym = symbol.replace("/","")
-  try{
-    const r=await fetch(`${API}/api/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`)
-    if(r.ok) return r.json()
-  }catch{}
+  // Try Binance directly first (fastest, no backend dependency)
   try{
     const r=await fetch(`https://api.binance.com/api/v3/klines?symbol=${sym}&interval=${interval}&limit=${limit}`)
     if(r.ok){
       const raw = await r.json()
-      // Binance returns [openTime, open, high, low, close, volume, ...]
-      return raw.map((k:any)=> ({ time: Math.floor(k[0]/1000), open:+k[1], high:+k[2], low:+k[3], close:+k[4] }))
+      if(Array.isArray(raw) && raw.length){
+        return raw.map((k:any)=> ({ time: Math.floor(k[0]/1000) as any, open:+k[1], high:+k[2], low:+k[3], close:+k[4] }))
+      }
+    }
+  }catch{}
+  // Fallback: Futures endpoint
+  try{
+    const r=await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=${sym}&interval=${interval}&limit=${limit}`)
+    if(r.ok){
+      const raw = await r.json()
+      if(Array.isArray(raw) && raw.length){
+        return raw.map((k:any)=> ({ time: Math.floor(k[0]/1000) as any, open:+k[1], high:+k[2], low:+k[3], close:+k[4] }))
+      }
+    }
+  }catch{}
+  // Last resort: backend proxy
+  try{
+    const r=await fetch(`${API}/api/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`)
+    if(r.ok){
+      const j = await r.json()
+      const raw = Array.isArray(j) ? j : j.candles || j.data || []
+      if(raw.length) return raw.map((k:any)=> Array.isArray(k) ? ({ time: Math.floor(k[0]/1000) as any, open:+k[1], high:+k[2], low:+k[3], close:+k[4] }) : k)
     }
   }catch{}
   return []

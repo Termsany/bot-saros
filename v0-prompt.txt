@@ -1,15 +1,22 @@
+Bot Saros — Trading Terminal Dashboard (Global v1)
 
-Bot Saros — Crypto Futures SaaS Platform (Dark Trading Terminal)
+IDENTITY (متفرد):
+- Colors: Obsidian #070B12 bg, Emerald #00D395 for LONG/profit, Crimson #FF3B5C for SHORT/loss, Amber #FFB800 for pending, Steel #8A9AB0 muted, Border #1E2A3A
+- Typography: JetBrains Mono for numbers, Inter for Arabic/English, font-black for KPIs
+- Texture: subtle grid noise, glow on profit card, glass blur header
+- No generic crypto purples — terminal / Bloomberg vibe
 
-Brand: Obsidian #070B12 background, Emerald #00D395 LONG, Crimson #FF3B5C SHORT, Amber #FFB800 wait, Slate borders.
-No Elite Skin colors. Identity: Bot Saros - AI Trading Terminal.
+LAYOUT (Dashboard lays immediately):
+- Header glass: S logo + Bot Saros wordmark + FUTURES x5 pill + LiveTicker + Backtest link
+- KPI strip (5 cards): Total PnL (emeral/crimson border pulse), WinRate, PF, Open, Closed
+- Two panels: 
+  LEFT (right visually 360px): StrategyPicker 5x3 cards (icon + WR/PF color) + Selected count + tier warning + command hint + open trades + closed trades
+  CENTER/MAIN: TradingView Lightweight Charts — candlesticks 200, auto-refresh 30s from Binance REST (api.binance.com -> fapi fallback), entry/exit markers (arrowUp #00D395 belowBar, arrowDown #FF3B5C aboveBar, circle P/L), empty fallback "loading..."
+- Footer: 15 strategies — ICT hero note
 
-Pages needed (Next.js app router, shadcn/ui):
-1. Landing: hero with live BTC ticker + 7 strategies preview + pricing tiers (Free/Starter/Pro/Elite) with strategy counts and live win rates
-2. Dashboard: 20 pairs table + chart placeholder + strategy selector (15 checkboxes) + live signals
-3. Backtest: per-strategy selector + timeframe + run button + equity chart + stats
-4. Pricing: 4 tiers with Stripe CTA, feature comparison (strategies count, futures, leverage, AI)
-5. Auth: login/signup with Supabase magic link
+NOTES:
+- Chart must NOT be blank: direct Binance fetch (api.binance.com/api/v3/klines), parse [openTime, open, high, low, close], time as seconds, sort ascending
+- Trades from /api/trades on Render backend (https://bot-saros-backend.onrender.com)
+- RTL for Arabic labels but numbers LTR
 
-Style: dark, monospace numbers, terminal aesthetic, glass cards, no gradients, sharp borders.
-Language: Arabic RTL for headings, English for tickers. Use Tailwind only.
+Build with Next.js 14 + lightweight-charts + @supabase/supabase-js + stripe. All data live.
