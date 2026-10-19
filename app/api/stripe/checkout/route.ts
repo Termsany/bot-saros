@@ -8,7 +8,7 @@ export async function POST(req: NextRequest){
   const secret = process.env.STRIPE_SECRET_KEY
   if(!secret){
     return NextResponse.json({
-      error: "Stripe غير مربوط — ضع STRIPE_SECRET_KEY في saros/.env.local و STRIPE_*_PRICE_ID",
+      error: "Stripe غير مربوط — ضع STRIPE_SECRET_KEY في .env.local و STRIPE_*_PRICE_ID",
       hint: "أنشئ منتجات في stripe.com/dashboard/products وخذ Price IDs"
     }, { status: 503 })
   }

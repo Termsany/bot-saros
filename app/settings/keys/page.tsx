@@ -1,5 +1,6 @@
 "use client"
 import { useEffect, useState } from "react"
+import { BRAND } from "@/lib/brand"
 import { Logo } from "@/components/Logo"
 import { ShieldCheck, Eye, EyeOff, Trash2, Check, AlertTriangle, Key } from "lucide-react"
 import { authHeaders } from "@/lib/supabase"
@@ -169,7 +170,7 @@ export default function KeysPage(){
       </div>
 
       <footer className="mx-auto max-w-[1100px] px-5 lg:px-8 border-t border-[#1c2632] mt-6 py-6 flex justify-between font-mono text-[11px] text-[#5f6e81]">
-        <span>Bot Saros © 2026 — Multi-Exchange Vault</span>
+        <span>{BRAND.name} © 2026 — Multi-Exchange Vault</span>
         <span>ENGINE <b className="text-[#00D395]">● OPERATIONAL</b></span>
       </footer>
     </div>

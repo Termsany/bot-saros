@@ -20,6 +20,7 @@ const nextConfig = {
   images: { unoptimized: true },
   poweredByHeader: false,
   env: {
+    // live URL — keep until the Vercel domain is renamed (see lib/brand.ts)
     NEXT_PUBLIC_SITE_URL: process.env.NEXT_PUBLIC_SITE_URL || "https://bot-saros.vercel.app",
   }
 }

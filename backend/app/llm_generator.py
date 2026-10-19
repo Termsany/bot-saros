@@ -55,14 +55,14 @@ async def generate_strategy(prompt: str) -> dict:
 def save_strategy(code: str, name: str = None) -> Path:
     llm_dir = Path(__file__).parent.parent.parent / "strategies_llm"
     if not (llm_dir / "strategies_llm").exists():
-        # We're in backend/app/ -> parent is backend, parent.parent is saros
+        # We're in backend/app/ -> parent is backend, parent.parent is the repo root
         actual = Path(__file__).parent.parent / "strategies_llm"
-        # fallback: saros root
+        # fallback: repo root
         alt = Path(__file__).parent.parent.parent
         llm_dir = actual
-    # Actually: backend/app/ -> backend/ -> saros/
-    saros_root = Path(__file__).parent.parent.parent if (Path(__file__).parent.parent.parent / "package.json").exists() else Path(__file__).parent.parent
-    llm_dir = saros_root / "strategies_llm"
+    # Actually: backend/app/ -> backend/ -> repo root
+    repo_root = Path(__file__).parent.parent.parent if (Path(__file__).parent.parent.parent / "package.json").exists() else Path(__file__).parent.parent
+    llm_dir = repo_root / "strategies_llm"
     llm_dir.mkdir(exist_ok=True)
     if not name:
         existing = list(llm_dir.glob("llm_*.py"))

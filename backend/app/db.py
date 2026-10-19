@@ -5,7 +5,11 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sess
 import os
 from pathlib import Path
 
-DB_PATH = Path(__file__).parent.parent.parent / "saros.db"
+_ROOT = Path(__file__).parent.parent.parent
+DB_PATH = _ROOT / "raqm.db"
+# renamed from saros.db — keep existing data
+if not DB_PATH.exists() and (_ROOT / "saros.db").exists():
+    (_ROOT / "saros.db").rename(DB_PATH)
 DATABASE_URL = f"sqlite+aiosqlite:///{DB_PATH}"
 
 Base = declarative_base()
@@ -46,7 +50,7 @@ async_session = async_sessionmaker(engine, expire_on_commit=False)
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        # create_all doesn't add columns to an existing table — migrate older saros.db files
+        # create_all doesn't add columns to an existing table — migrate older database files
         cols = [r[1] for r in (await conn.exec_driver_sql("PRAGMA table_info(backtest_runs)")).fetchall()]
         if "user_id" not in cols:
             await conn.exec_driver_sql("ALTER TABLE backtest_runs ADD COLUMN user_id VARCHAR")

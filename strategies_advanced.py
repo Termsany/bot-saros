@@ -1,6 +1,6 @@
 
 """
-Bot Saros — 8 Advanced Strategies
+Raqm — 8 Advanced Strategies
 SMC, VWAP+Volume, SuperTrend+ATR, Bollinger+Squeeze+StochRSI, Harmonic, ICT Killzone, HeikinAshi+ADX, AI Ensemble
 Each returns score in [-1, +1] + reasons
 """

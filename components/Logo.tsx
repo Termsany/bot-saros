@@ -1,5 +1,6 @@
 "use client"
 import { Activity } from "lucide-react"
+import { BRAND } from "@/lib/brand"
 
 export function Logo({ size="md", showText=true }: { size?: "sm"|"md"|"lg", showText?: boolean }){
   const dims = { sm: "h-8 w-8", md: "h-9 w-9", lg: "h-11 w-11" }[size]
@@ -22,8 +23,8 @@ export function Logo({ size="md", showText=true }: { size?: "sm"|"md"|"lg", show
       </div>
       {showText && (
         <div>
-          <div className={`${textSize} font-black tracking-[0.18em] leading-none text-white`}>BOT SAROS</div>
-          <div className="font-mono text-[9px] tracking-[0.2em] text-[#647386] leading-none mt-1">AUTONOMOUS TRADING TERMINAL</div>
+          <div className={`${textSize} font-black tracking-[0.18em] leading-none text-white`}>{BRAND.nameCaps}</div>
+          <div className="font-mono text-[9px] tracking-[0.2em] text-[#647386] leading-none mt-1">{BRAND.subtitle}</div>
         </div>
       )}
     </div>

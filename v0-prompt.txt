@@ -1,4 +1,4 @@
-Bot Saros — Trading Terminal Dashboard (Global v1)
+Raqm — Trading Terminal Dashboard (Global v1)
 
 IDENTITY (متفرد):
 - Colors: Obsidian #070B12 bg, Emerald #00D395 for LONG/profit, Crimson #FF3B5C for SHORT/loss, Amber #FFB800 for pending, Steel #8A9AB0 muted, Border #1E2A3A
@@ -7,7 +7,7 @@ IDENTITY (متفرد):
 - No generic crypto purples — terminal / Bloomberg vibe
 
 LAYOUT (Dashboard lays immediately):
-- Header glass: S logo + Bot Saros wordmark + FUTURES x5 pill + LiveTicker + Backtest link
+- Header glass: S logo + Raqm wordmark + FUTURES x5 pill + LiveTicker + Backtest link
 - KPI strip (5 cards): Total PnL (emeral/crimson border pulse), WinRate, PF, Open, Closed
 - Two panels: 
   LEFT (right visually 360px): StrategyPicker 5x3 cards (icon + WR/PF color) + Selected count + tier warning + command hint + open trades + closed trades

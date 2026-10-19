@@ -1,4 +1,5 @@
 import { Pricing } from "@/components/Pricing"
+import { BRAND } from "@/lib/brand"
 import { STRATEGIES } from "@/lib/strategies"
 import { Logo } from "@/components/Logo"
 import { ArrowUpRight, Check, ShieldCheck, Zap } from "lucide-react"
@@ -83,8 +84,8 @@ export default function Page(){
       </section>
 
       <footer className="mx-auto max-w-[1100px] px-5 lg:px-8 border-t border-[#1c2632] py-6 flex flex-wrap justify-between gap-3 font-mono text-[11px] text-[#5f6e81]">
-        <span>Bot Saros © 2026 — 15 استراتيجية + Backtest + Futures LONG/SHORT</span>
-        <span>ENGINE <b className="text-[#00D395]">● OPERATIONAL</b> · bot-saros.vercel.app</span>
+        <span>{BRAND.footer}</span>
+        <span>ENGINE <b className="text-[#00D395]">● OPERATIONAL</b> · {BRAND.domain}</span>
       </footer>
     </main>
   )

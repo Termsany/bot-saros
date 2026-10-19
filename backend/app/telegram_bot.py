@@ -29,7 +29,7 @@ async def send_telegram(text: str, parse_mode: str = "Markdown", disable_preview
 async def test_telegram():
     return await send_telegram(
         "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-        "  \u2705 *Bot Saros \u2014 \u0645\u062a\u0635\u0644*\n"
+        "  \u2705 *Raqm · رقم \u2014 \u0645\u062a\u0635\u0644*\n"
         "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
         "\u062a\u0644\u064a\u062c\u0631\u0627\u0645 \u0645\u0631\u0628\u0648\u0637 \u0628\u0646\u062c\u0627\u062d\\.\n"
         "\u0643\u0644 \u0635\u0641\u0642\u0629 \u0647\u062a\u0648\u0635\u0644\u0643 \u0641\u0648\u0631\u0627\u064b \u0647\u0646\u0627\\.\n"
@@ -54,7 +54,7 @@ def format_entry(symbol, side, price, sl, tp, leverage, score,
         f"\U0001f4b0 *\u062f\u062e\u0648\u0644:* `{price:,.2f}`  |  \U0001f4b5 \u0647\u0627\u0645\u0634 `${amount_usdt:.0f}`\n"
         f"\U0001f6e1\ufe0f *\u0648\u0642\u0641:* `{sl:,.2f}`  |  \U0001f3af *\u0647\u062f\u0641:* `{tp:,.2f}`  |  \u2696\ufe0f R:R `1:{rr:.1f}`\n"
         f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-        f"_Bot Saros \u2014 {_now_utc()} _"
+        f"_Raqm · رقم \u2014 {_now_utc()} _"
     )
 
 def format_exit(symbol, side, entry, exit_price, qty, pnl, pnl_pct, reason,
@@ -76,7 +76,7 @@ def format_exit(symbol, side, entry, exit_price, qty, pnl, pnl_pct, reason,
         f"\U0001f4e6 \u0643\u0645\u064a\u0629 `{qty:.6f}`  |  \U0001f4b9 `{pnl:+.2f} USDT  ({pnl_pct:+.2f}%)`\n"
         f"\U0001f4cb \u0627\u0644\u0633\u0628\u0628: {reason_label}\n"
         f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-        f"_Bot Saros \u2014 {_now_utc()} _"
+        f"_Raqm · رقم \u2014 {_now_utc()} _"
     )
 
 def format_optimizer_report(symbol, timeframe, top3, best_sl, best_tp,
@@ -91,5 +91,5 @@ def format_optimizer_report(symbol, timeframe, top3, best_sl, best_tp,
         f"{lines}{pnl_str}\n"
         f"\u2699\ufe0f \u0627\u0644\u0623\u0645\u062b\u0644: SL `{best_sl*100:.1f}%`  TP `{best_tp*100:.1f}%`\n"
         f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-        f"_Bot Saros \u2014 {_now_utc()} _"
+        f"_Raqm · رقم \u2014 {_now_utc()} _"
     )

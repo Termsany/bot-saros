@@ -1,6 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useState } from "react"
+import { BRAND } from "@/lib/brand"
 import { Bar, BarChart, CartesianGrid, Cell, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
 import { Logo } from "@/components/Logo"
 import { BarChart3, Clock3, Crosshair, RefreshCw, Wifi, Activity } from "lucide-react"
@@ -252,7 +253,7 @@ export default function Dashboard(){
         <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-[#1c2632] pt-4 font-mono text-[10px] text-[#5f6e81]">
           <span>ENGINE STATUS <b className="text-[#00D395]">● OPERATIONAL</b></span>
           <span>AVG VOLUME {avgVolume ? `${(avgVolume/1000).toFixed(1)}K` : "—"} BTC</span>
-          <span>Bot Saros © 2026 — 15 استراتيجية + Backtest + Futures LONG/SHORT</span>
+          <span>{BRAND.footer}</span>
         </footer>
       </div>
     </main>

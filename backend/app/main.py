@@ -66,7 +66,7 @@ async def lifespan(app: FastAPI):
 
 # API docs list every endpoint — off in production unless ENABLE_API_DOCS=true
 _docs = os.getenv("ENABLE_API_DOCS", "").lower() == "true"
-app = FastAPI(title="Bot Saros API", version="2.0.0", lifespan=lifespan,
+app = FastAPI(title="Raqm API", version="2.0.0", lifespan=lifespan,
               docs_url="/docs" if _docs else None, redoc_url=None, openapi_url="/openapi.json" if _docs else None)
 
 ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "https://bot-saros.vercel.app,http://localhost:3000").split(",") if o.strip()]
@@ -157,7 +157,7 @@ def _scrub(text: str) -> str:
 # ── Health
 @app.get("/api/health")
 async def health():
-    return {"ok": True, "name": "Bot Saros", "version": "2.0.0"}
+    return {"ok": True, "name": "Raqm", "version": "2.0.0"}
 
 # ── Backtest: proxy to backtest.py (same logic, now via API + DB)
 class BacktestReq(BaseModel):

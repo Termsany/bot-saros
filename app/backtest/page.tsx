@@ -1,5 +1,6 @@
 "use client"
 import { useEffect, useState } from "react"
+import { BRAND } from "@/lib/brand"
 import { STRATEGIES, BACKTEST_DAYS, backtestSpanDays } from "@/lib/strategies"
 import { getMyTier } from "@/lib/supabase"
 import { PAIRS, NAMES } from "@/lib/pairs"
@@ -251,8 +252,8 @@ export default function BacktestPage(){
       </div>
 
       <footer className="mx-auto max-w-[1600px] px-5 lg:px-8 border-t border-[#1c2632] mt-6 py-6 flex flex-wrap justify-between gap-3 font-mono text-[11px] text-[#5f6e81]">
-        <span>Bot Saros © 2026 — 15 استراتيجية + Backtest + Futures LONG/SHORT</span>
-        <span>ENGINE STATUS <b className="text-[#00D395]">● OPERATIONAL</b> · bot-saros.vercel.app</span>
+        <span>{BRAND.footer}</span>
+        <span>ENGINE STATUS <b className="text-[#00D395]">● OPERATIONAL</b> · {BRAND.domain}</span>
       </footer>
     </div>
   )

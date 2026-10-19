@@ -1,5 +1,6 @@
 "use client"
 import { useState } from "react"
+import { BRAND } from "@/lib/brand"
 import { Logo } from "@/components/Logo"
 import { authHeaders } from "@/lib/supabase"
 
@@ -81,7 +82,7 @@ export default function LLMLab(){
         )}
       </div>
       <footer className="mx-auto max-w-[900px] px-5 lg:px-8 border-t border-[#1c2632] mt-6 py-6 flex justify-between font-mono text-[11px] text-[#5f6e81]">
-        <span>LLM Lab — Bot Saros</span><span>CodeCraft · Claude Sonnet 5</span>
+        <span>LLM Lab — {BRAND.name}</span><span>CodeCraft · Claude Sonnet 5</span>
       </footer>
     </div>
   )
