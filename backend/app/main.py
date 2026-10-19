@@ -258,6 +258,48 @@ async def telegram_status():
     has_chat = bool(os.getenv("TELEGRAM_CHAT_ID","").strip())
     return {"configured": has_token and has_chat, "has_token": has_token, "has_chat": has_chat}
 
+
+@app.post("/api/evolve")
+async def evolve():
+    """Self-evolution: يعيد تقييم الـ 15 استراتيجية ويطفي الخسرانة + يحدث الأوزان"""
+    import subprocess, json as js, sys
+    from pathlib import Path as _P
+    # Run optimizer on BTC 4h (light)
+    args = [sys.executable, str(BOT_DIR / "auto_optimizer.py"), "--symbol", "BTC/USDT", "--timeframe", "4h", "--limit", "200"]
+    try:
+        proc = await asyncio.create_subprocess_exec(*args, cwd=str(BOT_DIR), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=180)
+        out = stdout.decode(errors="ignore")
+        # Read weights
+        weights = None
+        try:
+            wp = BOT_DIR / "ai_weights.json"
+            if wp.exists():
+                weights = js.loads(wp.read_text(encoding="utf-8"))
+        except: pass
+        # Self-pruning: if any strategy PF < 0.8 for 2 weeks, suggest disabling
+        pruning = []
+        try:
+            cmp_path = BOT_DIR / "optimizer_BTCUSDT_4h.json"
+            if cmp_path.exists():
+                data = js.loads(cmp_path.read_text(encoding="utf-8"))
+                for p in data.get("perfs", []):
+                    if p.get("pf", 99) < 0.8 and p.get("pnl", 0) < -5:
+                        pruning.append({"strategy": p["name"], "pf": p["pf"], "pnl": p["pnl"], "action": "disable_suggested"})
+        except: pass
+        # Telegram report
+        try:
+            from app.telegram_bot import send_telegram
+            top = ", ".join(list((weights or {}).keys())[:3]) if weights else "?"
+            msg = f"\U0001f916 *Self-Evolution*\n\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\nBTC 4h updated\nTop weights: `{str(weights)[:120] if weights else '?'}`\nPruning: `{pruning if pruning else 'none'}`"
+            await send_telegram(msg)
+        except: pass
+        return {"ok": proc.returncode==0, "weights": weights, "pruning": pruning, "stdout": out[-3000:], "stderr": stderr.decode(errors="ignore")[-800:]}
+    except asyncio.TimeoutError:
+        return {"ok": False, "error": "evolve timeout"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:300]}
+
 @app.get("/api/trades")
 async def api_trades(limit: int = 50):
     async with async_session() as sess:
