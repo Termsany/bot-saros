@@ -4,6 +4,15 @@
 -- from the browser with the anon key. Users may now only READ their own rows;
 -- tier is written only by the Stripe webhook (service key bypasses RLS).
 
+-- add any missing columns first (live table may predate supabase.sql)
+alter table profiles add column if not exists email text;
+alter table profiles add column if not exists tier text default 'free';
+alter table profiles add column if not exists paper_balance numeric default 1000;
+alter table profiles add column if not exists paper_pnl numeric default 0;
+alter table profiles add column if not exists stripe_customer_id text;
+alter table profiles add column if not exists created_at timestamptz default now();
+update profiles set tier = 'free' where tier is null;
+
 drop policy if exists "own profile" on profiles;
 drop policy if exists "own trades" on trades;
 drop policy if exists "own backtests" on backtest_runs;
