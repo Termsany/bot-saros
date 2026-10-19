@@ -4,6 +4,7 @@ import { STRATEGIES } from "@/lib/strategies"
 import { PAIRS, NAMES } from "@/lib/pairs"
 import { Logo } from "@/components/Logo"
 import { apiBacktest, chartUrl } from "@/lib/api"
+import { runBacktestClient } from "@/lib/backtest-client"
 import { Activity, Wifi, TrendingUp, Layers, Clock3, Zap, BarChart3 } from "lucide-react"
 
 type BacktestData = {
@@ -41,9 +42,20 @@ export default function BacktestPage(){
     if(from > to){ setError("التاريخ معكوس — من يجب أن يكون قبل إلى"); return }
     setLoading(true); setError(""); setResult(null)
     try{
+      // Try browser-direct first (Bybit/OKX — no Render, no ban)
+      const client = await runBacktestClient({ symbol, timeframe, from, to, strategies: selected, amount, leverage: 5 })
+      if(client.ok && client.data){
+        setResult(client.data as unknown as BacktestData)
+        setStdout(`Client backtest — ${client.data.candles} candles from Bybit/OKX`)
+        setChartKey(k=>k+1)
+        setLoading(false)
+        return
+      }
+      // Fallback: backend (Render) for chart image
       const j = await apiBacktest({ symbol, timeframe, from, to, strategies: selected, amount, leverage: 5 })
-      setStdout((j.stdout||"") + (j.stderr ? "\n"+j.stderr : ""))
+      setStdout((j.stdout||"") + (j.stderr ? "\n"+j.stderr : "") + (client.error ? "\nClient: "+client.error : ""))
       if(j.data) setResult(j.data as BacktestData)
+      else if(client.error) setError(client.error)
       else if(!j.ok) setError(j.error || j.stdout || "فشل")
       setChartKey(k=>k+1)
     }catch(e:any){ setError(String(e?.message||e)) }
