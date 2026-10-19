@@ -231,7 +231,7 @@ export default function Dashboard(){
         {/* mobile header */}
         <div className="flex items-center justify-between lg:hidden">
           <Logo size="sm"/>
-          <div className="flex gap-3 text-xs text-muted"><a href="/backtest">Backtest</a><a href="/">الرئيسية</a></div>
+          <div className="hidden gap-3 text-xs text-muted min-[360px]:flex"><a href="/backtest">Backtest</a><a href="/">الرئيسية</a></div>
         </div>
 
         {activating && (
@@ -248,7 +248,7 @@ export default function Dashboard(){
             <h1 className="text-[26px] font-bold">لوحة التحكم</h1>
             <p className="text-[13px] text-muted">المحرك بيراقب {NAMES[symbol]||symbol} على فريم {tf} بـ {selected.length} استراتيجية</p>
           </div>
-          <div className="flex items-center gap-2.5" dir="ltr">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-2.5" dir="ltr">
             <span className="flex items-center gap-1.5 rounded-full border border-line bg-surface px-3 py-1.5 font-mono text-[11px] font-bold text-profit"><i className="h-1.5 w-1.5 animate-pulse rounded-full bg-profit"/> LIVE · BINANCE</span>
             <span className="hidden rounded-full border border-line bg-surface px-3 py-1.5 font-mono text-[11px] font-bold text-muted tabular sm:inline">UTC {now ? now.toISOString().slice(11,19) : "--:--:--"}</span>
             <span className="rounded-full border border-line bg-surface px-3 py-1.5 font-mono text-[11px] font-bold text-corona">PAPER</span>
@@ -267,9 +267,9 @@ export default function Dashboard(){
 
         {/* chart (right) + engine & wallet (left) */}
         <section className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
-          <div className="min-w-0 rounded-2xl border border-line bg-surface p-5">
+          <div className="min-w-0 rounded-2xl border border-line bg-surface p-4 sm:p-5">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-3">
+              <div className="flex min-w-0 flex-wrap items-center gap-2 sm:gap-3">
                 <select value={symbol} onChange={e=>setSymbol(e.target.value)} aria-label="العملة" className="rounded-lg border border-line bg-surface2 px-2.5 py-1.5 font-display text-base font-bold outline-none focus:border-corona/50" dir="ltr">
                   {PAIRS.map(p=><option key={p} value={p}>{p}</option>)}
                 </select>
