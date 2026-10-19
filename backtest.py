@@ -101,9 +101,42 @@ def score_at(df, enabled=None):
         return total, filtered
     total=sum(base[k]*CONFIG["weights"][k] for k in CONFIG["weights"] if k in base)
     return total, base
+CACHE_DIR = Path(__file__).parent / ".cache"
+CACHE_TTL_S = 3600  # 1 hour
+
+def _cache_key(symbol, timeframe, limit, from_date, to_date):
+    return f"{symbol.replace('/','')}_{timeframe}_{limit}_{from_date or ''}_{to_date or ''}.json"
+
+def _cache_get(key):
+    try:
+        fp = CACHE_DIR / key
+        if not fp.exists(): return None
+        import time as _t
+        if _t.time() - fp.stat().st_mtime > CACHE_TTL_S: return None
+        data = json.loads(fp.read_text(encoding="utf-8"))
+        df = pd.DataFrame(data, columns=["ts","open","high","low","close","vol"])
+        df["ts"] = pd.to_datetime(df["ts"])
+        return df
+    except: return None
+
+def _cache_put(key, df):
+    try:
+        CACHE_DIR.mkdir(exist_ok=True)
+        # store as list of rows
+        rows = df.copy()
+        rows["ts"] = rows["ts"].astype(str)
+        (CACHE_DIR / key).write_text(json.dumps(rows.values.tolist(), ensure_ascii=False), encoding="utf-8")
+    except: pass
+
 def fetch_ohlcv(symbol, timeframe, limit, from_date=None, to_date=None):
-    ex = ccxt.binance({"enableRateLimit": True, "options": {"defaultType": "future"}})
-    ex2 = ccxt.binance({"enableRateLimit": True})
+    # Try cache first (skip cache for from/to range fetches longer than TTL)
+    _key = _cache_key(symbol, timeframe, limit, from_date, to_date)
+    _cached = _cache_get(_key)
+    if _cached is not None and len(_cached) >= limit * 0.9:
+        print(f"cache hit {_key} ({len(_cached)} bars)")
+        return _cached
+    ex = ccxt.bybit({"enableRateLimit": True, "options": {"defaultType": "future"}})
+    ex2 = ccxt.bybit({"enableRateLimit": True})  # bybit primary
     # If from/to provided, fetch by date range
     if from_date or to_date:
         import time as _time
@@ -136,20 +169,44 @@ def fetch_ohlcv(symbol, timeframe, limit, from_date=None, to_date=None):
         if not all_ohlcv: raise RuntimeError(f"no data for {symbol} {from_date}→{to_date}")
         df=pd.DataFrame(all_ohlcv, columns=["ts","open","high","low","close","vol"])
         df["ts"]=pd.to_datetime(df["ts"], unit="ms")
+        _cache_put(_key, df)
         return df
     for t in [timeframe]:
-        try:
-            ohlcv = ex.fetch_ohlcv(symbol, t, limit=limit)
-            df = pd.DataFrame(ohlcv, columns=["ts","open","high","low","close","vol"])
-            df["ts"] = pd.to_datetime(df["ts"], unit="ms")
-            return df
-        except Exception as e:
-            print(f"fetch {symbol} {t}: {e}")
-            ex2 = ccxt.binance({"enableRateLimit": True})
-            ohlcv = ex2.fetch_ohlcv(symbol, t, limit=limit)
-            df = pd.DataFrame(ohlcv, columns=["ts","open","high","low","close","vol"])
-            df["ts"] = pd.to_datetime(df["ts"], unit="ms")
-            return df
+        # Retry on 418/429
+        import time as _sleep
+        last_err = None
+        for attempt in range(3):
+            try:
+                ohlcv = ex.fetch_ohlcv(symbol, t, limit=limit)
+                break
+            except Exception as _e:
+                last_err = _e
+                msg = str(_e)
+                if "418" in msg or "429" in msg or "Too much" in msg:
+                    # Use cache if available (even stale)
+                    _stale = None
+                    try:
+                        fp = CACHE_DIR / _key
+                        if fp.exists():
+                            import json as _js
+                            data = _js.loads(fp.read_text(encoding="utf-8"))
+                            _stale = data
+                    except: pass
+                    if _stale:
+                        df = pd.DataFrame(_stale, columns=["ts","open","high","low","close","vol"])
+                        df["ts"] = pd.to_datetime(df["ts"])
+                        print(f"serving stale cache for {symbol} {t} due to ban")
+                        return df
+                    wait = 2 ** attempt
+                    print(f"binance throttled, retry in {wait}s (attempt {attempt+1}/3)")
+                    _sleep.sleep(wait)
+                    continue
+                raise
+        # success — ohlcv already set
+        df = pd.DataFrame(ohlcv, columns=["ts","open","high","low","close","vol"])
+        df["ts"] = pd.to_datetime(df["ts"], unit="ms")
+        _cache_put(_key, df)
+        return df
     raise RuntimeError("fetch failed")
 
 

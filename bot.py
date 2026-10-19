@@ -63,10 +63,10 @@ def get_exchange(auth=False):
         ak = os.getenv("BINANCE_API_KEY","").strip(); sc = os.getenv("BINANCE_SECRET","").strip()
         if not ak or not sc: return None, "ضع مفاتيح Binance في .env"
         kwargs["apiKey"]=ak; kwargs["secret"]=sc
-    return ccxt.binance(kwargs), None
+    return ccxt.bybit(kwargs), None
 
 def fetch_ohlcv(symbol, timeframe="1h", limit=300, ex=None):
-    if ex is None: ex = ccxt.binance()
+    if ex is None: ex = ccxt.bybit()
     ohlcv = ex.fetch_ohlcv(symbol, timeframe, limit=limit)
     df = pd.DataFrame(ohlcv, columns=["ts","open","high","low","close","vol"])
     df["ts"]=pd.to_datetime(df["ts"], unit="ms")
@@ -532,7 +532,7 @@ def try_enter(symbol, analysis, state, ex):
 def run_once():
     state=load_state()
     ex,err=get_exchange(auth=not CONFIG["paper_trading"])
-    if err: ex=ccxt.binance({"enableRateLimit":True}); CONFIG["paper_trading"]=True
+    if err: ex=ccxt.bybit({"enableRateLimit":True}); CONFIG["paper_trading"]=True
     prices={}; analyses={}
     for sym in CONFIG["symbols"]:
         try:
