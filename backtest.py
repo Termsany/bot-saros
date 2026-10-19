@@ -261,15 +261,6 @@ def run_backtest(df, amount_usdt=20, leverage=5, fee_pct=0.0004, warmup=60, enab
         if position is not None:
             side=position["side"]; entry=position["entry"]
             sl=position["sl"]; tp=position["tp"]
-            # ♻️ Breakeven 50% -> move SL to entry + offset
-            if not pos.get("breakeven"):
-                trig = entry + (tp - entry) * 0.5
-                hit_be = (df.high.iloc[i] >= trig) if side=="long" else (df.low.iloc[i] <= trig)
-                if hit_be:
-                    be_sl = entry * 1.001 if side=="long" else entry * 0.999
-                    if side=="long" and be_sl > sl: sl = be_sl; pos["sl"] = be_sl
-                    if side=="short" and be_sl < sl: sl = be_sl; pos["sl"] = be_sl
-                    pos["breakeven"] = True
             hit=False; reason=""
             if side=="long":
                 if df.low.iloc[i] <= sl: hit=True; reason="SL"; price_exit=sl
@@ -296,6 +287,17 @@ def run_backtest(df, amount_usdt=20, leverage=5, fee_pct=0.0004, warmup=60, enab
                 position=None
                 continue
             else:
+                # ♻️ Breakeven 50% -> move SL to entry + offset.
+                # Applied after this bar's SL/TP check so the new SL only counts from the next bar
+                # (we can't know intrabar order of high/low — avoids an optimistic WR).
+                if not position.get("breakeven"):
+                    trig = entry + (tp - entry) * 0.5
+                    hit_be = (df.high.iloc[i] >= trig) if side=="long" else (df.low.iloc[i] <= trig)
+                    if hit_be:
+                        be_sl = entry * 1.001 if side=="long" else entry * 0.999
+                        if side=="long" and be_sl > sl: position["sl"] = be_sl
+                        if side=="short" and be_sl < sl: position["sl"] = be_sl
+                        position["breakeven"] = True
                 # unrealized
                 qty=position["qty"]
                 if side=="long": upnl=(price - entry)*qty
@@ -527,6 +529,7 @@ def main():
     p.add_argument("--walk-forward", action="store_true", help="Walk-Forward 70/30 × 3 splits")
     p.add_argument("--kelly", action="store_true", help="احسب Kelly sizing")
     p.add_argument("--out", default=None, help="مسار الصورة")
+    p.add_argument("--out-json", dest="out_json", default=None, help="مسار ملف JSON (افتراضي backtest_SYMBOL_TF.json)")
     args=p.parse_args()
     if args.leverage: CONFIG["leverage"]=args.leverage
     if args.amount: CONFIG["trade_amount_usdt"]=args.amount
@@ -597,7 +600,7 @@ def main():
             kelly=kelly_position_size(res["stats"]["win_rate"], res["stats"]["avg_win"], res["stats"]["avg_loss"], 1000)
             print(f"Kelly sizing: {kelly:.2f} USDT")
         except: pass
-        out_json=Path(__file__).parent / f"backtest_{args.symbol.replace('/','')}_{args.timeframe}.json"
+        out_json=Path(args.out_json) if args.out_json else Path(__file__).parent / f"backtest_{args.symbol.replace('/','')}_{args.timeframe}.json"
         import json as _js
         jtrs=[{**tt, "entry_ts": str(tt["entry_ts"]), "exit_ts": str(tt["exit_ts"])} for tt in res["trades"]]
         out_json.write_text(_js.dumps({"symbol":args.symbol,"timeframe":args.timeframe,"stats":res["stats"],"walk_forward":{"splits":len(splits),"avg_pnl":avg_wf,"pnls":wf_results},"trades":jtrs}, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -617,7 +620,7 @@ def main():
     res=run_backtest(df, amount_usdt=args.amount, leverage=args.leverage, fee_pct=args.fee, enabled=enabled)
     print_report(res, df, args.symbol, args.timeframe, args.amount, args.leverage)
     # Save JSON
-    out_json=Path(__file__).parent / f"backtest_{args.symbol.replace('/','')}_{args.timeframe}.json"
+    out_json=Path(args.out_json) if args.out_json else Path(__file__).parent / f"backtest_{args.symbol.replace('/','')}_{args.timeframe}.json"
     # serialize
     jtrs=[{**t, "entry_ts": str(t["entry_ts"]), "exit_ts": str(t["exit_ts"])} for t in res["trades"]]
     out_json.write_text(json.dumps({"symbol":args.symbol,"timeframe":args.timeframe,"stats":res["stats"],"trades":jtrs}, ensure_ascii=False, indent=2), encoding="utf-8")

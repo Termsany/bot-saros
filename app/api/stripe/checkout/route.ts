@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 
 export async function POST(req: NextRequest){
-  const { tier, email } = await req.json().catch(()=>({}))
+  const { tier } = await req.json().catch(()=>({}))
   if(!["starter","pro","elite"].includes(tier)){
     return NextResponse.json({ error: "invalid tier" }, { status: 400 })
   }
@@ -12,6 +12,20 @@ export async function POST(req: NextRequest){
       hint: "أنشئ منتجات في stripe.com/dashboard/products وخذ Price IDs"
     }, { status: 503 })
   }
+
+  // The buyer must be signed in: the subscription is tied to their user id, not a typed email
+  const token = (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "")
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  if(!token || !supabaseUrl || !anonKey){
+    return NextResponse.json({ error: "سجّل دخول الأول", login: "/auth" }, { status: 401 })
+  }
+  const { createClient } = await import("@supabase/supabase-js")
+  const { data: { user } } = await createClient(supabaseUrl, anonKey).auth.getUser(token)
+  if(!user){
+    return NextResponse.json({ error: "سجّل دخول الأول", login: "/auth" }, { status: 401 })
+  }
+
   const priceMap: Record<string,string> = {
     starter: process.env.STRIPE_STARTER_PRICE_ID || "",
     pro: process.env.STRIPE_PRO_PRICE_ID || "",
@@ -25,15 +39,19 @@ export async function POST(req: NextRequest){
   const Stripe = (await import("stripe")).default
   const stripe = new Stripe(secret)
 
-  const origin = req.headers.get("origin") || process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000"
+  // fixed origin — the request's Origin header is attacker-controlled
+  const origin = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000"
   try{
+    const meta = { tier, user_id: user.id }
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
       line_items: [{ price: priceId, quantity: 1 }],
-      success_url: `${origin}/dashboard?checkout=success&tier=${tier}`,
+      success_url: `${origin}/dashboard?checkout=success`,
       cancel_url: `${origin}/#pricing`,
-      customer_email: email || undefined,
-      metadata: { tier },
+      customer_email: user.email || undefined,
+      client_reference_id: user.id,
+      metadata: meta,
+      subscription_data: { metadata: meta },
     })
     return NextResponse.json({ url: session.url })
   }catch(e:any){

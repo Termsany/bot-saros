@@ -2,18 +2,19 @@
 import os, json, asyncio
 from pathlib import Path
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 from typing import List, Optional
-import sys
+import sys, re, uuid
 
 # Add parent to path for bot strategies
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.db import init_db, async_session, Trade, BacktestRun
+from app.auth import require_user, require_admin, require_admin_or_cron
 from sqlalchemy import select, desc
 import ccxt, pandas as pd, numpy as np
 from datetime import datetime, timezone
@@ -32,7 +33,16 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Bot Saros API", version="2.0.0", lifespan=lifespan)
 
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "https://bot-saros.vercel.app,http://localhost:3000").split(",") if o.strip()]
+app.add_middleware(CORSMiddleware, allow_origins=ALLOWED_ORIGINS, allow_methods=["GET", "POST"], allow_headers=["Authorization", "Content-Type"])
+
+def live_trading_allowed() -> bool:
+    """Global kill switch: real orders only if ALLOW_LIVE_TRADING=true on the server."""
+    return os.getenv("ALLOW_LIVE_TRADING", "").strip().lower() == "true"
+
+TIMEFRAMES = {"1m", "5m", "15m", "30m", "1h", "2h", "4h", "1d"}
+SYMBOL_RE = re.compile(r"^[A-Z0-9]{2,15}/[A-Z]{3,5}$")
+_backtest_slots = asyncio.Semaphore(int(os.getenv("MAX_CONCURRENT_BACKTESTS", "2")))
 
 # ── Health
 @app.get("/api/health")
@@ -41,39 +51,69 @@ async def health():
 
 # ── Backtest: proxy to backtest.py (same logic, now via API + DB)
 class BacktestReq(BaseModel):
+    # frontend sends {from, to}; accept both spellings
+    model_config = ConfigDict(populate_by_name=True)
     symbol: str = "BTC/USDT"
     timeframe: str = "1h"
-    from_date: Optional[str] = None  # YYYY-MM-DD
-    to_date: Optional[str] = None
-    limit: int = 300
+    from_date: Optional[str] = Field(None, alias="from")  # YYYY-MM-DD
+    to_date: Optional[str] = Field(None, alias="to")
+    limit: int = Field(300, ge=50, le=1000)
     strategies: Optional[List[str]] = None
-    amount: float = 20
-    leverage: int = 5
-    fee: float = 0.0004
+    amount: float = Field(20, gt=0, le=100000)
+    leverage: int = Field(5, ge=1, le=125)
+    fee: float = Field(0.0004, ge=0, le=0.01)
+
+    @field_validator("symbol")
+    @classmethod
+    def _sym(cls, v):
+        v = v.upper().strip()
+        if not SYMBOL_RE.match(v): raise ValueError("bad symbol")
+        return v
+
+    @field_validator("timeframe")
+    @classmethod
+    def _tf(cls, v):
+        if v not in TIMEFRAMES: raise ValueError("bad timeframe")
+        return v
+
+    @field_validator("from_date", "to_date")
+    @classmethod
+    def _date(cls, v):
+        if v and not re.match(r"^\d{4}-\d{2}-\d{2}$", v): raise ValueError("date must be YYYY-MM-DD")
+        return v or None
+
+    @field_validator("strategies")
+    @classmethod
+    def _strats(cls, v):
+        if v and not all(re.match(r"^[a-z0-9_]{1,30}$", x) for x in v): raise ValueError("bad strategy name")
+        return v
 
 @app.post("/api/backtest")
-async def api_backtest(req: BacktestReq):
-    import subprocess, json as js
-    args = ["--symbol", req.symbol, "--timeframe", req.timeframe, "--amount", str(req.amount), "--leverage", str(req.leverage), "--fee", str(req.fee)]
+async def api_backtest(req: BacktestReq, user: dict = Depends(require_user)):
+    import json as js
+    sym_file = req.symbol.replace("/","")
+    # unique output per run so concurrent backtests don't read each other's results
+    run_name = f"backtest_{sym_file}_{req.timeframe}_{uuid.uuid4().hex[:10]}"
+    json_path = BOT_DIR / f"{run_name}.json"
+    args = ["--out-json", str(json_path), "--out", str(BOT_DIR / f"{run_name}.png"), "--symbol", req.symbol, "--timeframe", req.timeframe, "--amount", str(req.amount), "--leverage", str(req.leverage), "--fee", str(req.fee)]
     if req.from_date: args += ["--from", req.from_date]
     if req.to_date: args += ["--to", req.to_date]
     if not req.from_date and not req.to_date: args += ["--limit", str(req.limit)]
     if req.strategies: args += ["--strategies", ",".join(req.strategies)]
 
-    proc = await asyncio.create_subprocess_exec(
-        sys.executable, str(BOT_DIR / "backtest.py"), *args,
-        cwd=str(BOT_DIR), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-    )
-    try:
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=110)
-    except asyncio.TimeoutError:
-        proc.kill(); raise HTTPException(504, "backtest timeout")
+    async with _backtest_slots:
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, str(BOT_DIR / "backtest.py"), *args,
+            cwd=str(BOT_DIR), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=110)
+        except asyncio.TimeoutError:
+            proc.kill(); raise HTTPException(504, "backtest timeout")
     out = stdout.decode(errors="ignore")
     err = stderr.decode(errors="ignore")
 
     # Read JSON
-    sym_file = req.symbol.replace("/","")
-    json_path = BOT_DIR / f"backtest_{sym_file}_{req.timeframe}.json"
     data = None
     if json_path.exists():
         try: data = js.loads(json_path.read_text(encoding="utf-8"))
@@ -86,10 +126,11 @@ async def api_backtest(req: BacktestReq):
             sess.add(rec); await sess.commit()
     except: pass
 
-    return {"ok": proc.returncode==0, "code": proc.returncode, "stdout": out[-8000:], "stderr": err[-2000:], "data": data, "chart": f"backtest_{sym_file}_{req.timeframe}.png"}
+    return {"ok": proc.returncode==0, "code": proc.returncode, "stdout": out[-8000:], "stderr": err[-2000:], "data": data, "chart": f"{run_name}.png"}
 
 @app.get("/api/backtest/history")
-async def backtest_history(limit: int = 20):
+async def backtest_history(limit: int = 20, user: dict = Depends(require_user)):
+    limit = max(1, min(limit, 100))
     async with async_session() as sess:
         res = await sess.execute(select(BacktestRun).order_by(desc(BacktestRun.id)).limit(limit))
         rows = res.scalars().all()
@@ -97,7 +138,8 @@ async def backtest_history(limit: int = 20):
 
 @app.get("/api/chart")
 async def api_chart(file: str):
-    if not file.startswith("backtest_") or not file.endswith((".png",".json")):
+    # strict name check — "backtest_/../backend/vault.json" used to pass startswith/endswith
+    if not re.fullmatch(r"backtest_[A-Za-z0-9_]+\.(png|json)", file):
         raise HTTPException(400, "bad file")
     p = BOT_DIR / file
     if not p.exists(): raise HTTPException(404, "not found")
@@ -108,7 +150,7 @@ async def api_chart(file: str):
 bot_task = None
 
 @app.get("/api/bot/status")
-async def bot_status():
+async def bot_status(user: dict = Depends(require_admin)):
     from app.db import Trade as T
     async with async_session() as sess:
         res = await sess.execute(select(T).where(T.status=="open"))
@@ -127,10 +169,12 @@ class BotStartReq(BaseModel):
     paper: bool = True
 
 @app.post("/api/bot/start")
-async def bot_start(req: BotStartReq, bg: BackgroundTasks):
+async def bot_start(req: BotStartReq, bg: BackgroundTasks, user: dict = Depends(require_admin)):
     global bot_task
     if bot_task and not bot_task.done():
         return {"ok": False, "msg": "already running"}
+    if not req.paper and not live_trading_allowed():
+        raise HTTPException(400, "LIVE disabled — set ALLOW_LIVE_TRADING=true on the backend to allow real orders")
     # Save config for bot loop
     cfg = {"symbols": req.symbols, "strategies": req.strategies, "timeframe": req.timeframe, "paper": req.paper}
     (BOT_DIR / "api_bot_config.json").write_text(json.dumps(cfg, ensure_ascii=False), encoding="utf-8")
@@ -138,61 +182,65 @@ async def bot_start(req: BotStartReq, bg: BackgroundTasks):
     return {"ok": True, "msg": "started", "config": cfg}
 
 @app.post("/api/bot/stop")
-async def bot_stop():
+async def bot_stop(user: dict = Depends(require_admin)):
     global bot_task
     if bot_task: bot_task.cancel()
     return {"ok": True}
 
 
-def _get_exchanges_for_cycle(paper: bool):
-    """Returns list of (name, instance) for this cycle"""
+def _get_exchange_for_cycle(paper: bool):
+    """Returns (name, instance, is_paper) or None.
+    LIVE trades on the first LIVE exchange only — positions state is shared, so executing the
+    same signal on several exchanges would corrupt it. If LIVE was requested but nothing is
+    available, returns None (skip the cycle) instead of silently falling back to paper, which
+    would "close" real positions only in the local state."""
+    import ccxt as _ccxt
     if paper:
-        # Paper: single bybit public instance (shared)
-        import ccxt as _ccxt
-        return [("paper", _ccxt.bybit({"enableRateLimit": True}))]
+        return ("paper", _ccxt.bybit({"enableRateLimit": True}), True)
+    if not live_trading_allowed():
+        print("LIVE requested but ALLOW_LIVE_TRADING is not true — skipping cycle")
+        return None
     try:
         from app.exchange_manager import get_all_instances
         instances = get_all_instances("live")
-        if not instances:
-            # No LIVE configured — fallback to paper
-            import ccxt as _ccxt
-            return [("paper", _ccxt.bybit({"enableRateLimit": True}))]
-        return list(instances.items())
     except Exception as e:
         print(f"exchange_manager fail {e}")
-        import ccxt as _ccxt
-        return [("paper", _ccxt.bybit({"enableRateLimit": True}))]
+        return None
+    if not instances:
+        print("LIVE requested but no exchange is LIVE in the vault — skipping cycle")
+        return None
+    name, inst = next(iter(instances.items()))
+    if len(instances) > 1:
+        print(f"WARNING: {len(instances)} LIVE exchanges — only {name} will trade")
+    return (name, inst, False)
 
 async def bot_loop(cfg):
-    """Paper loop: يحلل كل 60s ويحفظ في DB + يرسل تليجرام"""
+    """يحلل كل poll_seconds ويحفظ في DB + يرسل تليجرام"""
     import strategies_advanced as adv
     import bot as botmod
     # Override enabled
     if cfg.get("strategies"): botmod.CONFIG["enabled_strategies"] = cfg["strategies"]
     if cfg.get("timeframe"): botmod.CONFIG["timeframe"] = cfg["timeframe"]
     if cfg.get("symbols"): botmod.CONFIG["symbols"] = cfg["symbols"]
-    botmod.CONFIG["paper_trading"] = cfg.get("paper", True)
     from app.telegram_bot import send_telegram, format_entry, format_exit
-    from app.oco import place_oco_orders
-    print(f"Bot loop started {cfg} — multi-exchange")
-    # Determine if we are paper or live from cfg
+    from app.oco import place_oco_orders, cancel_oco_orders
     is_paper = bool(cfg.get("paper", True))
+    print(f"Bot loop started {cfg}")
     while True:
         try:
+            picked = _get_exchange_for_cycle(is_paper)
+            if picked is None:
+                await asyncio.sleep(int(botmod.CONFIG.get("poll_seconds",60)))
+                continue
+            ex_name, ex, cycle_paper = picked
+            botmod.CONFIG["paper_trading"] = cycle_paper
             state = botmod.load_state()
-            exchanges = _get_exchanges_for_cycle(is_paper)
-            # Use first exchange for analysis (shared signals), but execute per-exchange
-            primary_ex = exchanges[0][1] if exchanges else None
-            if primary_ex is None:
-                import ccxt as _ccxt
-                primary_ex = _ccxt.bybit({"enableRateLimit": True})
             prices={}; analyses={}
             for sym in botmod.CONFIG["symbols"]:
                 try:
-                    df=botmod.fetch_ohlcv(sym, botmod.CONFIG["timeframe"], limit=300, ex=primary_ex)
+                    df=botmod.fetch_ohlcv(sym, botmod.CONFIG["timeframe"], limit=300, ex=ex)
                     a=botmod.analyze(sym, df); analyses[sym]=a; prices[sym]=a["price"]
                 except Exception as e: print(f"{sym} {e}")
-            # Save to DB + check OCO: for opens, place SL/TP if live
             before = set(state.get("positions",{}).keys())
             if prices: botmod.check_sl_tp(state, prices, ex)
             for sym,a in analyses.items():
@@ -205,19 +253,21 @@ async def bot_loop(cfg):
                     # New entries
                     for sym in (after - before):
                         pos=state["positions"][sym]
-                        # OCO if live
-                        if not botmod.CONFIG["paper_trading"]:
-                            try: place_oco_orders(ex, sym, pos["side"], pos["qty"], pos["sl"], pos["tp"])
-                            except: pass
+                        if not cycle_paper:
+                            oco = place_oco_orders(ex, sym, pos["side"], pos["qty"], pos["sl"], pos["tp"], paper=False)
+                            if oco.get("sl_error") or oco.get("tp_error"):
+                                print(f"OCO {ex_name} {sym}: {oco}")
+                                await send_telegram(f"⚠️ OCO failed on {ex_name} {sym}: SL={oco.get('sl_error','ok')} TP={oco.get('tp_error','ok')}")
                         rec=Trade(symbol=sym, side=pos["side"], entry=pos["entry"], qty=pos["qty"], sl=pos["sl"], tp=pos["tp"], leverage=pos.get("leverage",5), entry_ts=pos.get("time",""), status="open", created_at=datetime.now(timezone.utc).isoformat())
                         sess.add(rec); await sess.commit()
-                        await send_telegram(format_entry(sym, pos["side"], pos["entry"], pos["sl"], pos["tp"], pos.get("leverage",5), a["total"] if sym in analyses else 0, float(pos.get("notional",20))/max(1,int(pos.get("leverage",5))), botmod.CONFIG.get("timeframe","4h"), (botmod.CONFIG.get("enabled_strategies") or ["ict"])[0] if (botmod.CONFIG.get("enabled_strategies") or ["ict"]) else "ict"))
+                        strat = (botmod.CONFIG.get("enabled_strategies") or ["ict"])[0]
+                        await send_telegram(format_entry(sym, pos["side"], pos["entry"], pos["sl"], pos["tp"], pos.get("leverage",5), analyses[sym]["total"] if sym in analyses else 0, float(pos.get("notional",20))/max(1,int(pos.get("leverage",5))), botmod.CONFIG.get("timeframe","4h"), strat))
                     # Closed: mark
                     for sym in (before - after):
-                        # find history
+                        if not cycle_paper:
+                            cancel_oco_orders(ex, sym)  # leftover reduceOnly SL/TP must not hit a future position
                         hist=[h for h in state.get("history",[]) if h.get("symbol")==sym]
                         last=hist[-1] if hist else {}
-                        # update DB
                         res=await sess.execute(select(Trade).where(Trade.symbol==sym, Trade.status=="open"))
                         row=res.scalars().first()
                         if row:
@@ -228,7 +278,7 @@ async def bot_loop(cfg):
             except Exception as e: print(f"DB save {e}")
             # Dashboard file
             try:
-                (BOT_DIR / "dashboard-data.json").write_text(json.dumps({"analyses":analyses,"state":state,"time":datetime.now(timezone.utc).isoformat()}, ensure_ascii=False, indent=2), encoding="utf-8")
+                (BOT_DIR / "dashboard-data.json").write_text(json.dumps({"analyses":analyses,"state":state,"time":datetime.now(timezone.utc).isoformat()}, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
             except: pass
         except asyncio.CancelledError: print("bot loop stopped"); break
         except Exception as e: print(f"loop err {e}")
@@ -236,9 +286,9 @@ async def bot_loop(cfg):
 
 
 @app.get("/api/user/tier")
-async def user_tier(user_id: str = ""):
-    """يرجع باقة المستخدم من Supabase — server-side verification"""
-    import os
+async def user_tier(user: dict = Depends(require_user)):
+    """يرجع باقة المستخدم الحالي من Supabase — server-side verification"""
+    user_id = user["id"]
     try:
         from supabase import create_client
         url = os.getenv("SUPABASE_URL","")
@@ -253,9 +303,13 @@ async def user_tier(user_id: str = ""):
 
 
 @app.post("/api/optimizer/run")
-async def optimizer_run(symbol: str = "BTC/USDT", timeframe: str = "4h", limit: int = 200):
+async def optimizer_run(symbol: str = "BTC/USDT", timeframe: str = "4h", limit: int = 200, user: dict = Depends(require_admin)):
     """يشغل Auto-Optimizer ويرجع البطل — يحدث ai_weights.json"""
-    import subprocess, json as js
+    import json as js
+    if not SYMBOL_RE.match(symbol) or timeframe not in TIMEFRAMES: raise HTTPException(400, "bad symbol/timeframe")
+    limit = max(50, min(int(limit), 1000))
+    if not (BOT_DIR / "auto_optimizer.py").exists():
+        return {"ok": False, "error": "auto_optimizer.py is missing from the repo"}
     args = [sys.executable, str(BOT_DIR / "auto_optimizer.py"), "--symbol", symbol, "--timeframe", timeframe, "--limit", str(limit)]
     try:
         proc = await asyncio.create_subprocess_exec(*args, cwd=str(BOT_DIR), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
@@ -272,13 +326,13 @@ async def optimizer_run(symbol: str = "BTC/USDT", timeframe: str = "4h", limit: 
         return {"ok": False, "error": "optimizer timeout — جرب limit أصغر"}
 
 @app.post("/api/telegram/test")
-async def telegram_test():
+async def telegram_test(user: dict = Depends(require_admin)):
     from app.telegram_bot import test_telegram
     ok = await test_telegram()
     return {"ok": bool(ok), "msg": "تم الإرسال" if ok else "فشل — تأكد من TELEGRAM_BOT_TOKEN و CHAT_ID في backend/.env"}
 
 @app.get("/api/telegram/status")
-async def telegram_status():
+async def telegram_status(user: dict = Depends(require_admin)):
     import os
     has_token = bool(os.getenv("TELEGRAM_BOT_TOKEN","").strip())
     has_chat = bool(os.getenv("TELEGRAM_CHAT_ID","").strip())
@@ -286,10 +340,11 @@ async def telegram_status():
 
 
 @app.post("/api/evolve")
-async def evolve():
+async def evolve(user: dict = Depends(require_admin_or_cron)):
     """Self-evolution: يعيد تقييم الـ 15 استراتيجية ويطفي الخسرانة + يحدث الأوزان"""
-    import subprocess, json as js, sys
-    from pathlib import Path as _P
+    import json as js
+    if not (BOT_DIR / "auto_optimizer.py").exists():
+        return {"ok": False, "error": "auto_optimizer.py is missing from the repo"}
     # Run optimizer on BTC 4h (light)
     args = [sys.executable, str(BOT_DIR / "auto_optimizer.py"), "--symbol", "BTC/USDT", "--timeframe", "4h", "--limit", "200"]
     try:
@@ -328,8 +383,10 @@ async def evolve():
 
 
 @app.post("/api/llm/generate")
-async def llm_generate(prompt: str = "RSI + volume divergence on 4h", symbol: str = "BTC/USDT", timeframe: str = "4h"):
-    """LLM يخترع استراتيجية + باك تست فوري"""
+async def llm_generate(prompt: str = "RSI + volume divergence on 4h", symbol: str = "BTC/USDT", timeframe: str = "4h", user: dict = Depends(require_admin)):
+    """LLM يخترع استراتيجية + باك تست فوري (الكود بيتشغل في sandbox — شوف llm_sandbox.py)"""
+    if not SYMBOL_RE.match(symbol) or timeframe not in TIMEFRAMES: raise HTTPException(400, "bad symbol/timeframe")
+    prompt = prompt[:500]
     from app.llm_generator import generate_strategy, save_strategy, backtest_llm
     gen = await generate_strategy(prompt)
     if not gen.get("ok"):
@@ -349,7 +406,7 @@ async def llm_generate(prompt: str = "RSI + volume divergence on 4h", symbol: st
     return {"ok": True, "code": code, "name": name, "backtest": bt_result, "usage": gen.get("usage")}
 
 @app.get("/api/llm/list")
-async def llm_list():
+async def llm_list(user: dict = Depends(require_admin)):
     from pathlib import Path as _P
     d = _P(__file__).parent.parent / "strategies_llm"
     if not d.exists():
@@ -361,8 +418,9 @@ async def llm_list():
 
 
 @app.post("/api/llm/evolve")
-async def llm_evolve(prompt: str = "innovative crypto futures strategy combining momentum and mean reversion", n: int = 3):
+async def llm_evolve(prompt: str = "innovative crypto futures strategy combining momentum and mean reversion", n: int = 3, user: dict = Depends(require_admin_or_cron)):
     """يولد n استراتيجيات، يباك تست كل واحدة، ويضيف الفائزة (WR>=60%) تلقائياً"""
+    prompt = prompt[:500]
     from app.llm_generator import generate_strategy, save_strategy, backtest_llm, auto_promote_if_winner
     results = []
     for i in range(min(n, 5)):
@@ -398,7 +456,7 @@ async def llm_evolve(prompt: str = "innovative crypto futures strategy combining
     return {"results": results, "promoted": len(promoted), "total": len(results)}
 
 @app.get("/api/llm/promoted")
-async def llm_promoted():
+async def llm_promoted(user: dict = Depends(require_admin)):
     from pathlib import Path as _P
     import json as _js
     reg = _P(__file__).parent.parent / "strategies_llm" / "registry.json"
@@ -418,12 +476,12 @@ class SaveKeyReq(_BM2):
     passphrase: str = ""
 
 @app.get("/api/keys/status")
-async def keys_status():
+async def keys_status(user: dict = Depends(require_admin)):
     from app.keys_vault import load_all_status
     return load_all_status()
 
 @app.post("/api/keys/save")
-async def keys_save(req: SaveKeyReq):
+async def keys_save(req: SaveKeyReq, user: dict = Depends(require_admin)):
     from app.keys_vault import save_keys
     try:
         save_keys(req.exchange.lower().strip(), req.apiKey.strip(), req.secret.strip(), req.passphrase.strip())
@@ -432,7 +490,7 @@ async def keys_save(req: SaveKeyReq):
         raise HTTPException(400, str(e))
 
 @app.post("/api/keys/delete")
-async def keys_delete(exchange: str = "", body: dict = None):
+async def keys_delete(exchange: str = "", body: dict = None, user: dict = Depends(require_admin)):
     from app.keys_vault import delete_keys
     ex = (body or {}).get("exchange") or exchange
     ex = str(ex).lower().strip()
@@ -441,22 +499,25 @@ async def keys_delete(exchange: str = "", body: dict = None):
     return {"ok": bool(ok)}
 
 @app.post("/api/keys/paper")
-async def keys_paper(body: dict):
+async def keys_paper(body: dict, user: dict = Depends(require_admin)):
     from app.keys_vault import set_paper
     ex = str(body.get("exchange","")).lower().strip()
-    paper = bool(body.get("paper", True))
+    paper = body.get("paper", True) is not False  # only an explicit false switches to LIVE
     if not ex: raise HTTPException(400, "exchange required")
+    if not paper and not live_trading_allowed():
+        raise HTTPException(400, "LIVE disabled — set ALLOW_LIVE_TRADING=true on the backend first")
     ok = set_paper(ex, paper)
     return {"ok": bool(ok), "paper": paper}
 
 @app.get("/api/keys/live")
-async def keys_live():
+async def keys_live(user: dict = Depends(require_admin)):
     """Which exchanges are LIVE (for bot)"""
     from app.keys_vault import get_exchanges_for_trading
     return {"live": get_exchanges_for_trading()}
 
 @app.get("/api/trades")
-async def api_trades(limit: int = 50):
+async def api_trades(limit: int = 50, user: dict = Depends(require_admin)):
+    limit = max(1, min(limit, 500))
     async with async_session() as sess:
         res = await sess.execute(select(Trade).order_by(desc(Trade.id)).limit(limit))
         rows=res.scalars().all()

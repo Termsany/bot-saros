@@ -1,6 +1,7 @@
 "use client"
 import { useState } from "react"
 import { Logo } from "@/components/Logo"
+import { authHeaders } from "@/lib/supabase"
 
 export default function LLMLab(){
   const [prompt, setPrompt] = useState("RSI divergence + volume spike for BTC 4h — lenient thresholds")
@@ -11,9 +12,9 @@ export default function LLMLab(){
   async function generate(){
     setLoading(true); setError(""); setResult(null)
     try{
-      const r = await fetch(`${process.env.NEXT_PUBLIC_API_URL||"http://localhost:8000"}/api/llm/generate?prompt=${encodeURIComponent(prompt)}`, { method:"POST" })
+      const r = await fetch(`${process.env.NEXT_PUBLIC_API_URL||"http://localhost:8000"}/api/llm/generate?prompt=${encodeURIComponent(prompt)}`, { method:"POST", headers: await authHeaders() })
       const j = await r.json()
-      if(!j.ok) setError(j.error || "failed")
+      if(!j.ok) setError(j.error || j.detail || "failed")
       else setResult(j)
     }catch(e:any){ setError(String(e.message||e)) }
     setLoading(false)

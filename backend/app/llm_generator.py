@@ -101,54 +101,16 @@ async def auto_promote_if_winner(code: str, name: str, stats: dict) -> dict:
     return {"promoted": True, "name": name, "wr": wr, "pf": pf}
 
 async def backtest_llm(code: str, symbol="BTC/USDT", timeframe="4h", limit=300):
-    """Run backtest on LLM code — returns stats like backtest.py"""
-    import sys, tempfile, subprocess, json as js
-    from pathlib import Path as _P
-    # Save temp strategy
-    tmp = _P(__file__).parent.parent / "_llm_tmp.py"
-    tmp.write_text(code, encoding="utf-8")
-    # Run backtest via subprocess with --strategies pointing to llm
-    # Instead, directly score via python to avoid needing to register strategy
-    # Inject as dynamic module
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("_llm_tmp", str(tmp))
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    # Now run a mini backtest using our existing logic but with llm_signal
-    saros_root = _P(__file__).parent.parent
-    sys.path.insert(0, str(saros_root))
-    sys.path.insert(0, str(saros_root.parent))
+    """Backtest LLM code in an isolated subprocess (see llm_sandbox) — returns stats like backtest.py"""
+    import asyncio, sys
+    from app.llm_sandbox import run_backtest_sandboxed, validate_code, UnsafeCode
+    try:
+        validate_code(code)
+    except UnsafeCode as e:
+        return {"ok": False, "error": f"rejected by sandbox: {e}"}
+    repo_root = Path(__file__).parent.parent.parent
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
     import backtest as bt
-    import pandas as pd
-    # Fetch data
-    df = bt.fetch_ohlcv(symbol, timeframe, limit)
-    # Monkey-patch: add llm to score_at via enabled
-    # Instead run manual loop with llm_signal
-    # Quick validation: call once
-    try:
-        score, reasons = mod.llm_signal(df)
-        assert -1.1 <= score <= 1.1, f"score {score} out of range"
-    except Exception as e:
-        return {"ok": False, "error": f"llm_signal failed: {e}"}
-    # Full backtest: we add llm as extra strategy by monkey patching backtest's CONFIG
-    orig_weights = dict(bt.CONFIG["weights"])
-    bt.CONFIG["weights"]["llm_tmp"] = 1.0
-    # Patch score_at to include llm
-    orig_score_at = bt.score_at
-    def patched(df2, enabled=None):
-        # Call original
-        total, base = orig_score_at(df2, enabled)
-        # If llm is relevant (enabled is None or contains llm_tmp)
-        if enabled is None or "llm_tmp" in enabled:
-            try:
-                s, _ = mod.llm_signal(df2)
-                base["llm_tmp"] = float(s)
-            except: base["llm_tmp"] = 0
-        return total, base
-    bt.score_at = patched
-    try:
-        res = bt.run_backtest(df, amount_usdt=20, leverage=5, enabled=["llm_tmp"])
-        return {"ok": True, "stats": res["stats"], "trades": res["trades"][-5:], "total": res["stats"]["total"]}
-    finally:
-        bt.score_at = orig_score_at
-        bt.CONFIG["weights"] = orig_weights
+    df = await asyncio.to_thread(bt.fetch_ohlcv, symbol, timeframe, limit)
+    return await run_backtest_sandboxed(code, df, repo_root)

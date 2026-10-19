@@ -12,3 +12,16 @@ __pycache__/
 
 strategies_llm/*.py
 !strategies_llm/.gitkeep
+
+# secrets / runtime state — never commit
+backend/.master.key
+.master.key
+backend/vault.json
+vault.json
+*.db
+_llm_tmp.py
+backend/_llm_tmp.py
+api_bot_config.json
+dashboard-data.json
+backtest_*.json
+backtest_*.png

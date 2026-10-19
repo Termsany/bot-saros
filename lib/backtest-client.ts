@@ -190,18 +190,6 @@ export async function runBacktestClient(opts: {
       if(fn) total += (fn(close,high,low,vol,i) * (WEIGHTS[k]||0)) / wsum
     }
 
-    // ♻️ Breakeven 50%
-    if(position && !position.breakeven){
-      const trig = position.entry + (position.tp - position.entry)*0.5
-      const hitBe = position.side==="long" ? price >= trig : price <= trig
-      if(hitBe){
-        const off = 0.001
-        const beSl = position.side==="long" ? position.entry*(1+off) : position.entry*(1-off)
-        if(position.side==="long" && beSl > position.sl) position.sl = beSl
-        if(position.side==="short" && beSl < position.sl) position.sl = beSl
-        position.breakeven = true
-      }
-    }
     // SL/TP check
     if(position){
       const sl=position.sl, tp=position.tp
@@ -224,6 +212,18 @@ export async function runBacktestClient(opts: {
         equity.push((equity[equity.length-1]||0) + pnl)
         position = null
         continue
+      }
+      // ♻️ Breakeven 50% — applied after this bar's SL/TP check, so the new SL counts from the next bar
+      if(!position.breakeven){
+        const trig = position.entry + (position.tp - position.entry)*0.5
+        const hitBe = position.side==="long" ? price >= trig : price <= trig
+        if(hitBe){
+          const off = 0.001
+          const beSl = position.side==="long" ? position.entry*(1+off) : position.entry*(1-off)
+          if(position.side==="long" && beSl > position.sl) position.sl = beSl
+          if(position.side==="short" && beSl < position.sl) position.sl = beSl
+          position.breakeven = true
+        }
       }
     }
 

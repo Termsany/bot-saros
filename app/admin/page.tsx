@@ -2,6 +2,7 @@
 import { Logo } from "@/components/Logo"
 import { useState } from "react"
 import { STRATEGIES, TIERS } from "@/lib/strategies"
+import { authHeaders } from "@/lib/supabase"
 
 export default function AdminPage(){
   const [tiers, setTiers] = useState(TIERS)
@@ -92,9 +93,9 @@ export default function AdminPage(){
                 const b=document.getElementById("opt-status") as HTMLElement
                 if(b) b.textContent="جاري — قد يستغرق دقيقة..."
                 try{
-                  const r=await fetch((process.env.NEXT_PUBLIC_API_URL||"http://localhost:8000")+"/api/optimizer/run?symbol=BTC/USDT&timeframe=4h&limit=200",{method:"POST"})
+                  const r=await fetch((process.env.NEXT_PUBLIC_API_URL||"http://localhost:8000")+"/api/optimizer/run?symbol=BTC/USDT&timeframe=4h&limit=200",{method:"POST", headers: await authHeaders()})
                   const j=await r.json()
-                  if(b) b.textContent=j.ok ? "✅ تم — "+JSON.stringify(j.weights||{}).slice(0,120) : "❌ "+(j.error||j.stderr||"فشل")
+                  if(b) b.textContent=j.ok ? "✅ تم — "+JSON.stringify(j.weights||{}).slice(0,120) : "❌ "+(j.error||j.detail||j.stderr||"فشل")
                 }catch(e:any){ const b2=document.getElementById("opt-status"); if(b2) b2.textContent="خطأ: "+String(e.message||e) }
               }} className="px-4 py-2 rounded-xl bg-[#00D395] text-[#062016] text-xs font-bold">شغّل المُحسّن الآن (BTC 4h)</button>
             </div>
@@ -109,13 +110,13 @@ export default function AdminPage(){
                 const b=document.getElementById("tg-status") as HTMLElement
                 if(b) b.textContent="جاري الاختبار..."
                 try{
-                  const r=await fetch((process.env.NEXT_PUBLIC_API_URL||"http://localhost:8000")+"/api/telegram/test",{method:"POST"})
+                  const r=await fetch((process.env.NEXT_PUBLIC_API_URL||"http://localhost:8000")+"/api/telegram/test",{method:"POST", headers: await authHeaders()})
                   const j=await r.json()
-                  if(b) b.textContent=j.ok ? "✅ وصلت الرسالة لتليجرام!" : "❌ "+(j.msg||"فشل — ضع التوكن في backend/.env")
+                  if(b) b.textContent=j.ok ? "✅ وصلت الرسالة لتليجرام!" : "❌ "+(j.msg||j.detail||"فشل — ضع التوكن في backend/.env")
                 }catch(e:any){ const b2=document.getElementById("tg-status"); if(b2) b2.textContent="خطأ: "+String(e.message||e) }
               }} className="px-4 py-2 rounded-xl bg-[#229ED9] text-white text-xs font-bold">اختبر التليجرام</button>
               <button onClick={async()=>{
-                const r=await fetch((process.env.NEXT_PUBLIC_API_URL||"http://localhost:8000")+"/api/telegram/status")
+                const r=await fetch((process.env.NEXT_PUBLIC_API_URL||"http://localhost:8000")+"/api/telegram/status", { headers: await authHeaders() })
                 const j=await r.json()
                 const b=document.getElementById("tg-status")
                 if(b) b.textContent=j.configured ? "✅ مربوط" : "⚠️ غير مربوط — ضع TELEGRAM_BOT_TOKEN و CHAT_ID في backend/.env"

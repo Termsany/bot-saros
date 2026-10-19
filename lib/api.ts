@@ -1,29 +1,32 @@
+import { authHeaders } from "./supabase"
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+const JSON_CT = { "Content-Type": "application/json" }
 
 export async function apiBacktest(body: any){
-  const r = await fetch(`${API}/api/backtest`, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) })
+  const r = await fetch(`${API}/api/backtest`, { method:"POST", headers: await authHeaders(JSON_CT), body: JSON.stringify(body) })
   return r.json()
 }
 export async function apiHealth(){
   try{ const r=await fetch(`${API}/api/health`); return r.json() }catch{ return {ok:false} }
 }
 export async function apiBotStatus(){
-  try{ const r=await fetch(`${API}/api/bot/status`); return r.json() }catch{ return {running:false} }
+  try{ const r=await fetch(`${API}/api/bot/status`, { headers: await authHeaders() }); return r.ok ? r.json() : {running:false} }catch{ return {running:false} }
 }
 export async function apiBotStart(cfg:any){
-  const r=await fetch(`${API}/api/bot/start`, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(cfg)})
+  const r=await fetch(`${API}/api/bot/start`, {method:"POST", headers: await authHeaders(JSON_CT), body: JSON.stringify(cfg)})
   return r.json()
 }
 export async function apiBotStop(){
-  const r=await fetch(`${API}/api/bot/stop`, {method:"POST"})
+  const r=await fetch(`${API}/api/bot/stop`, {method:"POST", headers: await authHeaders()})
   return r.json()
 }
 export function chartUrl(file:string){ return `${API}/api/chart?file=${encodeURIComponent(file)}` }
 export const API_URL = API
 
 export async function apiTrades(limit=20){
-  try{ const r=await fetch(`${API}/api/trades?limit=${limit}`); return r.json() }catch{ return [] }
+  // admin-only on the backend; non-admins just see no trades
+  try{ const r=await fetch(`${API}/api/trades?limit=${limit}`, { headers: await authHeaders() }); return r.ok ? r.json() : [] }catch{ return [] }
 }
 
 function toBybitInterval(tf: string){

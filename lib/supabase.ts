@@ -13,3 +13,23 @@ export async function getUser(){
   const { data } = await supabase.auth.getUser()
   return data.user
 }
+
+/** Headers for calls to the FastAPI backend — carries the Supabase session token. */
+export async function authHeaders(extra: Record<string,string> = {}): Promise<Record<string,string>>{
+  const h: Record<string,string> = { ...extra }
+  if (supabase){
+    const { data } = await supabase.auth.getSession()
+    const token = data.session?.access_token
+    if (token) h.Authorization = `Bearer ${token}`
+  }
+  return h
+}
+
+/** Tier from the user's profile row (server data) — never from UI state. */
+export async function getMyTier(): Promise<string>{
+  if (!supabase) return "free"
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return "free"
+  const { data } = await supabase.from("profiles").select("tier").eq("id", user.id).single()
+  return data?.tier || "free"
+}

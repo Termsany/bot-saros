@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react"
 import { Logo } from "@/components/Logo"
 import { ShieldCheck, Eye, EyeOff, Trash2, Check, AlertTriangle, Key } from "lucide-react"
+import { authHeaders } from "@/lib/supabase"
 
 const EXCHANGES = [
   { id:"binance", name:"Binance", color:"#F3BA2F", desc:"Futures USDT-M" },
@@ -19,8 +20,9 @@ export default function KeysPage(){
 
   async function loadStatus(){
     try{
-      const r = await fetch(`${API}/api/keys/status`)
+      const r = await fetch(`${API}/api/keys/status`, { headers: await authHeaders() })
       if(r.ok) setStatus(await r.json())
+      else setMsg({type:"error", text: (await r.json().catch(()=>({}))).detail || "للأدمن فقط — سجّل دخول بحساب الأدمن"})
     }catch{}
   }
   useEffect(()=>{ loadStatus() }, [])
@@ -39,28 +41,30 @@ export default function KeysPage(){
     setSaving(ex); setMsg(null)
     try{
       const r = await fetch(`${API}/api/keys/save`, {
-        method:"POST", headers:{"Content-Type":"application/json"},
+        method:"POST", headers: await authHeaders({"Content-Type":"application/json"}),
         body: JSON.stringify({ exchange: ex, apiKey: f.apiKey.trim(), secret: f.secret.trim(), passphrase: f.passphrase.trim() })
       })
       const j = await r.json()
       if(j.ok){
-        setMsg({type:"success", text:`${ex} تم الحفظ ✓ — مشفر`})
+        setMsg({type:"success", text:`${ex} تم الحفظ ✓ — مشفر (وضع Paper — فعّل LIVE يدوياً)`})
         setForm(ex, { apiKey:"", secret:"", passphrase:"" })
         loadStatus()
-      } else setMsg({type:"error", text: j.error||"فشل"})
+      } else setMsg({type:"error", text: j.error||j.detail||"فشل"})
     }catch(e:any){ setMsg({type:"error", text: String(e.message||e)}) }
     setSaving(null)
   }
 
   async function remove(ex: string){
     if(!confirm(`حذف مفاتيح ${ex}؟`)) return
-    await fetch(`${API}/api/keys/delete`, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({exchange: ex}) })
+    await fetch(`${API}/api/keys/delete`, { method:"POST", headers: await authHeaders({"Content-Type":"application/json"}), body: JSON.stringify({exchange: ex}) })
     setMsg({type:"success", text:`${ex} تم الحذف`})
     loadStatus()
   }
 
   async function togglePaper(ex: string, paper: boolean){
-    await fetch(`${API}/api/keys/paper`, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({exchange: ex, paper}) })
+    if(!paper && !confirm(`تفعيل التداول الحقيقي على ${ex}؟ البوت هيفتح صفقات بفلوس حقيقية.`)) return
+    const r = await fetch(`${API}/api/keys/paper`, { method:"POST", headers: await authHeaders({"Content-Type":"application/json"}), body: JSON.stringify({exchange: ex, paper}) })
+    if(!r.ok) setMsg({type:"error", text: (await r.json().catch(()=>({}))).detail || "فشل"})
     loadStatus()
   }
 

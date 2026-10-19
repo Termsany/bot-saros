@@ -8,6 +8,7 @@ import { StrategyPicker } from "@/components/StrategyPicker"
 import { PaperWallet } from "@/components/PaperWallet"
 import { PAIRS, NAMES } from "@/lib/pairs"
 import { apiTrades, apiKlines } from "@/lib/api"
+import { getMyTier } from "@/lib/supabase"
 
 const GREEN = "#00D395"
 const RED = "#FF3B5C"
@@ -30,7 +31,9 @@ function CandleTooltip({ active, payload }: any){
 
 export default function Dashboard(){
   // Strategy + pair state (our logic)
-  const [tier, setTier] = useState("elite")
+  // tier comes from the user's profile row — not editable from the UI
+  const [tier, setTier] = useState("free")
+  useEffect(()=>{ getMyTier().then(setTier).catch(()=>{}) }, [])
   const [selected, setSelected] = useState<string[]>(["ict"])
   const [symbol, setSymbol] = useState("BTC/USDT")
   const [tf, setTf] = useState("4h")
@@ -146,9 +149,7 @@ export default function Dashboard(){
           <aside className="rounded border border-[#1c2632] bg-[#0c131c] p-4 h-fit">
             <div className="mb-3 flex items-center justify-between">
               <h2 className="text-xs font-semibold tracking-[0.14em]">اختر الاستراتيجيات ({selected.length})</h2>
-              <select value={tier} onChange={e=>setTier(e.target.value)} className="bg-[#0a1018] border border-[#1d2936] rounded px-2 py-1 text-[10px] font-mono">
-                <option value="free">Free</option><option value="starter">Starter</option><option value="pro">Pro</option><option value="elite">Elite</option>
-              </select>
+              <span className="bg-[#0a1018] border border-[#1d2936] rounded px-2 py-1 text-[10px] font-mono capitalize">{tier}</span>
             </div>
             <div className="flex gap-1.5 mb-3">
               <select value={symbol} onChange={e=>setSymbol(e.target.value)} className="flex-1 bg-[#0a1018] border border-[#1d2936] rounded px-2 py-1.5 text-xs">

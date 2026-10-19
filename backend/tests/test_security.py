@@ -1,0 +1,184 @@
+"""
+Run from repo root:  python -m unittest discover -s backend/tests -v
+(no network needed — Supabase auth is stubbed, candles are synthetic)
+"""
+import asyncio, os, sys, tempfile, unittest
+from pathlib import Path
+from unittest import mock
+
+ROOT = Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "backend"))
+
+import numpy as np
+import pandas as pd
+from fastapi.testclient import TestClient
+
+from app import auth, keys_vault
+from app.main import app, _get_exchange_for_cycle
+from app.llm_sandbox import validate_code, UnsafeCode, run_backtest_sandboxed
+
+ADMIN = {"id": "u-admin", "email": "admin@example.com"}
+USER = {"id": "u-user", "email": "user@example.com"}
+TOKENS = {"admin-token": ADMIN, "user-token": USER}
+
+
+async def fake_verify(token):
+    if token not in TOKENS:
+        raise auth.HTTPException(401, "invalid")
+    return TOKENS[token]
+
+
+def candles(n=400, seed=1):
+    rng = np.random.default_rng(seed)
+    close = 30000 * np.exp(np.cumsum(rng.normal(0, 0.01, n)))
+    high = close * (1 + rng.uniform(0, 0.01, n))
+    low = close * (1 - rng.uniform(0, 0.01, n))
+    open_ = np.r_[close[0], close[:-1]]
+    ts = pd.date_range("2026-01-01", periods=n, freq="4h")
+    return pd.DataFrame({"ts": ts, "open": open_, "high": high, "low": low, "close": close, "vol": rng.uniform(1, 100, n)})
+
+
+GOOD_STRATEGY = '''
+import numpy as np
+import pandas as pd
+
+def llm_signal(df):
+    c = df["close"]
+    fast = c.rolling(5).mean().iloc[-1]
+    slow = c.rolling(20).mean().iloc[-1]
+    if np.isnan(slow):
+        return 0.0, []
+    s = (fast - slow) / slow * 50
+    return float(max(-1, min(1, s))), ["ma cross"]
+'''
+
+
+class ApiAuthTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.patches = [
+            mock.patch.object(auth, "_verify_token", fake_verify),
+            mock.patch.object(keys_vault, "VAULT_PATH", Path(self.tmp.name) / "vault.json"),
+            mock.patch.dict(os.environ, {"ADMIN_EMAILS": ADMIN["email"], "CRON_SECRET": "cron-s3cret",
+                                         "VAULT_MASTER_KEY": "", "ALLOW_LIVE_TRADING": ""}),
+        ]
+        for p in self.patches: p.start()
+        os.environ["VAULT_MASTER_KEY"] = __import__("cryptography.fernet", fromlist=["Fernet"]).Fernet.generate_key().decode()
+        self.c = TestClient(app)
+
+    def tearDown(self):
+        for p in self.patches: p.stop()
+        self.tmp.cleanup()
+
+    def h(self, tok):
+        return {"Authorization": f"Bearer {tok}"}
+
+    def test_every_endpoint_except_health_and_chart_requires_login(self):
+        public = {"/api/health", "/api/chart", "/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc"}
+        checked = 0
+        for r in app.routes:
+            if not hasattr(r, "methods") or r.path in public:
+                continue
+            for m in r.methods - {"HEAD", "OPTIONS"}:
+                resp = self.c.request(m, r.path, json={})
+                self.assertEqual(resp.status_code, 401, f"{m} {r.path} -> {resp.status_code}")
+                checked += 1
+        self.assertGreaterEqual(checked, 20)
+
+    def test_admin_endpoints_reject_normal_user(self):
+        for m, path in [("GET", "/api/keys/status"), ("POST", "/api/keys/paper"), ("GET", "/api/trades"),
+                        ("POST", "/api/bot/stop"), ("GET", "/api/bot/status"), ("POST", "/api/llm/generate"),
+                        ("POST", "/api/evolve"), ("POST", "/api/telegram/test")]:
+            resp = self.c.request(m, path, headers=self.h("user-token"), json={})
+            self.assertEqual(resp.status_code, 403, f"{m} {path}")
+
+    def test_admin_fails_closed_without_admin_emails(self):
+        with mock.patch.dict(os.environ, {"ADMIN_EMAILS": ""}):
+            self.assertEqual(self.c.get("/api/keys/status", headers=self.h("admin-token")).status_code, 403)
+
+    def test_cron_secret(self):
+        self.assertEqual(self.c.post("/api/evolve", headers={"X-Cron-Secret": "wrong"}).status_code, 401)
+        r = self.c.post("/api/evolve", headers={"X-Cron-Secret": "cron-s3cret"})
+        self.assertEqual(r.status_code, 200)  # auto_optimizer.py missing -> ok:false, but authorized
+
+    def test_new_keys_start_in_paper_and_live_needs_kill_switch(self):
+        r = self.c.post("/api/keys/save", headers=self.h("admin-token"),
+                        json={"exchange": "bybit", "apiKey": "APIKEY-XYZ", "secret": "SECRET-XYZ"})
+        self.assertEqual(r.status_code, 200)
+        st = self.c.get("/api/keys/status", headers=self.h("admin-token")).json()
+        self.assertTrue(st["bybit"]["configured"])
+        self.assertTrue(st["bybit"]["paper"])
+        self.assertNotIn("XYZ", str(st))  # secrets never returned
+        r = self.c.post("/api/keys/paper", headers=self.h("admin-token"), json={"exchange": "bybit", "paper": False})
+        self.assertEqual(r.status_code, 400)
+        with mock.patch.dict(os.environ, {"ALLOW_LIVE_TRADING": "true"}):
+            r = self.c.post("/api/keys/paper", headers=self.h("admin-token"), json={"exchange": "bybit", "paper": False})
+            self.assertEqual(r.status_code, 200)
+            # re-saving keys keeps LIVE (doesn't silently flip mode)
+            self.c.post("/api/keys/save", headers=self.h("admin-token"), json={"exchange": "bybit", "apiKey": "k2", "secret": "s2"})
+            self.assertFalse(self.c.get("/api/keys/status", headers=self.h("admin-token")).json()["bybit"]["paper"])
+
+    def test_bot_live_start_blocked_without_kill_switch(self):
+        r = self.c.post("/api/bot/start", headers=self.h("admin-token"), json={"paper": False})
+        self.assertEqual(r.status_code, 400)
+        self.assertIsNone(_get_exchange_for_cycle(paper=False))
+
+    def test_chart_path_traversal_blocked(self):
+        for f in ["backtest_/../backend/vault.json", "backtest_..%2f..%2fx.json", "backtest_a.png/../../x.png", "x.png"]:
+            self.assertEqual(self.c.get("/api/chart", params={"file": f}).status_code, 400, f)
+
+    def test_backtest_input_validation(self):
+        for body in [{"symbol": "--out=/tmp/x"}, {"timeframe": "--x"}, {"from": "2026/01/01"}, {"strategies": ["a;b"]}]:
+            r = self.c.post("/api/backtest", headers=self.h("user-token"), json=body)
+            self.assertEqual(r.status_code, 422, body)
+
+
+class SandboxTests(unittest.TestCase):
+    def test_rejects_dangerous_code(self):
+        bad = [
+            "import os\ndef llm_signal(df): return 0, []",
+            "def llm_signal(df): return open('/etc/passwd').read(), []",
+            "def llm_signal(df): return __import__('os').system('id'), []",
+            "import pandas as pd\ndef llm_signal(df): pd.read_csv('backend/.master.key'); return 0, []",
+            "def llm_signal(df): return df.__class__.__mro__, []",
+            "def llm_signal(df): return df.eval('1'), []",
+            "def llm_signal(df): df.to_pickle('x'); return 0, []",
+            "import numpy as np\ndef llm_signal(df): np.load('x'); return 0, []",
+            "def llm_signal(df): return getattr(df, 'x'), []",
+            "import subprocess\ndef llm_signal(df): return 0, []",
+            "from os import path\ndef llm_signal(df): return 0, []",
+            "print('side effect at import')\ndef llm_signal(df): return 0, []",
+            "def other(df): return 0, []",
+        ]
+        for code in bad:
+            with self.assertRaises(UnsafeCode, msg=code):
+                validate_code(code)
+
+    def test_accepts_normal_strategy(self):
+        validate_code(GOOD_STRATEGY)
+
+    def test_sandboxed_backtest_runs_and_trades(self):
+        res = asyncio.run(run_backtest_sandboxed(GOOD_STRATEGY, candles(), ROOT))
+        self.assertTrue(res.get("ok"), res)
+        # before the fix, enabled=["llm_tmp"] always scored 0 -> never traded
+        self.assertGreater(res["total"], 0, res)
+
+    def test_child_has_no_secrets(self):
+        with mock.patch.dict(os.environ, {"VAULT_MASTER_KEY": "SECRET", "TELEGRAM_BOT_TOKEN": "SECRET"}):
+            from app.llm_sandbox import _child_env
+            env = _child_env(str(ROOT))
+        self.assertNotIn("SECRET", str(env))
+
+
+class BacktestTests(unittest.TestCase):
+    def test_run_backtest_with_breakeven_does_not_crash(self):
+        import backtest as bt
+        res = bt.run_backtest(candles(300), amount_usdt=20, leverage=5, enabled=["rsi_macd", "classical", "supertrend"])
+        self.assertIn("stats", res)
+        for t in res["trades"]:
+            self.assertIn(t["reason"], {"SL", "TP", "reverse", "close"})
+
+
+if __name__ == "__main__":
+    unittest.main()

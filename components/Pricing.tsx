@@ -1,7 +1,7 @@
 "use client"
 import { useState } from "react"
 import { TIERS, STRATEGIES } from "@/lib/strategies"
-import { supabase } from "@/lib/supabase"
+import { authHeaders } from "@/lib/supabase"
 
 export function Pricing(){
   const [loading, setLoading] = useState<string|null>(null)
@@ -10,16 +10,15 @@ export function Pricing(){
   async function checkout(tier: string){
     if(tier==="free"){ location.href="/dashboard"; return }
     setLoading(tier); setErr("")
-    let email: string | undefined
-    try{ const { data } = await supabase.auth.getUser(); email = data.user?.email || undefined }catch{}
-    if(!email){
-      // allow guest checkout — Stripe will collect email
-    }
+    // checkout is tied to the signed-in account (guest checkout couldn't be matched to a user)
+    const headers = await authHeaders({ "Content-Type":"application/json" })
+    if(!headers.Authorization){ location.href = "/auth"; return }
     const res = await fetch("/api/stripe/checkout", {
-      method:"POST", headers:{ "Content-Type":"application/json" },
-      body: JSON.stringify({ tier, email })
+      method:"POST", headers,
+      body: JSON.stringify({ tier })
     })
     const j = await res.json()
+    if(res.status===401){ location.href = j.login || "/auth"; return }
     if(j.url) location.href = j.url
     else { setErr(j.error || "خطأ في الدفع"); setLoading(null) }
   }

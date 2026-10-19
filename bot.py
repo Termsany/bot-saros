@@ -446,7 +446,7 @@ def check_sl_tp(state, prices, ex=None):
                 log(f"🔒 اغلاق {symbol} {reason} @ {price:.4f} PnL {pnl:+.4f} ({pnl_pct:+.2f}%)")
                 state["history"].append({"symbol":symbol,"side":pos.get("side","long"),"entry":entry,"exit":price,"qty":qty,"pnl":pnl,"pnl_pct":pnl_pct,"reason":reason,"time":datetime.now(timezone.utc).isoformat(),"type":"paper"})
             else:
-                close_side="close_long" if pos.get("side","long")=="long" else "close_short"; res=place_order(ex or get_exchange(auth=True)[0],symbol,close_side,qty*price,price); pnl=(res["price"]-entry)*res["qty"] if pos.get("side","long")=="long" else (entry-res["price"])*res["qty"]
+                close_side="close_long" if pos.get("side","long")=="long" else "close_short"; _lev=int(CONFIG.get("leverage",5)) if CONFIG.get("market","future")=="future" else 1; res=place_order(ex or get_exchange(auth=True)[0],symbol,close_side,qty*price/_lev,price); pnl=(res["price"]-entry)*res["qty"] if pos.get("side","long")=="long" else (entry-res["price"])*res["qty"]
                 log(f"🔒 بيع حقيقي {symbol} @ {res['price']:.4f} PnL {pnl:+.4f}")
                 state["history"].append({"symbol":symbol,"entry":entry,"exit":res["price"],"qty":res["qty"],"pnl":pnl,"pnl_pct":(res["price"]/entry-1)*100,"reason":reason,"time":datetime.now(timezone.utc).isoformat(),"type":"live"})
             state["stats"]["trades"]+=1; state["stats"]["pnl"]+=float(pnl)

@@ -5,6 +5,7 @@ create table if not exists profiles (
   tier text default 'free' check (tier in ('free','starter','pro','elite')),
   paper_balance numeric default 1000,
   paper_pnl numeric default 0,
+  stripe_customer_id text,
   created_at timestamptz default now()
 );
 create table if not exists trades (
@@ -19,10 +20,13 @@ create table if not exists backtest_runs (
 alter table profiles enable row level security;
 alter table trades enable row level security;
 alter table backtest_runs enable row level security;
--- RLS: user can only see own rows
-create policy "own profile" on profiles for all using (auth.uid()=id);
-create policy "own trades" on trades for all using (auth.uid()=user_id);
-create policy "own backtests" on backtest_runs for all using (auth.uid()=user_id);
+-- RLS: user can only READ own rows. tier/paper_balance are written by the server (service key) only.
+-- (existing projects: run supabase_fix_rls.sql)
+create policy "read own profile" on profiles for select using (auth.uid()=id);
+create policy "read own trades" on trades for select using (auth.uid()=user_id);
+create policy "read own backtests" on backtest_runs for select using (auth.uid()=user_id);
+create policy "insert own backtests" on backtest_runs for insert with check (auth.uid()=user_id);
+revoke insert, update, delete on profiles from anon, authenticated;
 -- Trigger: create profile on signup
 create or replace function handle_new_user() returns trigger as $$
 begin insert into public.profiles (id,email,paper_balance) values (new.id, new.email, 1000); return new; end; $$ language plpgsql security definer;

@@ -9,9 +9,14 @@ import os, json, base64
 from pathlib import Path
 from cryptography.fernet import Fernet
 
-# Generate or load master key
+# Master key: prefer env VAULT_MASTER_KEY (survives redeploys, never on disk next to the vault).
+# Generate one with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+# Fallback to a local file only for local dev.
 MASTER_KEY_PATH = Path(__file__).parent.parent / ".master.key"
 def get_fernet():
+    env_key = os.getenv("VAULT_MASTER_KEY", "").strip()
+    if env_key:
+        return Fernet(env_key.encode())
     if MASTER_KEY_PATH.exists():
         key = MASTER_KEY_PATH.read_bytes().strip()
     else:
@@ -36,7 +41,10 @@ def save_keys(exchange: str, apiKey: str, secret: str, passphrase: str = ""):
             data = json.loads(f.decrypt(raw).decode())
         except:
             data = {}
-    data[exchange] = {"apiKey": apiKey, "secret": secret, "passphrase": passphrase, "paper": False}
+    # New keys always start in Paper; going LIVE is an explicit, separate step (set_paper).
+    # Updating keys keeps the existing mode.
+    paper = bool(data.get(exchange, {}).get("paper", True))
+    data[exchange] = {"apiKey": apiKey, "secret": secret, "passphrase": passphrase, "paper": paper}
     f = get_fernet()
     VAULT_PATH.write_bytes(f.encrypt(json.dumps(data, ensure_ascii=False).encode()))
     try: VAULT_PATH.chmod(0o600)
