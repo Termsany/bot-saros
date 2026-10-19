@@ -1,0 +1,15 @@
+
+Bot Saros — Crypto Futures SaaS Platform (Dark Trading Terminal)
+
+Brand: Obsidian #070B12 background, Emerald #00D395 LONG, Crimson #FF3B5C SHORT, Amber #FFB800 wait, Slate borders.
+No Elite Skin colors. Identity: Bot Saros - AI Trading Terminal.
+
+Pages needed (Next.js app router, shadcn/ui):
+1. Landing: hero with live BTC ticker + 7 strategies preview + pricing tiers (Free/Starter/Pro/Elite) with strategy counts and live win rates
+2. Dashboard: 20 pairs table + chart placeholder + strategy selector (15 checkboxes) + live signals
+3. Backtest: per-strategy selector + timeframe + run button + equity chart + stats
+4. Pricing: 4 tiers with Stripe CTA, feature comparison (strategies count, futures, leverage, AI)
+5. Auth: login/signup with Supabase magic link
+
+Style: dark, monospace numbers, terminal aesthetic, glass cards, no gradients, sharp borders.
+Language: Arabic RTL for headings, English for tickers. Use Tailwind only.
