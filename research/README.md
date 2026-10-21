@@ -204,3 +204,22 @@ long the strongest 5 + short the weakest 5 made money in all 3 variants. In-samp
 
 Runs as a third paper bot (`bot.py --strategy momentum_ls`, `deploy/vps/raqm-momentum.service`): ~10 trades a week,
 ~20 open at most, its long side can hold the same coins as the trend bot.
+
+### 6. Buying the pump and 7. pairs trading — not adopted
+
+`research/volume_pairs_study.py`.
+
+**Pump continuation (long)** (Gervais, Kaniel & Mingelgrin 2001; Li, Urquhart, Wang & Zhang 2021): the pump-fade
+events bought instead of shorted. 25 of 48 variants made money; the in-sample pick (+30% day, 5× volume, hold 7 d,
+stop 40%) made +484, almost all in 2021, and lost out-of-sample (Sharpe −0.02). Some 3-day variants look good after
+2024 but were not the in-sample pick. With the three paper bots: Sharpe after 2024 2.08 → 1.63, max DD 354 → 573.
+
+**Pairs trading, distance method** (Gatev, Goetzmann & Rouwenhorst 2006): every 6 months the closest-moving pairs
+among the top 20 by volume, open at 1.5–2.5σ, close on convergence. 4 of 24 variants made money; the in-sample pick
+lost out-of-sample (Sharpe −0.65) — on daily candles diverging coins tend to keep diverging. With the three bots:
+Sharpe 2.08 → 1.64, max DD 354 → 514.
+
+**So far:** on daily candles, what works follows trends and relative strength (trend long, momentum long/short),
+plus the fading hype of new listings. Every reversal or mean-reversion idea (pump fade, pump buy timing, pairs,
+extreme-funding short, bear-trend short) failed. The three paper bots together: +4,232, max DD 354, Sharpe 2.08
+after 2024 — nothing tested so far improves that.
