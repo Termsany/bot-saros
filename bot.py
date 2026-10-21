@@ -105,16 +105,30 @@ def cycle_symbols(ex, state):
     allowed = set(volume_universe(ex, n))
     return sorted(allowed | set(state["positions"])), allowed
 
+_tg_queue = None
+
+def _tg_worker(q):
+    import urllib.request
+    while True:
+        tok, chat, text = q.get()
+        try:
+            body = json.dumps({"chat_id": chat, "text": text, "disable_web_page_preview": True}).encode()
+            urllib.request.urlopen(urllib.request.Request(f"https://api.telegram.org/bot{tok}/sendMessage", data=body,
+                                   headers={"Content-Type": "application/json"}), timeout=15)
+        except Exception as e: print(f"telegram: {e}")
+
 def notify(text):
-    """Telegram message from the standalone bot (python bot.py --notify); the backend loop sends its own."""
+    """Telegram message from the standalone bot (python bot.py --notify); the backend loop sends its own.
+    Sent from one background thread, in order — a slow network (e.g. a host whose IPv6 doesn't work, so every
+    connection waits out the IPv6 attempt first) never holds up the trading cycle."""
+    global _tg_queue
     tok, chat = os.getenv("TELEGRAM_BOT_TOKEN", ""), os.getenv("TELEGRAM_CHAT_ID", "")
     if not (CONFIG.get("notify") and tok and chat): return
-    try:
-        import urllib.request
-        body = json.dumps({"chat_id": chat, "text": text, "disable_web_page_preview": True}).encode()
-        urllib.request.urlopen(urllib.request.Request(f"https://api.telegram.org/bot{tok}/sendMessage", data=body,
-                               headers={"Content-Type": "application/json"}), timeout=10)
-    except Exception as e: print(f"telegram: {e}")
+    if _tg_queue is None:
+        import queue
+        _tg_queue = queue.Queue()
+        threading.Thread(target=_tg_worker, args=(_tg_queue,), daemon=True).start()
+    _tg_queue.put((tok, chat, text))
 
 def write_public_status(state, analyses, symbols_allowed):
     """Read-only snapshot for the bot's public page (deploy/vps/page): trades and results only — no keys, no config secrets."""
