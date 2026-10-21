@@ -45,14 +45,16 @@ def format_entry(symbol, side, price, sl, tp, leverage, score,
     emoji = "\U0001f7e2" if is_long else "\U0001f534"
     direction = "LONG" if is_long else "SHORT"
     risk = abs(price - sl)
-    reward = abs(tp - price)
+    reward = abs(tp - price) if tp else 0   # trend positions have no fixed target
     rr = reward / risk if risk else 0
+    sl_tp_line = (f"\U0001f6e1\ufe0f *\u0648\u0642\u0641:* `{sl:,.2f}`  |  \U0001f3af *\u0647\u062f\u0641:* `{tp:,.2f}`  |  \u2696\ufe0f R:R `1:{rr:.1f}`\n" if tp else
+                  f"\U0001f6e1\ufe0f *\u0648\u0642\u0641:* `{sl:,.2f}`  |  \U0001f3af \u062e\u0631\u0648\u062c \u0644\u0645\u0627 \u0627\u0644\u062a\u0631\u0646\u062f \u064a\u0642\u0641\n")
     return (
         f"{emoji} *{direction}  {symbol}*  `x{leverage}`\n"
         f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
         f"\U0001f4ca *\u0627\u0633\u062a\u0631\u0627\u062a\u064a\u062c\u064a\u0629:* `{strategy}`  |  \u23f1 `{timeframe}`  |  \U0001f9e0 \u0633\u0643\u0648\u0631 `{score:+.2f}`\n"
         f"\U0001f4b0 *\u062f\u062e\u0648\u0644:* `{price:,.2f}`  |  \U0001f4b5 \u0647\u0627\u0645\u0634 `${amount_usdt:.0f}`\n"
-        f"\U0001f6e1\ufe0f *\u0648\u0642\u0641:* `{sl:,.2f}`  |  \U0001f3af *\u0647\u062f\u0641:* `{tp:,.2f}`  |  \u2696\ufe0f R:R `1:{rr:.1f}`\n"
+        + sl_tp_line +
         f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
         f"_Raqm · رقم \u2014 {_now_utc()} _"
     )

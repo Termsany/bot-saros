@@ -9,6 +9,6 @@ export const BRAND = {
   taglineAr: "بوت تداول العملات الرقمية بالذكاء الاصطناعي",
   // shown in footers; follows the real site URL so it updates when the domain changes
   domain: SITE_URL.replace(/^https?:\/\//, "").replace(/\/$/, ""),
-  footer: "Raqm · رقم © 2026 — 16 استراتيجية + Backtest + Futures LONG/SHORT",
+  footer: "Raqm · رقم © 2026 — 17 استراتيجية + Backtest + Futures LONG/SHORT",
   operational: "ENGINE ● OPERATIONAL",
 } as const

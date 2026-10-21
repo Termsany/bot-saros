@@ -8,6 +8,8 @@ Data: last CANDLES closed candles per symbol/timeframe from Bybit (cached in res
 Signals: backtest.score_at on the last 300 candles at each bar — what the live bot sees.
 Trades: backtest.run_backtest with the CONFIG in backtest.py (same rules as bot.py and lib/strategy-engine.ts).
 Wave Flats has its own entries, stops and targets: strategies_wave.run_wave_flats on the same candles.
+Daily trend (trend_daily) runs on daily candles, so it is measured on its own sets: 8 coins of Binance daily
+candles + funding since 2019/2020 (research/trend_data.py), $20 margin x2 — README.md "Daily trend following".
 "Out-of-sample" = the last 40% of each series; engine settings were chosen without looking at it (README.md).
 """
 import sys, json, pickle, time
@@ -19,6 +21,7 @@ sys.path.insert(0, str(ROOT))
 import numpy as np, pandas as pd
 import backtest as bt
 import strategies_wave as wf
+import strategies_trend as stt
 
 CACHE = Path(__file__).resolve().parent / ".cache"
 SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT"]
@@ -28,6 +31,7 @@ OOS_SPLIT = 0.6
 STRATEGIES = ["ichimoku", "dow", "gann", "elliott", "classical", "sr", "rsi_macd", "smc", "vwap", "supertrend",
               "bollinger", "harmonic", "ict", "heikin", "ai", "wave_flats"]
 AMOUNT, LEVERAGE, FEE = 20, 5, 0.0004
+TREND_COINS, TREND_LEVERAGE = ["BTC", "ETH", "SOL", "XRP", "BNB", "DOGE", "ADA", "LINK"], 2
 
 
 def key(sym, tf): return f"{sym.replace('/', '')}_{tf}"
@@ -87,6 +91,13 @@ def report():
             for s in STRATEGIES:
                 tr = run(df, sc, s)
                 per[s].append({"all": summarize(tr), "oos": summarize([t for t in tr if pd.Timestamp(t["entry_ts"]) >= cut])})
+    trend = per["trend_daily"] = []; trend_sets = []
+    for coin in TREND_COINS:
+        df = pickle.loads((CACHE / f"trend_{coin}.pkl").read_bytes())
+        ms = [int(t.value // 10**6) for t in df.ts]; cut = ms[int(len(df) * OOS_SPLIT)]
+        tr = stt.run_trend_daily(list(df.open), list(df.high), list(df.low), list(df.close), ms, list(df.funding), AMOUNT, TREND_LEVERAGE, FEE)
+        trend.append({"all": summarize(tr), "oos": summarize([t for t in tr if t["entry_ts"] >= cut])})
+        trend_sets.append((str(df.ts.iloc[0])[:10], str(df.ts.iloc[-1])[:10]))
     stats = {}
     for s, rows in per.items():
         a = [r["all"] for r in rows]; o = [r["oos"] for r in rows]
@@ -104,6 +115,8 @@ def report():
         "engine": {"entryThreshold": bt.CONFIG["buy_threshold"], "cooldownBars": bt.CONFIG.get("cooldown_bars", 0),
                    "stopLossPct": bt.CONFIG["stop_loss_pct"], "takeProfitPct": bt.CONFIG["take_profit_pct"],
                    "marginUsdt": AMOUNT, "leverage": LEVERAGE, "feePct": FEE},
+        "trendDaily": {"sets": len(TREND_COINS), "timeframe": "1d", "leverage": TREND_LEVERAGE, "funding": True,
+                       "from": min(x[0] for x in trend_sets), "to": max(x[1] for x in trend_sets)},
     }
     out = ROOT / "lib" / "strategy-stats.json"
     out.write_text(json.dumps({"meta": meta, "strategies": stats}, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")

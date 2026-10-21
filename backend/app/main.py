@@ -95,8 +95,9 @@ def rate_limit(user_id: str, key: str, max_calls: int, per_s: int):
 # Plan limits — enforced here, not only in the UI (StrategyPicker unlocks the first N of this list).
 # Keep in sync with lib/strategies.ts STRATEGIES order and TIERS counts.
 STRATEGY_ORDER = ["rsi_macd", "classical", "ichimoku", "dow", "gann", "sr", "elliott", "smc", "vwap",
-                  "supertrend", "bollinger", "harmonic", "ict", "heikin", "ai", "wave_flats"]
-TIER_STRATEGY_COUNT = {"free": 2, "starter": 6, "pro": 7, "elite": 16}
+                  "supertrend", "bollinger", "harmonic", "ict", "heikin", "ai", "wave_flats", "trend_daily"]
+TIER_STRATEGY_COUNT = {"free": 2, "starter": 6, "pro": 7, "elite": 17}
+SOLO_STRATEGIES = ("wave_flats", "trend_daily")  # own entries/exits — always run alone
 # Max backtest range in days (end date inclusive). None = unlimited. Keep in sync with lib/strategies.ts BACKTEST_DAYS.
 TIER_BACKTEST_DAYS = {"free": 7, "starter": 30, "pro": 90, "elite": None}
 TF_MINUTES = {"1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "2h": 120, "4h": 240, "1d": 1440}
@@ -217,6 +218,10 @@ async def api_backtest(req: BacktestReq, user: dict = Depends(require_user)):
             raise HTTPException(403, f"strategies not in your plan: {', '.join(locked)} — upgrade to unlock")
     else:
         req.strategies = allowed  # empty = "all", which must still mean all *allowed*
+    solo = [s for s in req.strategies if s in SOLO_STRATEGIES]
+    if solo and (len(req.strategies) > 1 or req.strategies == allowed):
+        req.strategies = [x for x in req.strategies if x not in SOLO_STRATEGIES] or solo[:1]
+    if req.strategies == ["trend_daily"]: req.timeframe = "1d"
     _cleanup_backtest_files()
     import json as js
     sym_file = req.symbol.replace("/","")
@@ -296,6 +301,7 @@ class BotStartReq(BaseModel):
     strategies: Optional[List[str]] = None
     timeframe: str = "1h"
     paper: bool = True
+    leverage: Optional[int] = Field(None, ge=1, le=5)  # None = 2 for the daily trend, 5 otherwise
 
     @field_validator("symbols")
     @classmethod
@@ -324,13 +330,17 @@ async def bot_start(req: BotStartReq, bg: BackgroundTasks, user: dict = Depends(
         return {"ok": False, "msg": "already running"}
     if not req.paper and not live_trading_allowed():
         raise HTTPException(400, "LIVE disabled — set ALLOW_LIVE_TRADING=true on the backend to allow real orders")
-    if not req.paper and "wave_flats" in (req.strategies or []):
-        # partial take-profit + moving stop aren't placed as exchange orders yet; it also lost money in testing
-        raise HTTPException(400, "Wave Flats runs in paper mode only for now")
-    if req.strategies and "wave_flats" in req.strategies:
-        req.strategies = ["wave_flats"]  # own entries/stops/targets — can't be mixed with the score strategies
+    solo = [s for s in (req.strategies or []) if s in SOLO_STRATEGIES]
+    if not req.paper and solo:
+        # Wave Flats: partial take-profit + moving stop aren't exchange orders yet (and it lost money in testing);
+        # daily trend: paper first, compared with the backtest for a few weeks before any real money
+        raise HTTPException(400, f"{solo[0]} runs in paper mode only for now")
+    if solo:
+        req.strategies = solo[:1]  # own entries/exits — can't be mixed with the score strategies
+    if req.strategies == ["trend_daily"]: req.timeframe = "1d"
     # Save config for bot loop
-    cfg = {"symbols": req.symbols, "strategies": req.strategies, "timeframe": req.timeframe, "paper": req.paper}
+    lev = req.leverage or (2 if req.strategies == ["trend_daily"] else 5)
+    cfg = {"symbols": req.symbols, "strategies": req.strategies, "timeframe": req.timeframe, "paper": req.paper, "leverage": lev}
     (BOT_DIR / "api_bot_config.json").write_text(json.dumps(cfg, ensure_ascii=False), encoding="utf-8")
     bot_task = asyncio.create_task(bot_loop(cfg))
     return {"ok": True, "msg": "started", "config": cfg}
@@ -376,6 +386,7 @@ async def bot_loop(cfg):
     if cfg.get("strategies"): botmod.CONFIG["enabled_strategies"] = cfg["strategies"]
     if cfg.get("timeframe"): botmod.CONFIG["timeframe"] = cfg["timeframe"]
     if cfg.get("symbols"): botmod.CONFIG["symbols"] = cfg["symbols"]
+    if cfg.get("leverage"): botmod.CONFIG["leverage"] = int(cfg["leverage"])
     from app.telegram_bot import send_telegram, format_entry, format_exit
     from app.oco import place_oco_orders, cancel_oco_orders
     is_paper = bool(cfg.get("paper", True))

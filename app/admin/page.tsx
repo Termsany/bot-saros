@@ -52,7 +52,7 @@ export default function AdminPage(){
         </div>
 
         <div className="mt-6">
-          <h2 className="text-sm font-black">الـ 16 استراتيجية — WR و PF</h2>
+          <h2 className="text-sm font-black">الـ 17 استراتيجية — WR و PF</h2>
           <div className="overflow-auto rounded-xl border border-line mt-3">
             <table className="w-full text-xs">
               <thead className="bg-surface text-muted"><tr><th className="p-2 text-right">الاسم</th><th className="p-2">التاير</th><th className="p-2">WR%</th><th className="p-2">PF</th><th className="p-2">الأيقونة</th></tr></thead>

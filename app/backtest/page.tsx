@@ -1,7 +1,7 @@
 "use client"
 import { useEffect, useMemo, useState } from "react"
 import { Area, AreaChart, CartesianGrid, ComposedChart, Line, ReferenceLine, ResponsiveContainer, Scatter, Tooltip, XAxis, YAxis } from "recharts"
-import { STRATEGIES, BACKTEST_DAYS, backtestSpanDays, pfTone, toggleStrategy } from "@/lib/strategies"
+import { STRATEGIES, BACKTEST_DAYS, backtestSpanDays, pfTone, toggleStrategy, TREND_ID } from "@/lib/strategies"
 import { getMyTier } from "@/lib/supabase"
 import { PAIRS } from "@/lib/pairs"
 import { AppShell } from "@/components/AppShell"
@@ -45,7 +45,9 @@ export default function BacktestPage(){
   const [from, setFrom] = useState(()=> daysBack(toISODate(new Date()), 31))
   const [to, setTo] = useState(()=> toISODate(new Date()))
   const [amount, setAmount] = useState(20)
+  const [leverage, setLeverage] = useState(5)
   const [selected, setSelected] = useState<string[]>(["rsi_macd"])
+  const trend = selected.includes(TREND_ID)   // daily candles only
   const [single, setSingle] = useState(true)
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<BacktestData|null>(null)
@@ -73,21 +75,24 @@ export default function BacktestPage(){
   const span = from && to ? backtestSpanDays(from, to) : 0
   const overLimit = maxDays !== null && span > maxDays
 
-  function toggle(id:string){ setSelected(s=> toggleStrategy(s, id, single)) }
+  function toggle(id:string){
+    setSelected(s=> toggleStrategy(s, id, single))
+    if(id === TREND_ID && !selected.includes(id)){ setTimeframe("1d"); setLeverage(2) }   // tested at x2; the stop sits before liquidation
+  }
   async function run(){
     if(from > to){ setError("التاريخ معكوس — «من» لازم يكون قبل «إلى»"); return }
     if(overLimit){ setError(`المدة ${span} يوم — باقتك تسمح بـ ${maxDays} يوم كحد أقصى. رقّي باقتك لباك تست أطول`); return }
     setLoading(true); setError(""); setResult(null); setChartFile(""); setStdout("")
     try{
       // Try browser-direct first (Bybit/OKX — no Render, no ban)
-      const client = await runBacktestClient({ symbol, timeframe, from, to, strategies: selected, amount, leverage: 5 })
+      const client = await runBacktestClient({ symbol, timeframe: trend ? "1d" : timeframe, from, to, strategies: selected, amount, leverage })
       if(client.ok && client.data){
         setResult(client.data as unknown as BacktestData)
         setRan({ from, to, strategies: selected })
         return
       }
       // Fallback: backend (Render), which also renders a chart image
-      const j = await apiBacktest({ symbol, timeframe, from, to, strategies: selected, amount, leverage: 5 })
+      const j = await apiBacktest({ symbol, timeframe: trend ? "1d" : timeframe, from, to, strategies: selected, amount, leverage })
       setStdout((j.stdout||"") + (j.stderr ? "\n"+j.stderr : "") + (client.error ? "\nClient: "+client.error : ""))
       if(j.data){ setResult(j.data as BacktestData); setRan({ from, to, strategies: selected }); if(typeof j.chart === "string") setChartFile(j.chart) }
       else if(client.error) setError(client.error)
@@ -141,7 +146,7 @@ export default function BacktestPage(){
               <span className="mb-1.5 block text-xs font-semibold text-muted">الفريم</span>
               <div className="grid grid-cols-4 gap-0.5 rounded-[10px] bg-surface2 p-[3px]" dir="ltr">
                 {TIMEFRAMES.map(tf=>(
-                  <button key={tf} onClick={()=>setTimeframe(tf)} className={`rounded-lg py-1.5 font-mono text-xs font-bold transition ${timeframe===tf ? "bg-corona text-void" : "text-muted hover:text-ink"}`}>{tf}</button>
+                  <button key={tf} onClick={()=>setTimeframe(tf)} disabled={trend && tf!=="1d"} className={`rounded-lg py-1.5 font-mono text-xs font-bold transition disabled:opacity-30 ${(trend ? tf==="1d" : timeframe===tf) ? "bg-corona text-void" : "text-muted hover:text-ink"}`}>{tf}</button>
                 ))}
               </div>
             </div>
@@ -176,7 +181,19 @@ export default function BacktestPage(){
               <span className="font-mono text-lg font-bold text-corona" dir="ltr">${amount}</span>
             </div>
             <input type="range" min={10} max={200} step={10} value={amount} onChange={e=>setAmount(parseInt(e.target.value))} className="w-full accent-corona" aria-label="مبلغ الصفقة"/>
-            <p className="text-xs text-faint">هامش <b className="font-mono text-ink">${amount}</b> × رافعة x5 = حجم صفقة <b className="font-mono text-corona">${amount*5}</b> · فلوس وهمية 100%</p>
+            <p className="text-xs text-faint">هامش <b className="font-mono text-ink">${amount}</b> × رافعة x{leverage} = حجم صفقة <b className="font-mono text-corona">${amount*leverage}</b>{trend && " (أقصى حجم — بيصغر لما السوق يهيج)"} · فلوس وهمية 100%</p>
+          </div>
+
+          <div className="space-y-2 border-t border-line pt-5">
+            <h2 className="text-sm font-bold">الرافعة</h2>
+            <div className="grid grid-cols-4 gap-0.5 rounded-[10px] bg-surface2 p-[3px]" dir="ltr">
+              {[1, 2, 3, 5].map(x=>(
+                <button key={x} onClick={()=>setLeverage(x)} aria-pressed={leverage===x} className={`rounded-lg py-1.5 font-mono text-xs font-bold transition ${leverage===x ? "bg-corona text-void" : "text-muted hover:text-ink"}`}>x{x}</button>
+              ))}
+            </div>
+            <p className="text-xs text-faint">{trend
+              ? <>الترند اليومي اتختبر على x2. الصفقة بتفضل مفتوحة أسابيع، والوقف بيتحط قبل التصفية: نزول {(80/leverage).toFixed(0)}% يقفلها.</>
+              : <>كل الأرقام المنشورة على x5. رافعة أعلى = ربح وخسارة أكبر بنفس النسبة.</>}</p>
           </div>
 
           <div className="space-y-3 border-t border-line pt-5">
@@ -195,7 +212,7 @@ export default function BacktestPage(){
                     className={`flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2 text-right transition ${on ? "bg-surface2 ring-1 ring-corona/30" : "border border-line hover:bg-surface2/60"}`}>
                     <div className="min-w-0">
                       <div className="truncate text-sm font-bold">{st.nameAr}</div>
-                      <div className="font-mono text-[11px] text-muted"><span className={`font-bold ${pfTone(st.pf)}`}>PF {st.pf.toFixed(2)}</span><span className="mx-1.5 text-faint">·</span>WR {st.winRate}%<span className="mx-1.5 text-faint">·</span>{st.setsWon}/8</div>
+                      <div className="font-mono text-[11px] text-muted"><span className={`font-bold ${pfTone(st.pf)}`}>PF {st.pf.toFixed(2)}</span><span className="mx-1.5 text-faint">·</span>WR {st.winRate}%<span className="mx-1.5 text-faint">·</span>{st.setsWon}/8{st.basis && <span className="text-corona"> · يومي</span>}</div>
                     </div>
                     <span className={`grid h-5 w-5 shrink-0 place-items-center ${single ? "rounded-full" : "rounded-md"} border ${on ? "border-corona bg-corona text-void" : "border-faint"}`}>{on && <Check size={13} strokeWidth={3}/>}</span>
                   </button>

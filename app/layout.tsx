@@ -24,7 +24,7 @@ const grotesk = Space_Grotesk({
   display: "swap",
 })
 
-export const metadata = { title: `${BRAND.nameCaps} ${BRAND.nameAr} — AI Crypto Trading`, description: `${BRAND.nameAr} — ${BRAND.taglineAr}: 16 استراتيجية LONG/SHORT` }
+export const metadata = { title: `${BRAND.nameCaps} ${BRAND.nameAr} — AI Crypto Trading`, description: `${BRAND.nameAr} — ${BRAND.taglineAr}: 17 استراتيجية LONG/SHORT` }
 
 export default function RootLayout({children}:{children:React.ReactNode}){
   return <html lang="ar" dir="rtl" className={`${cairo.variable} ${jetbrains.variable} ${grotesk.variable}`}><body className="bg-void text-ink antialiased font-sans">{children}</body></html>

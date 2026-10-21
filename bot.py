@@ -69,6 +69,10 @@ def get_exchange(auth=False):
         kwargs["apiKey"]=ak; kwargs["secret"]=sc
     return ccxt.bybit(kwargs), None
 
+def trend_mode():
+    """Daily trend runs alone on daily candles, long only, exits when the trend turns (strategies_trend.py)."""
+    return "trend_daily" in (CONFIG.get("enabled_strategies") or [])
+
 def wave_mode():
     """Wave Flats runs alone with its own entries, stops and targets (strategies_wave.py)."""
     return "wave_flats" in (CONFIG.get("enabled_strategies") or [])
@@ -300,8 +304,21 @@ def analyze_wave(symbol, df):
             "rsi":rsi_info["rsi"],"supports":sr_info["supports"],"resistances":sr_info["resistances"],
             "wave":sig or None,"time":datetime.now(timezone.utc).isoformat()}
 
+def analyze_trend(symbol, df):
+    """Daily trend on the closed daily candles (the last row from the exchange is still forming)."""
+    import strategies_trend as stt
+    closed=df.iloc[:-1]; on,size=stt.signal_now(list(closed.close))
+    price=float(df.close.iloc[-1]); lev=int(CONFIG.get("leverage",2))
+    sr_info=sr_signal(df)[2]; rsi_info=rsi_macd_signal(df)[2]
+    reason=f"ترند صاعد — حجم {size*100:.0f}%" if on else "مفيش ترند صاعد"
+    return {"symbol":symbol,"price":price,"total":1.0 if on else 0.0,"decision":"شراء" if on else "انتظار",
+            "breakdown":{"trend_daily":(1.0 if on else 0.0,reason)},"amount_mult":1.0,
+            "sl":price*(1-stt.STOP_SHARE/lev),"tp":None,"rsi":rsi_info["rsi"],"supports":sr_info["supports"],"resistances":sr_info["resistances"],
+            "trend":{"on":on,"size":size,"ts":int(closed.ts.iloc[-1].value//10**6)},"time":datetime.now(timezone.utc).isoformat()}
+
 def analyze(symbol, df=None, timeframe=None):
     if df is None: df=fetch_ohlcv(symbol, timeframe or CONFIG["timeframe"], limit=candles_needed())
+    if trend_mode(): return analyze_trend(symbol, df)
     if wave_mode(): return analyze_wave(symbol, df)
     results={}
     s1,r1,_=ichimoku_signal(df); results["ichimoku"]=(s1,r1)
@@ -426,6 +443,7 @@ def check_sl_tp(state, prices, ex=None):
         price=prices.get(symbol)
         if price is None: continue
         entry=pos["entry"]; side=pos.get("side","long"); sl=pos.get("sl"); tp=pos.get("tp")
+        if pos.get("trend"): tp=float("inf") if side=="long" else 0.0   # no target: exits on the trend signal (try_enter_trend)
         if sl is None or tp is None:
             if side=="long": sl=entry*(1-CONFIG["stop_loss_pct"]); tp=entry*(1+CONFIG["take_profit_pct"])
             else: sl=entry*(1+CONFIG["stop_loss_pct"]); tp=entry*(1-CONFIG["take_profit_pct"])
@@ -443,7 +461,7 @@ def check_sl_tp(state, prices, ex=None):
                 state["stats"]["pnl"]+=float(pnl); pos["qty"]-=half; wave["tp1_done"]=True; save_state(state)
                 log(f"🎯 {symbol} {side} TP1 @ {price:.6g} — قفل نص الكمية PnL {pnl:+.4f}")
         # ♻️ Breakeven — بعد 50% للهدف ينقل الوقف لنقطة الدخول
-        if CONFIG.get("breakeven_enabled") and not pos.get("breakeven") and not wave:
+        if CONFIG.get("breakeven_enabled") and not pos.get("breakeven") and not wave and not pos.get("trend"):
             trig_pct = float(CONFIG.get("breakeven_trigger_pct", 0.5))
             off = float(CONFIG.get("breakeven_offset_pct", 0.001))
             trig_price = entry + (tp - entry) * trig_pct if side=="long" else entry - (entry - tp) * trig_pct
@@ -517,8 +535,40 @@ def try_enter_wave(symbol, analysis, state, ex):
         log(f"✅ {emoji} وهمي {symbol} {sig['kind']} @ {res['price']:.6g} SL {sig['stop']:.6g} TP {tp:.6g}{tp1_txt}")
     except Exception as e: log(f"فشل {side} {symbol}: {e}")
 
+def try_enter_trend(symbol, analysis, state, ex):
+    """Daily trend: buy at market when the last closed daily candle turns the trend on; sell when it turns off."""
+    import strategies_trend as stt
+    sig=analysis.get("trend"); price=analysis["price"]
+    if not sig: return
+    if in_position(state, symbol):
+        if sig["on"]: return
+        pos=state["positions"][symbol]
+        if not CONFIG["paper_trading"]: log(f"⏸️ {symbol} الترند اليومي شغال Paper بس"); return
+        pnl=(price-pos["entry"])*pos["qty"]
+        log(f"📉 اغلاق {symbol} — الترند وقف @ {price:.6g} PnL {pnl:+.4f}")
+        state["history"].append({"symbol":symbol,"side":"long","entry":pos["entry"],"exit":price,"qty":pos["qty"],"pnl":pnl,"pnl_pct":pnl/(pos["entry"]*pos["qty"])*100,"reason":"الترند وقف","time":datetime.now(timezone.utc).isoformat(),"type":"paper"})
+        state["stats"]["trades"]+=1; state["stats"]["pnl"]+=float(pnl); state["stats"]["wins" if pnl>0 else "losses"]+=1
+        state["positions"].pop(symbol,None); state["last_trade"][symbol]=datetime.now(timezone.utc).isoformat(); save_state(state)
+        return
+    seen=state.setdefault("trend_seen",{})
+    if not sig["on"] or seen.get(symbol)==sig["ts"]: return   # one entry per closed daily candle, like the backtest
+    seen[symbol]=sig["ts"]; save_state(state)
+    if not CONFIG["paper_trading"]:
+        log(f"⏸️ {symbol} الترند اليومي شغال Paper بس — مفيش أوامر حقيقية"); return
+    if len(state["positions"])>=CONFIG["max_open_positions"] or not daily_pnl_ok(state): return
+    try:
+        lev=int(CONFIG.get("leverage",2))
+        res=place_order(ex,symbol,"long",position_size(price, ex)*sig["size"],price)
+        sl=res["price"]*(1-stt.STOP_SHARE/lev)
+        state["positions"][symbol]={"side":"long","entry":res["price"],"qty":res["qty"],"cost":res["cost"],"notional":res.get("notional"),"leverage":res.get("leverage",lev),
+            "time":datetime.now(timezone.utc).isoformat(),"sl":sl,"tp":None,"breakeven":False,"trend":True}
+        state["last_trade"][symbol]=datetime.now(timezone.utc).isoformat(); save_state(state)
+        log(f"✅ 🟢 لونج وهمي {symbol} ترند يومي x{lev} @ {res['price']:.6g} حجم {sig['size']*100:.0f}% وقف حماية {sl:.6g}")
+    except Exception as e: log(f"فشل long {symbol}: {e}")
+
 def try_enter(symbol, analysis, state, ex):
     """فيوتشر: لونج لو سكور > buy_threshold، شورت لو سكور < sell_threshold"""
+    if trend_mode(): return try_enter_trend(symbol, analysis, state, ex)
     if wave_mode(): return try_enter_wave(symbol, analysis, state, ex)
     total=analysis["total"]; price=analysis["price"]
     is_long = total > CONFIG["buy_threshold"]
@@ -614,6 +664,7 @@ def try_enter(symbol, analysis, state, ex):
 
 
 def run_once():
+    if trend_mode(): CONFIG["timeframe"]="1d"
     state=load_state()
     ex,err=get_exchange(auth=not CONFIG["paper_trading"])
     if err: ex=ccxt.bybit({"enableRateLimit":True}); CONFIG["paper_trading"]=True

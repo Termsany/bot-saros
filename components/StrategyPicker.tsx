@@ -26,7 +26,7 @@ export function StrategyPicker({ selected, onToggle, tier }: { selected: string[
               <div className={`text-sm font-bold truncate ${active ? "text-ink" : "text-ink/80"}`}>{s.nameAr}</div>
               <div className="font-mono text-[11px] text-muted tabular">
                 <span className={`font-bold ${pfTone(s.pf)}`}>PF {s.pf.toFixed(2)}</span>
-                <span className="mx-1.5 text-faint">·</span>WR {s.winRate}%<span className="mx-1.5 text-faint">·</span>{s.setsWon}/8
+                <span className="mx-1.5 text-faint">·</span>WR {s.winRate}%<span className="mx-1.5 text-faint">·</span>{s.setsWon}/8{s.basis && <span className="text-corona"> · يومي</span>}
               </div>
             </div>
             {locked ? (

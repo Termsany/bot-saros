@@ -380,6 +380,38 @@ def run_backtest_wave(df, timeframe, amount_usdt=20, leverage=5, fee_pct=0.0004)
     import strategies_wave as wf
     ms = [int(t.value // 10**6) for t in pd.to_datetime(df.ts)]
     raw = wf.run_wave_flats(list(df.open), list(df.high), list(df.low), list(df.close), ms, timeframe, amount_usdt, leverage, fee_pct)
+    return _result_from_raw(df, raw)
+
+
+def fetch_funding_daily(symbol, df):
+    """Funding rate paid over each daily candle (sum of its payments) from Bybit; None if unavailable."""
+    try:
+        ex = ccxt.bybit({"enableRateLimit": True, "options": {"defaultType": "future"}})
+        start = int(pd.to_datetime(df.ts.iloc[0]).value // 10**6); end = int(pd.to_datetime(df.ts.iloc[-1]).value // 10**6) + 86_400_000
+        rows = []; since = start
+        while since < end:
+            chunk = ex.fetch_funding_rate_history(f"{symbol}:USDT" if ":" not in symbol else symbol, since=since, limit=200)
+            if not chunk: break
+            rows += chunk; nxt = chunk[-1]["timestamp"] + 1
+            if nxt <= since: break
+            since = nxt
+        day = {}
+        for r in rows: d = r["timestamp"] // 86_400_000 * 86_400_000; day[d] = day.get(d, 0.0) + float(r["fundingRate"])
+        return [day.get(int(pd.to_datetime(t).value // 10**6), 0.0) for t in df.ts]
+    except Exception as e:
+        print(f"funding unavailable ({e}) — trend backtest without funding"); return None
+
+
+def run_backtest_trend(df, symbol, amount_usdt=20, leverage=2, fee_pct=0.0004, start_ts=0):
+    """Daily trend (strategies_trend.py) on daily candles — same result format as run_backtest."""
+    import strategies_trend as stt
+    ms = [int(t.value // 10**6) for t in pd.to_datetime(df.ts)]
+    raw = stt.run_trend_daily(list(df.open), list(df.high), list(df.low), list(df.close), ms, fetch_funding_daily(symbol, df),
+                              amount_usdt, leverage, fee_pct, start_ts)
+    return _result_from_raw(df, raw)
+
+
+def _result_from_raw(df, raw):
     trades = [{**t, "entry_ts": pd.to_datetime(t["entry_ts"], unit="ms"), "exit_ts": pd.to_datetime(t["exit_ts"], unit="ms"),
                "score": 0, "breakdown": {}} for t in raw]
     p = [t["pnl"] for t in trades]; gw = sum(x for x in p if x > 0); gl = -sum(x for x in p if x < 0)
@@ -635,14 +667,23 @@ def main():
         print(f"Done WF avg {avg_wf:+.2f} Full {res['stats']['pnl']:+.2f}")
         return
 
-    if getattr(args, "from_date", None) or getattr(args, "to_date", None):
-        print(f"جلب {args.symbol} {args.timeframe} من {args.from_date} إلى {args.to_date} ...")
-        df=fetch_ohlcv(args.symbol, args.timeframe, args.limit, from_date=args.from_date, to_date=args.to_date)
+    trend = bool(enabled and "trend_daily" in enabled)
+    start_ts = 0; from_date = args.from_date
+    if trend:  # daily candles, with 150 days of history before the start for the 120-day signal
+        args.timeframe = "1d"
+        if from_date:
+            start_ts = int(pd.to_datetime(from_date).tz_localize("UTC").timestamp() * 1000)
+            from_date = str((pd.to_datetime(from_date) - pd.Timedelta(days=150)).date())
+    if from_date or getattr(args, "to_date", None):
+        print(f"جلب {args.symbol} {args.timeframe} من {from_date} إلى {args.to_date} ...")
+        df=fetch_ohlcv(args.symbol, args.timeframe, args.limit, from_date=from_date, to_date=args.to_date)
     else:
         print(f"جلب {args.symbol} {args.timeframe} x{args.limit} ...")
         df=fetch_ohlcv(args.symbol, args.timeframe, args.limit)
     print(f"Loaded {len(df)} bars: {df.ts.iloc[0]} → {df.ts.iloc[-1]}")
-    if enabled and "wave_flats" in enabled:  # runs alone: its own stops and targets
+    if trend:
+        res=run_backtest_trend(df, args.symbol, amount_usdt=args.amount, leverage=args.leverage, fee_pct=args.fee, start_ts=start_ts)
+    elif enabled and "wave_flats" in enabled:  # runs alone: its own stops and targets
         res=run_backtest_wave(df, args.timeframe, amount_usdt=args.amount, leverage=args.leverage, fee_pct=args.fee)
     else:
         res=run_backtest(df, amount_usdt=args.amount, leverage=args.leverage, fee_pct=args.fee, enabled=enabled)

@@ -2,7 +2,8 @@ import STATS_FILE from "./strategy-stats.json"
 
 /** Measured with the bot's own engine by research/measure_strategies.py — never edit these numbers by hand. */
 export type StrategyStats = { trades: number; winRate: number; pf: number; pnl: number; setsWon: number; oosPnl: number; oosSetsWon: number; maxDD: number }
-export type Strategy = { id: string; name: string; nameAr: string; desc: string; method: string; tier: "free"|"starter"|"pro"|"elite"; icon: string } & StrategyStats
+export type Strategy = { id: string; name: string; nameAr: string; desc: string; method: string; tier: "free"|"starter"|"pro"|"elite"; icon: string
+  /** set when measured on different data than the 8 standard 1h/4h sets */ basis?: string } & StrategyStats
 export const STATS_META = STATS_FILE.meta
 
 // Order matters: a plan unlocks the first N (see TIERS.count). `method` describes what the code really does.
@@ -23,6 +24,8 @@ const BASE: Omit<Strategy, keyof StrategyStats>[] = [
   { id:"heikin", name:"Heikin+ADX", nameAr:"هيكن + ADX", desc:"Heikin Ashi + قوة الترند", method:"شمعتين Heikin Ashi متتاليتين في نفس الاتجاه، وADX فوق 25 يقوّيها وتحت 15 يضعّفها.", tier:"elite", icon:"⬣" },
   { id:"ai", name:"Consensus", nameAr:"الإجماع", desc:"إجماع الـ 14 استراتيجية", method:"متوسط إشارات الـ 14 استراتيجية التانية، ويقوّي الإشارة لو 4 أو أكتر متفقين في نفس الاتجاه.", tier:"elite", icon:"✦" },
   { id:"wave_flats", name:"Wave Flats", nameAr:"موجات Flat", desc:"تصحيح Flat + فيبو", method:"بعد موجة A قوية (ZigZag): ارتداد لمنطقة 0.382–0.236 بشمعة ابتلاعية أو Pin Bar = Regular Flat وهدفه 1.272، أو موجة b تكسر القمة ثم c = Running/Expanded Flat وأهدافه 1.414 (نص الكمية) و1.618. الوقف تحت أدنى شمعتين −0.2% وبيتنقل للدخول لما السعر يكسر قمة التصحيح. بتشتغل لوحدها بوقفها وأهدافها، مش مع باقي الاستراتيجيات.", tier:"elite", icon:"≋" },
+  { id:"trend_daily", name:"Daily Trend", nameAr:"ترند يومي", desc:"زخم 20/60/120 يوم + حجم حسب التذبذب", method:"كل يوم عند الإغلاق: لو السعر أعلى من سعره من 20 و60 و120 يوم في 2 من 3 على الأقل = يشتري (لونج بس)، ولو الترند وقف يبيع. حجم الصفقة يصغر لما السوق يهيج (هدف تذبذب 80% في السنة)، ووقف حماية قبل التصفية حسب الرافعة. مبنية على أبحاث الـ Time-Series Momentum. فريم يومي بس، وبتشتغل لوحدها.", tier:"elite", icon:"⟋",
+    basis:`فريم يومي · ${STATS_FILE.meta.trendDaily.sets} عملات ${STATS_FILE.meta.trendDaily.from.slice(0,4)}–${STATS_FILE.meta.trendDaily.to.slice(0,4)} · $20 × ${STATS_FILE.meta.trendDaily.leverage} · شامل الـ funding` },
 ]
 
 const MEASURED = STATS_FILE.strategies as Record<string, StrategyStats>
@@ -38,15 +41,16 @@ export const TIERS = [
   { id:"free", name:"Free", price:"0$", per:"/شهر", cta:"ابدأ مجانا", features:["استراتيجيتان","Spot فقط","Backtest 7 أيام"], count:2, color:"#8B91A7" },
   { id:"starter", name:"Starter", price:"29$", per:"/شهر", cta:"اشترك", features:["6 استراتيجيات","Spot","Backtest 30 يوم"], count:6, color:"#4CC9F0" },
   { id:"pro", name:"Pro", price:"59$", per:"/شهر", cta:"اشترك Pro", features:["7 استراتيجيات","Futures LONG/SHORT x5","Backtest 90 يوم"], count:7, color:"#7B61FF", popular:true },
-  { id:"elite", name:"Elite", price:"99$", per:"/شهر", cta:"اشترك Elite", features:["16 استراتيجية","SMC + ICT + موجات Flat","Backtest غير محدود"], count:16, color:"#F5B841" },
+  { id:"elite", name:"Elite", price:"99$", per:"/شهر", cta:"اشترك Elite", features:["17 استراتيجية","ترند يومي + SMC + ICT","Backtest غير محدود"], count:17, color:"#F5B841" },
 ]
 // Max backtest range in days, end date inclusive (null = unlimited). The backend enforces the same
 // numbers (TIER_BACKTEST_DAYS in backend/app/main.py) — keep them in sync.
-/** Wave Flats has its own entries, stops and targets, so it always runs alone. */
-export const WAVE_ID = "wave_flats"
+/** Strategies with their own entries and exits (Wave Flats, daily trend) always run alone. */
+export const WAVE_ID = "wave_flats", TREND_ID = "trend_daily"
+export const SOLO = [WAVE_ID, TREND_ID]
 export function toggleStrategy(selected: string[], id: string, single = false){
-  if(single || id === WAVE_ID) return [id]
-  const rest = selected.filter(x => x !== WAVE_ID)
+  if(single || SOLO.includes(id)) return [id]
+  const rest = selected.filter(x => !SOLO.includes(x))
   return rest.includes(id) ? rest.filter(x => x !== id) : [...rest, id]
 }
 

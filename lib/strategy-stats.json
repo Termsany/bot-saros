@@ -1,6 +1,6 @@
 {
  "meta": {
-  "generatedAt": "2026-10-19",
+  "generatedAt": "2026-10-21",
   "sets": 8,
   "symbols": [
    "BTC/USDT",
@@ -23,6 +23,14 @@
    "marginUsdt": 20,
    "leverage": 5,
    "feePct": 0.0004
+  },
+  "trendDaily": {
+   "sets": 8,
+   "timeframe": "1d",
+   "leverage": 2,
+   "funding": true,
+   "from": "2019-09-08",
+   "to": "2026-10-20"
   }
  },
  "strategies": {
@@ -185,6 +193,16 @@
    "oosPnl": 2.0,
    "oosSetsWon": 1,
    "maxDD": 24.9
+  },
+  "trend_daily": {
+   "trades": 630,
+   "winRate": 33.2,
+   "pf": 6.58,
+   "pnl": 3803.31,
+   "setsWon": 8,
+   "oosPnl": 323.96,
+   "oosSetsWon": 8,
+   "maxDD": 74.84
   }
  }
 }

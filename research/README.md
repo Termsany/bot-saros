@@ -72,3 +72,58 @@ Results ($20 × 5, fees 0.04% per side):
 
 Most trades are Regular Flats; 379 of 431 ended at the stop. It does not have an edge on this data —
 the bot runs it in paper mode only (LIVE is refused), and partial take-profit is not placed as exchange orders yet.
+
+## Daily trend following + volatility sizing (October 2026)
+
+Literature: Moskowitz, Ooi & Pedersen (2012) "Time Series Momentum" (JFE); Liu & Tsyvinski (2021)
+"Risks and Returns of Cryptocurrency" (RFS); Moreira & Muir (2017) "Volatility-Managed Portfolios" (JF).
+
+- **Data:** Binance USDT-M daily candles + real funding, 8 coins (BTC ETH SOL XRP BNB DOGE ADA LINK), 2019/2020 → Oct 2026.
+- **Rules:** signal at the daily close = average sign of the 20/60/120-day returns; long only (negative = flat);
+  size $100 × min(1, 80% / 30-day volatility); resize only on >25% change; fees 0.04% on every change + funding.
+- **Selection:** 32 variants (lookback × long-only/long-short × size) ranked by median Sharpe on the first 60% of
+  each coin; the same family wins with a 50/50 or 70/30 split too.
+
+```bash
+python research/trend_data.py && python research/trend_study.py && python research/voltarget_study.py
+```
+
+Out-of-sample (last 40% ≈ 2024 → Oct 2026): positive on 8/8 coins, median Sharpe 0.59 (buy-and-hold 0.20),
+median max drawdown 46 USDT vs 110 for buy-and-hold, about 28% average exposure. It earns less than holding in
+a strong bull run (SOL, XRP) and much more in falls (DOGE, ADA, LINK).
+
+8-coin portfolio, whole period:
+
+| | 2020 | 2021 | 2022 | 2023 | 2024 | 2025 | 2026 | total | max DD | Sharpe |
+|---|---|---|---|---|---|---|---|---|---|---|
+| trend, volatility-sized | +508 | +898 | −71 | +321 | +477 | +18 | +18 | +2,168 | 275 | 1.39 |
+| trend, fixed size | +550 | +1,584 | −96 | +331 | +514 | −21 | +17 | +2,879 | 332 | 1.37 |
+| buy-and-hold | +862 | +2,478 | −643 | +824 | +730 | −56 | −56 | +4,090 | 1,036 | 0.96 |
+
+Caveats: most of the profit is from 2020–2021 and 2023–2024; 2025–2026 is about flat. Positions last weeks,
+so at 5× a 20% move against the position would liquidate the $20 margin — this needs 1–2× leverage.
+
+**Volatility sizing on the current 1h/4h strategies: not adopted.** Re-sizing each trade by recent volatility
+improved PnL/drawdown on 4/15 strategies over the whole period and 11/15 out-of-sample; it cut Dow and Ichimoku
+by more than half, because the 6% targets are reached mostly when volatility is high.
+
+### In the bot and on the site: `trend_daily`
+
+The study rebalances every day; the bot trades it as plain trades so it can be run and checked:
+on when the close is above the close 20/60/120 days ago for at least 2 of the 3; buy at the next open with
+size = margin × leverage × min(1, 80% / 30-day volatility), fixed for the trade; sell at the next open once it
+is off; protective stop at entry × (1 − 0.8 / leverage), before the margin would be liquidated. Long only.
+`strategies_trend.py` (bot + server backtest) = `lib/trend-daily.ts` (browser), checked by
+`python research/trend_parity_export.py && node research/trend_parity.ts`. LIVE is refused for now (paper first).
+
+Same 8 coins, $20 margin, fees + funding (first 60% / last 40% as above):
+
+| leverage | trades | PF | PnL | last 40% | coins positive (last 40%) | median max DD |
+|---|---|---|---|---|---|---|
+| ×1 | 630 | 6.78 | +1,912 | +172 | 8/8 | 10 |
+| **×2** (site numbers) | 630 | 6.58 | +3,803 | +324 | 8/8 | 24 |
+| ×3 | 632 | 6.57 | +5,713 | +500 | 8/8 | 32 |
+| ×5 | 652 | 6.16 | +9,436 | +838 | 8/8 | 49 |
+
+The protective stop hit 2 times in 630 trades. PF is inflated by a few huge trends — DOGE in 2021 alone is
++2,247 of the +3,803 at ×2; without DOGE it is +1,557. Win rate is about 33%: many small losses, few big wins.
