@@ -33,3 +33,10 @@ behind nginx, secrets in `/opt/raqm-api/.env` (`api/env.example` lists them). Ve
 | `api/update.sh` + `api/raqm-api-update.{service,timer}` | pulls `main` every 5 minutes, restarts the API when `backend/` or a root `.py` changed |
 
 Logs: `journalctl -u raqm-api -f` · deploys: `journalctl -u raqm-api-update`.
+
+## Second paper bot: short new listings
+
+`raqm-listing.service` runs `bot.py --strategy listing_short --state state_listing.json`: short a new Binance USDT-M
+perpetual 30 days after listing, hold 90 days, stop 40% above entry, at most 10 open, $20 × 2, paper only
+(research/README.md "Short side"). Own state/log files next to the trend bot; the page reads `listing.json`.
+Logs: `journalctl -u raqm-listing -f`.

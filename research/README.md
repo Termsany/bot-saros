@@ -147,3 +147,21 @@ volume among coins with ≥150 days of history. Funding: the daily median of the
 The edge without hindsight is smaller but still there. Top 10 is what the VPS bot runs (`deploy/vps/`):
 best out-of-sample Sharpe and far smaller drawdowns than 15+; 2022 and 2023 were losing years for every variant.
 The bot ranks Bybit's crypto perpetuals the same way (stocks, ETFs, commodities, forex and stablecoins excluded).
+
+## Short side (October 2026)
+
+`research/short_study.py` — every Binance USDT-M perpetual since 2019 (delisted included), real per-coin funding
+(`research/universe_funding.py`: shorts receive positive funding, pay negative), fees, $20 × 2; chosen before 2024.
+
+| | trades | PnL | max DD | Sharpe before 2024 | Sharpe 2024 → | 2022 | 2024 |
+|---|---|---|---|---|---|---|---|
+| long trend, top 10 (the bot) | 911 | +1,672 | 312 | 0.85 | 1.33 | −225 | +329 |
+| 1. bear-trend short (2 of 3 down + BTC < 200d) | 426 | +105 | 274 | 0.62 | **−0.23** | +217 | −159 |
+| 2. new-listing short (30 d after listing, hold 90, stop 40%) | 576 | +1,099 | 920 | 1.17 | 0.73 | +138 | −493 |
+| 2. same, at most 10 open (what runs on paper) | 250 | +729 | 354 | 0.61 | 1.25 | +138 | −31 |
+
+1. **Not adopted:** it pays in a crash (2022) and loses out-of-sample.
+2. **Promising, risky:** all 18 variants were positive overall and out-of-sample, but drawdowns are large, 2024 lost
+   (new coins rallied), most profit is 2025–2026, and stops on thin new coins can fill worse than the test assumes.
+   Capping it at 10 open shorts cut the drawdown from 920 to 354. It runs as a separate paper bot on the VPS
+   (`bot.py --strategy listing_short`, `deploy/vps/raqm-listing.service`, section on bot.da3m.io) before any decision.

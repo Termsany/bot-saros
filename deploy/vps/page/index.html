@@ -115,10 +115,32 @@
     </table></div>
   </section>
 
+  <section id="listingSec" style="margin-top:44px;border-top:1px solid var(--line);padding-top:26px">
+    <div class="head"><h2>شورت العملات الجديدة — تجربة Paper</h2><span class="count" id="lsUpdated"></span></div>
+    <p class="sub" style="font-size:13px">بوت منفصل: بيعمل شورت على العملة الجديدة على Binance بعد 30 يوم من إدراجها، ويقفل بعد 90 يوم أو لو السعر طلع 40% فوق الدخول، وبحد أقصى 10 صفقات في نفس الوقت. فكرة من الأبحاث إن العملات الجديدة بتنزل بعد الهوجة — بنجربها Paper قبل أي قرار.</p>
+    <div class="kpis" style="margin-top:14px">
+      <div class="card kpi"><div class="label">ربح محقق</div><div class="value mono" id="lsRealized">—</div><div class="note" id="lsWl">—</div></div>
+      <div class="card kpi"><div class="label">ربح الصفقات المفتوحة</div><div class="value mono" id="lsUnreal">—</div><div class="note">بالسعر اللحظي من Binance</div></div>
+      <div class="card kpi"><div class="label">شورت مفتوح</div><div class="value mono" id="lsOpen">—</div><div class="note" id="lsMargin">—</div></div>
+      <div class="card kpi"><div class="label">الإجمالي</div><div class="value mono" id="lsTotal">—</div><div class="note">هامش $20 × 2 للصفقة</div></div>
+    </div>
+    <div class="table" style="margin-top:14px"><table>
+      <thead><tr><th>العملة</th><th>الدخول</th><th>السعر الحالي</th><th>الوقف</th><th>الربح $</th><th>على الهامش</th><th>بيقفل في</th></tr></thead>
+      <tbody id="lsPositions"><tr><td colspan="7" class="empty">بيحمّل…</td></tr></tbody>
+    </table></div>
+    <div class="head" style="margin-top:16px"><h2 style="font-size:14px">جاية</h2><span class="count">عملات اتدرجت قريب — الشورت بعد 30 يوم من الإدراج</span></div>
+    <div class="chips" id="lsUpcoming"></div>
+    <div class="head" style="margin-top:16px"><h2 style="font-size:14px">اتقفلت</h2><span class="count" id="lsHistCount"></span></div>
+    <div class="table"><table>
+      <thead><tr><th>العملة</th><th>الدخول</th><th>الخروج</th><th>الربح $</th><th>السبب</th><th>الوقت</th></tr></thead>
+      <tbody id="lsHistory"><tr><td colspan="6" class="empty">لسه مفيش صفقات اتقفلت</td></tr></tbody>
+    </table></div>
+  </section>
+
   <footer>
     نتايج Paper حيّة من البوت، مش نصيحة استثمارية ومش ضمان لأي ربح. اختبار الاستراتيجية التاريخي في
     <a href="https://github.com/Termsany/bot-saros/blob/main/research/README.md" rel="noopener">research/README.md</a>.
-    الأسعار لحظية من Bybit، وبيانات البوت بتتحدث كل 15 ثانية.
+    الأسعار لحظية من Bybit (الترند) وBinance (الشورت)، وبيانات البوتين بتتحدث كل 15 ثانية.
   </footer>
 </div>
 
@@ -242,6 +264,66 @@ load(); connect()
 setInterval(load, 15000)                                            // bot data
 setInterval(() => { if(dirty){ dirty = false; render() } }, 1000)   // prices: at most one redraw a second
 setInterval(() => { if(!dirty) render() }, 10000)                   // keep "x seconds ago" fresh
+// ── new-listing short (separate paper bot): listing.json every 15 s + Binance futures prices ──
+let LS = null, bws = null, bsubs = new Set(), bdirty = false
+const blive = {}
+function renderListing(){
+  const sec = $("listingSec")
+  if(!LS){ sec.style.display = "none"; return }
+  sec.style.display = ""
+  const d = LS
+  $("lsUpdated").textContent = `آخر دورة ${ago(d.updated)}`
+  const pos = d.positions.map(p => {
+    const price = blive[p.id] ?? p.price, pnl = (p.entry - price) * p.qty
+    return { ...p, price, pnl, pnl_pct: p.margin ? pnl / p.margin * 100 : 0 }
+  })
+  const s = d.stats, unreal = pos.reduce((a, p) => a + p.pnl, 0), total = s.realized + unreal
+  $("lsRealized").innerHTML = `<span class="${tone(s.realized)}">${usd(s.realized)}</span>`
+  $("lsWl").textContent = `${s.closed} اتقفلت · ${s.wins} كسبانة / ${s.losses} خسرانة`
+  $("lsUnreal").innerHTML = `<span class="${tone(unreal)}">${usd(unreal)}</span>`
+  $("lsOpen").textContent = `${pos.length} / ${d.rules.max_open}`
+  $("lsMargin").textContent = `هامش مستخدم $${pos.reduce((a, p) => a + p.margin, 0).toFixed(0)}`
+  $("lsTotal").innerHTML = `<span class="${tone(total)}">${usd(total)}</span>`
+  $("lsPositions").innerHTML = pos.length ? pos.map(p => `<tr>
+      <td class="coin">${esc(p.symbol.replace("/USDT", ""))} <span style="color:var(--loss);font-size:11px">SHORT</span></td>
+      <td class="num mono">${px(p.entry)}</td>
+      <td class="num mono">${px(p.price)}</td>
+      <td class="num mono" style="color:var(--faint)">${px(p.sl)}</td>
+      <td class="num mono ${tone(p.pnl)}">${usd(p.pnl)}</td>
+      <td class="num mono ${tone(p.pnl_pct)}">${p.pnl_pct > 0 ? "+" : ""}${p.pnl_pct.toFixed(1)}%</td>
+      <td class="mono" style="color:var(--muted)">${day(p.exit_at)}</td></tr>`).join("")
+    : `<tr><td colspan="7" class="empty">مفيش شورت مفتوح — مستني عملة تكمّل 30 يوم من إدراجها</td></tr>`
+  $("lsUpcoming").innerHTML = d.upcoming.length ? d.upcoming.map(u => `<span class="chip"><b>${esc(u.symbol.replace("/USDT", ""))}</b> · بعد <b class="mono">${Math.max(0, Math.ceil(u.days_left))}</b> يوم</span>`).join("")
+    : `<span class="chip">مفيش عملات جديدة اتدرجت آخر 30 يوم</span>`
+  $("lsHistCount").textContent = d.history.length ? `آخر ${d.history.length}` : ""
+  if(d.history.length) $("lsHistory").innerHTML = d.history.slice(0, 100).map(h => `<tr>
+      <td class="coin">${esc(h.symbol.replace("/USDT", ""))}</td>
+      <td class="num mono">${px(h.entry)}</td>
+      <td class="num mono">${px(h.exit)}</td>
+      <td class="num mono ${tone(h.pnl)}">${usd(h.pnl)}</td>
+      <td style="color:var(--muted)">${esc(h.reason)}</td>
+      <td class="mono" style="color:var(--muted)">${day(h.time)}</td></tr>`).join("")
+}
+async function loadListing(){
+  try{ const r = await fetch(`listing.json?t=${Date.now()}`, {cache: "no-store"}); if(!r.ok) throw 0; LS = await r.json(); renderListing(); bsubscribe() }
+  catch{ if(!LS) renderListing() }
+}
+function bsubscribe(){
+  if(!LS || !bws || bws.readyState !== 1) return
+  const add = LS.positions.map(p => p.id).filter(x => !bsubs.has(x))
+  if(add.length) bws.send(JSON.stringify({ method: "SUBSCRIBE", params: add.map(x => `${x.toLowerCase()}@miniTicker`), id: Date.now() }))
+  add.forEach(x => bsubs.add(x))
+}
+function bconnect(){
+  bws = new WebSocket("wss://fstream.binance.com/ws")
+  bws.onopen = () => { bsubs = new Set(); bsubscribe() }
+  bws.onmessage = e => { const m = JSON.parse(e.data); if(m.e === "24hrMiniTicker"){ blive[m.s] = +m.c; bdirty = true } }
+  bws.onclose = () => setTimeout(bconnect, 3000)
+  bws.onerror = () => bws.close()
+}
+loadListing(); bconnect()
+setInterval(loadListing, 15000)
+setInterval(() => { if(bdirty){ bdirty = false; renderListing() } }, 1000)
 </script>
 </body>
 </html>

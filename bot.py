@@ -163,6 +163,103 @@ def write_public_status(state, analyses, symbols_allowed):
         tmp.replace(d / "status.json")   # atomic: the page never reads half a file
     except Exception as e: log(f"public status: {e}")
 
+LISTING = {"skip_days": 30, "hold_days": 90, "stop": 0.40, "max_open": 10, "catch_up_days": 3}
+
+def listing_mode():
+    """Paper short of new Binance USDT-M listings 30 days after listing, held 90 days, stop 40% above entry,
+    at most 10 at once — research/short_study.py idea 2 (README "Short side")."""
+    return "listing_short" in (CONFIG.get("enabled_strategies") or [])
+
+def listing_markets(ex):
+    """[(symbol, listed_ms, age_days)] for Binance crypto USDT perpetuals (no TradFi, no stablecoins)."""
+    ex.load_markets(); now = time.time() * 1000; out = []
+    for sym, m in ex.markets.items():
+        info = m.get("info") or {}
+        if not (m.get("swap") and m.get("linear") and m.get("quote") == "USDT" and m.get("active")): continue
+        if info.get("contractType") != "PERPETUAL" or m.get("base") in STABLES: continue
+        listed = int(info.get("onboardDate") or 0)
+        if listed: out.append((sym, listed, (now - listed) / 86_400_000))
+    return out
+
+def _listing_close(ex, state, sym, price, reason):
+    pos = state["positions"].pop(sym); q = pos["qty"]; fee = 0.0004
+    funding = 0.0
+    try:   # shorts receive positive funding and pay negative funding
+        since = int(datetime.fromisoformat(pos["time"]).timestamp() * 1000)
+        funding = sum(float(r["fundingRate"]) for r in ex.fetch_funding_rate_history(sym, since=since, limit=1000)) * q * pos["entry"]
+    except Exception as e: log(f"funding {sym}: {e}")
+    pnl = (pos["entry"] - price) * q - (pos["entry"] * q + price * q) * fee + funding
+    margin = pos["entry"] * q / max(1, int(pos.get("leverage", 2)))
+    state["history"].append({"symbol": sym, "side": "short", "entry": pos["entry"], "exit": price, "qty": q, "pnl": pnl,
+                             "pnl_pct": pnl / margin * 100 if margin else 0, "funding": funding, "reason": reason,
+                             "time": datetime.now(timezone.utc).isoformat(), "type": "paper"})
+    st = state["stats"]; st["trades"] += 1; st["pnl"] += pnl; st["wins" if pnl > 0 else "losses"] += 1
+    save_state(state)
+    log(f"🔒 قفل شورت {sym} — {reason} @ {price:.6g} PnL {pnl:+.4f} (funding {funding:+.4f})")
+    notify(f"🔒 قفل شورت {sym.split(':')[0]} — {reason}\nدخول {pos['entry']:.6g} → خروج {price:.6g}\nPnL {pnl:+.2f}$ (funding {funding:+.2f}$) · Paper")
+
+def run_once_listing(ex):
+    L = LISTING; state = load_state(); now = datetime.now(timezone.utc)
+    done = state.setdefault("listing_done", {})
+    mk = listing_markets(ex); prices = {}
+    # open shorts: protective stop and the 90-day exit
+    for sym, pos in list(state["positions"].items()):
+        try:
+            price = float(ex.fetch_ticker(sym)["last"]); prices[sym] = price
+            if price >= pos["sl"]: _listing_close(ex, state, sym, price, f"وقف {pos['sl']:.6g}")
+            elif now >= datetime.fromisoformat(pos["exit_at"]): _listing_close(ex, state, sym, price, f"خلصت {L['hold_days']} يوم")
+        except Exception as e: log(f"شورت {sym}: {e}")
+    # new entries: coins that just turned 30 days old (a few days of slack if the bot was down), oldest listing first;
+    # like the backtest, a coin that comes up while all 10 slots are taken is skipped for good
+    due = sorted([x for x in mk if L["skip_days"] <= x[2] < L["skip_days"] + L["catch_up_days"] and x[0] not in done], key=lambda x: x[1])
+    for sym, listed, age in due:
+        done[sym] = now.isoformat()
+        if len(state["positions"]) >= L["max_open"]:
+            log(f"⏸️ {sym} عدّى {L['skip_days']} يوم بس الـ {L['max_open']} أماكن مليانة — اتساب زي الباك تست"); continue
+        if not CONFIG["paper_trading"]: log(f"⏸️ {sym} شورت العملات الجديدة Paper بس"); continue
+        try:
+            price = float(ex.fetch_ticker(sym)["last"]); prices[sym] = price
+            lev = int(CONFIG.get("leverage", 2)); q = position_size(price) * lev / price
+            state["positions"][sym] = {"side": "short", "entry": price, "qty": q, "leverage": lev, "time": now.isoformat(),
+                "sl": price * (1 + L["stop"]), "tp": None, "listed": datetime.fromtimestamp(listed / 1000, timezone.utc).isoformat(),
+                "exit_at": (now + pd.Timedelta(days=L["hold_days"])).isoformat()}
+            log(f"✅ 🔴 شورت وهمي {sym} (اتدرجت من {age:.0f} يوم) @ {price:.6g} وقف {price * (1 + L['stop']):.6g}")
+            notify(f"🔴 شورت {sym.split(':')[0]} — عملة جديدة (اتدرجت من {age:.0f} يوم) · Paper\nدخول {price:.6g} · x{lev} · هامش ${position_size(price):.0f}\nوقف {price * (1 + L['stop']):.6g} · خروج بعد {L['hold_days']} يوم")
+        except Exception as e: log(f"شورت {sym}: {e}")
+    save_state(state)
+    for sym in state["positions"]:
+        if sym not in prices:
+            try: prices[sym] = float(ex.fetch_ticker(sym)["last"])
+            except Exception: pass
+    upcoming = sorted([x for x in mk if x[2] < L["skip_days"]], key=lambda x: -x[2])
+    write_listing_status(state, prices, upcoming)
+    log(f"📊 شورت مفتوح: {len(state['positions'])}/{L['max_open']} | PnL محقق {state['stats']['pnl']:+.4f} | جاي: {len(upcoming)} عملة")
+
+def write_listing_status(state, prices, upcoming):
+    out_dir = CONFIG.get("public_dir")
+    if not out_dir: return
+    pos = []
+    for sym, p in state["positions"].items():
+        price = prices.get(sym, p["entry"]); pnl = (p["entry"] - price) * p["qty"]
+        margin = p["entry"] * p["qty"] / max(1, int(p.get("leverage", 2)))
+        pos.append({"symbol": sym.split(":")[0], "id": sym.split("/")[0] + "USDT", "side": "short", "entry": p["entry"], "price": price,
+                    "qty": p["qty"], "margin": round(margin, 2), "sl": p["sl"], "pnl": round(pnl, 4),
+                    "pnl_pct": round(pnl / margin * 100, 2) if margin else 0, "opened": p["time"], "exit_at": p["exit_at"]})
+    st = state.get("stats", {})
+    data = {"updated": datetime.now(timezone.utc).isoformat(), "mode": "paper" if CONFIG["paper_trading"] else "live",
+            "rules": LISTING, "leverage": int(CONFIG.get("leverage", 2)), "margin": CONFIG.get("trade_amount_usdt"),
+            "started": CONFIG.get("started_at"),
+            "stats": {"closed": st.get("trades", 0), "wins": st.get("wins", 0), "losses": st.get("losses", 0),
+                      "realized": round(float(st.get("pnl", 0)), 4), "unrealized": round(sum(x["pnl"] for x in pos), 4), "open": len(pos)},
+            "positions": sorted(pos, key=lambda x: x["opened"]),
+            "upcoming": [{"symbol": s.split(":")[0], "days_left": round(LISTING["skip_days"] - age, 1)} for s, _, age in upcoming[:12]],
+            "history": [{"symbol": h["symbol"].split(":")[0], "entry": h["entry"], "exit": h["exit"], "pnl": round(h["pnl"], 4),
+                         "reason": h.get("reason", ""), "time": h.get("time")} for h in state.get("history", [])[-200:]][::-1]}
+    try:
+        d = Path(out_dir); tmp = d / "listing.json.tmp"
+        tmp.write_text(json.dumps(data, ensure_ascii=False, default=str), encoding="utf-8"); tmp.replace(d / "listing.json")
+    except Exception as e: log(f"public listing status: {e}")
+
 def trend_mode():
     """Daily trend runs alone on daily candles, long only, exits when the trend turns (strategies_trend.py)."""
     return "trend_daily" in (CONFIG.get("enabled_strategies") or [])
@@ -762,6 +859,10 @@ def try_enter(symbol, analysis, state, ex):
 
 
 def run_once():
+    if listing_mode():
+        global _listing_ex
+        if "_listing_ex" not in globals(): _listing_ex = ccxt.binanceusdm({"enableRateLimit": True})   # the backtest's listings are Binance's
+        return run_once_listing(_listing_ex)
     if trend_mode(): CONFIG["timeframe"]="1d"
     state=load_state()
     ex,err=get_exchange(auth=not CONFIG["paper_trading"])
@@ -793,7 +894,11 @@ def run_once():
 def run_loop():
     mode="Paper وهمي" if CONFIG["paper_trading"] else "LIVE حقيقي"
     CONFIG["started_at"]=datetime.now(timezone.utc).isoformat()
-    if trend_mode():
+    if listing_mode():
+        L=LISTING
+        log(f"=== شورت العملات الجديدة — {mode} — دخول بعد {L['skip_days']} يوم، خروج بعد {L['hold_days']} يوم، وقف {L['stop']:.0%}، أقصى {L['max_open']} | هامش {CONFIG['trade_amount_usdt']} USDT x{CONFIG.get('leverage',2)} ===")
+        notify(f"▶️ بوت شورت العملات الجديدة اشتغل ({mode})\nدخول بعد {L['skip_days']} يوم من الإدراج · خروج بعد {L['hold_days']} يوم · وقف {L['stop']:.0%} · أقصى {L['max_open']} صفقات")
+    elif trend_mode():
         coins=f"أعلى {CONFIG['universe_size']} عملة فوليوم" if CONFIG.get("universe_size") else f"{len(CONFIG['symbols'])} عملة"
         log(f"=== ترند يومي — لونج بس — {mode} — {coins} | هامش {CONFIG['trade_amount_usdt']} USDT x{CONFIG.get('leverage',2)} | كل {CONFIG['poll_seconds']}s ===")
         notify(f"▶️ بوت رقم اشتغل — ترند يومي ({mode})\n{coins} · هامش ${CONFIG['trade_amount_usdt']:.0f} x{CONFIG.get('leverage',2)}")
@@ -865,6 +970,7 @@ if __name__=="__main__":
     p.add_argument("--poll", type=int, default=None, help="ثواني بين كل دورة")
     p.add_argument("--notify", action="store_true", help="رسايل تليجرام للدخول والخروج (TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID)")
     p.add_argument("--public", default=None, help="مجلد يتكتب فيه status.json لصفحة البوت العامة (صفقات ونتايج بس)")
+    p.add_argument("--state", default=None, help="ملف الحالة (لتشغيل أكتر من بوت في نفس المجلد) — اللوج بيبقى بنفس الاسم .log")
     args=p.parse_args()
     if args.strategy: CONFIG["enabled_strategies"]=[s.strip() for s in args.strategy.split(",") if s.strip()]
     if args.leverage: CONFIG["leverage"]=args.leverage
@@ -876,6 +982,11 @@ if __name__=="__main__":
         CONFIG["max_open_positions"]=max(int(CONFIG["max_open_positions"]), args.universe)
     CONFIG["notify"]=args.notify
     if args.public: CONFIG["public_dir"]=args.public
+    if args.state:
+        STATE_PATH=Path(__file__).parent / args.state
+        LOG_PATH=Path(__file__).parent / (Path(args.state).stem + ".log")
+    elif listing_mode():
+        STATE_PATH=Path(__file__).parent / "state_listing.json"; LOG_PATH=Path(__file__).parent / "state_listing.log"
     if args.paper: CONFIG["paper_trading"]=True
     if args.live: CONFIG["paper_trading"]=False
     if args.port: CONFIG["dashboard_port"]=args.port
