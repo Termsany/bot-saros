@@ -5,11 +5,12 @@ import { Bar, BarChart, CartesianGrid, ComposedChart, Line, ReferenceLine, Respo
 import { AppShell } from "@/components/AppShell"
 import { Kpi } from "@/components/Kpi"
 import { Bell, RefreshCw } from "lucide-react"
-import { StrategyPicker } from "@/components/StrategyPicker"
-import { PaperWallet } from "@/components/PaperWallet"
+import { StrategyCards } from "@/components/StrategyCards"
+import { LiveBots } from "@/components/LiveBots"
 import { PAIRS, NAMES } from "@/lib/pairs"
-import { STRATEGIES, TIERS, toggleStrategy } from "@/lib/strategies"
-import { apiTrades, apiKlines, apiBotStatus } from "@/lib/api"
+import { STRATEGIES } from "@/lib/strategies"
+import { apiKlines } from "@/lib/api"
+import { useLiveBots } from "@/lib/live-bots"
 import { getMyTier, getUser } from "@/lib/supabase"
 
 const PROFIT = "#22D3A0"
@@ -20,7 +21,6 @@ const FAINT = "#5D6378"
 const REFRESH_S = 30
 
 type Candle = { time: number; open: number; high: number; low: number; close: number; volume: number }
-type Trade = { id:number; symbol:string; side:string; entry:number; exit:number|null; qty:number; pnl:number|null; status:string; sl:number; tp:number; at:string }
 
 function fmt(v: number|null|undefined, digits?: number){
   if(v===null || v===undefined || !isFinite(v)) return "—"
@@ -81,16 +81,9 @@ export default function Dashboard(){
     getUser().then(u=> setInitial((u?.email || "").slice(0,1).toUpperCase())).catch(()=>{})
     return ()=>{ stop = true }
   }, [])
-  const [selected, setSelected] = useState<string[]>(["ict"])
   const [symbol, setSymbol] = useState("BTC/USDT")
-  const [tf, setTf] = useState("4h")
-  const toggle = (id:string)=> setSelected(s=> toggleStrategy(s, id))
-  // keep only strategies the plan unlocks (default "ict" is Elite-only); wait for the real tier first
-  useEffect(()=>{
-    if(!tierReady) return
-    const allowed = STRATEGIES.slice(0, TIERS.find(t=> t.id===tier)?.count ?? 2).map(s=> s.id)
-    setSelected(s=> { const keep = s.filter(id=> allowed.includes(id)); return keep.length ? keep : [allowed[0]] })
-  }, [tier, tierReady])
+  const [tf, setTf] = useState("1d")
+  const { bots, total, loaded } = useLiveBots()
 
   const [candles, setCandles] = useState<Candle[]>([])
   const [loading, setLoading] = useState(true)
@@ -99,9 +92,6 @@ export default function Dashboard(){
   const [now, setNow] = useState<Date|null>(null)
   useEffect(()=>{ setNow(new Date()); const t=setInterval(()=>setNow(new Date()), 1000); return ()=>clearInterval(t) }, [])
 
-  const [trades, setTrades] = useState<Trade[]>([])
-  const [tab, setTab] = useState<"open"|"closed">("open")
-  const [engine, setEngine] = useState<{running:boolean}>({ running: false })
 
   const loadKlines = useCallback(async()=>{
     setLoading(true)
@@ -122,14 +112,7 @@ export default function Dashboard(){
     finally{ setLoading(false) }
   }, [symbol, tf])
 
-  const loadTrades = useCallback(async()=>{
-    const tr = await apiTrades(50)
-    setTrades(Array.isArray(tr) ? tr : [])
-    setEngine(await apiBotStatus())
-  }, [])
-
   useEffect(()=>{ loadKlines(); const t=setInterval(loadKlines, REFRESH_S*1000); return ()=>clearInterval(t) }, [loadKlines])
-  useEffect(()=>{ loadTrades(); const t=setInterval(loadTrades, REFRESH_S*1000); return ()=>clearInterval(t) }, [loadTrades])
 
   const current = candles[candles.length-1]
   const previous = candles[candles.length-2]
@@ -139,28 +122,14 @@ export default function Dashboard(){
     return candles.map(c=> { ema = ema + (c.close - ema) * (2 / 11); return { ...c, wick: [c.low, c.high], ema, up: c.close >= c.open } })
   }, [candles])
 
-  const openTrades = trades.filter(t=> t.status==="open" || !t.exit)
-  const closedTrades = trades.filter(t=> t.status==="closed" || t.exit)
-  const stats = useMemo(()=>{
-    const closed = [...closedTrades].sort((a,b)=> a.id-b.id)
-    const pnls = closed.map(t=> t.pnl||0)
-    const wins = pnls.filter(p=> p>0).length, losses = pnls.filter(p=> p<0).length
-    const pnl = pnls.reduce((s,p)=> s+p, 0)
-    const sumWin = pnls.filter(p=>p>0).reduce((s,p)=>s+p,0), sumLoss = Math.abs(pnls.filter(p=>p<0).reduce((s,p)=>s+p,0))
-    const pf = sumLoss ? sumWin/sumLoss : sumWin ? 99 : 0
-    let cum = 0; const equity = pnls.map(p=> cum += p)
-    let w = 0; const wrSeries = pnls.map((p,i)=> { if(p>0) w++; return w/(i+1)*100 })
-    return { pnl, wins, losses, total: closed.length, pf, equity, wrSeries, winRate: closed.length ? wins/closed.length*100 : 0 }
-  }, [closedTrades])
-  const symbolTrades = openTrades.filter(t=> t.symbol===symbol)
-  const unrealized = (t: Trade)=> current && t.symbol===symbol ? (current.close - t.entry) * t.qty * (t.side==="long" ? 1 : -1) : null
-
+  // the bots' open positions on the coin shown in the chart (pairs have no single entry price)
+  const base = symbol.split("/")[0]
+  const symbolTrades = bots.flatMap(b=> b.positions.filter(p=> p.label===base && p.side!=="pair" && p.entry).map(p=> ({ ...p, bot: b.strategy.nameAr })))
   const nextIn = lastUpdated && now ? Math.max(0, REFRESH_S - Math.floor((now.getTime() - lastUpdated.getTime())/1000)) : null
-  const strategyNames = STRATEGIES.filter(s=> selected.includes(s.id)).map(s=> s.name)
-  const rows = tab==="open" ? openTrades : [...closedTrades].reverse()
+  const closedTotal = total.wins + total.losses
 
   return (
-    <AppShell active="/dashboard" tier={tier} engine={engine} nextIn={nextIn}>
+    <AppShell active="/dashboard" tier={tier} engine={{ running: total.running > 0 }} nextIn={nextIn}>
         {activating && (
           <div className={`rounded-xl px-4 py-2.5 text-center text-sm ${activating==="timeout" ? "bg-loss/10 text-loss" : "bg-profit/10 text-profit"}`}>
             {activating==="waiting" && "⏳ جاري تفعيل باقتك..."}
@@ -173,7 +142,7 @@ export default function Dashboard(){
         <header className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <h1 className="text-[26px] font-bold">لوحة التحكم</h1>
-            <p className="text-[13px] text-muted">المحرك بيراقب {NAMES[symbol]||symbol} على فريم {tf} بـ {selected.length} استراتيجية</p>
+            <p className="text-[13px] text-muted">{loaded ? `${total.running} من ${STRATEGIES.length} بوتات شغالة دلوقتي على السيرفر` : "بيحمّل البوتات…"} · الشارت: {NAMES[symbol]||symbol} على فريم {tf}</p>
           </div>
           <div className="flex flex-wrap items-center gap-2 sm:gap-2.5" dir="ltr">
             <span className="flex items-center gap-1.5 rounded-full border border-line bg-surface px-3 py-1.5 font-mono text-[11px] font-bold text-profit"><i className="h-1.5 w-1.5 animate-pulse rounded-full bg-profit"/> LIVE · BINANCE</span>
@@ -184,15 +153,15 @@ export default function Dashboard(){
           </div>
         </header>
 
-        {/* KPIs */}
+        {/* KPIs — the four bots together */}
         <section className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
-          <Kpi label="إجمالي الربح" value={`${signed(stats.pnl)}`} chip={`${stats.wins}W · ${stats.losses}L`} tone={stats.pnl>=0?"profit":"loss"} sub="USDT · الصفقات المقفولة" spark={stats.equity}/>
-          <Kpi label="نسبة الفوز" value={stats.total ? `${stats.winRate.toFixed(1)}%` : "—"} chip={stats.total ? (stats.winRate>=50?"قوية":"تحت 50%") : undefined} tone={!stats.total ? "neutral" : stats.winRate>=50?"profit":"loss"} sub={`${stats.wins} من ${stats.total} صفقة`} spark={stats.wrSeries}/>
-          <Kpi label="Profit Factor" value={!stats.pf ? "—" : stats.pf >= 99 ? "∞" : fmt(stats.pf, 2)} chip={stats.pf ? (stats.pf>=1.5?"ممتاز":stats.pf>=1?"جيد":"ضعيف") : undefined} tone={!stats.pf ? "neutral" : stats.pf>=1?"profit":"loss"} sub="الهدف ≥ 1.5" spark={stats.equity}/>
-          <Kpi label="الصفقات" value={`${openTrades.length} / ${closedTrades.length}`} chip={openTrades.length ? `${openTrades.length} مفتوحة` : undefined} tone="neutral" sub="مفتوحة / مقفولة"/>
+          <Kpi label="الربح المحقق" value={signed(total.realized)} chip={`${total.wins}W · ${total.losses}L`} tone={total.realized>=0?"profit":"loss"} sub="USDT · الـ 4 بوتات (Paper)"/>
+          <Kpi label="ربح الصفقات المفتوحة" value={signed(total.unrealized)} tone={total.unrealized>=0?"profit":"loss"} sub="USDT · بسعر آخر دورة"/>
+          <Kpi label="الإجمالي" value={signed(total.realized + total.unrealized)} chip={closedTotal ? `${(total.wins/closedTotal*100).toFixed(0)}% فوز` : undefined} tone={total.realized + total.unrealized>=0?"profit":"loss"} sub="محقق + مفتوح"/>
+          <Kpi label="الصفقات المفتوحة" value={`${total.open}`} chip={`${total.running}/${STRATEGIES.length} شغالة`} tone="neutral" sub="على الـ 4 بوتات"/>
         </section>
 
-        {/* chart (right) + engine & wallet (left) */}
+        {/* chart (right) + strategies (left) */}
         <section className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
           <div className="min-w-0 rounded-2xl border border-line bg-surface p-4 sm:p-5">
             <div className="flex flex-wrap items-center justify-between gap-3">
@@ -225,11 +194,9 @@ export default function Dashboard(){
                     <Bar dataKey="wick" shape={<CandleShape/>} isAnimationActive={false}/>
                     <Line dataKey="ema" stroke={CORONA} strokeWidth={1.6} dot={false} isAnimationActive={false}/>
                     {current && <ReferenceLine y={current.close} stroke="#F2F3F7" strokeOpacity={0.35} strokeDasharray="2 3"/>}
-                    {symbolTrades.map(t=>[
-                      <ReferenceLine key={`e${t.id}`} y={t.entry} stroke={CORONA} strokeDasharray="4 4" label={{ value: `دخول ${t.side.toUpperCase()}`, fill: CORONA, fontSize: 10, position: "insideTopLeft" }}/>,
-                      <ReferenceLine key={`s${t.id}`} y={t.sl} stroke={LOSS} strokeOpacity={0.6} strokeDasharray="2 4"/>,
-                      <ReferenceLine key={`t${t.id}`} y={t.tp} stroke={PROFIT} strokeOpacity={0.6} strokeDasharray="2 4"/>,
-                    ])}
+                    {symbolTrades.map(t=>
+                      <ReferenceLine key={`${t.bot}${t.side}`} y={t.entry} stroke={t.side==="long" ? PROFIT : LOSS} strokeDasharray="4 4" label={{ value: `${t.bot} · ${t.side.toUpperCase()}`, fill: t.side==="long" ? PROFIT : LOSS, fontSize: 10, position: "insideTopLeft" }}/>
+                    )}
                   </ComposedChart>
                 </ResponsiveContainer>
               )}
@@ -246,87 +213,21 @@ export default function Dashboard(){
             <div className="mt-3 flex flex-wrap items-center justify-end gap-4 text-[11px]">
               <span className="font-mono text-faint" dir="ltr">CANDLES {candles.length} · {tf.toUpperCase()}</span>
               <span className="font-mono font-bold text-corona" dir="ltr">— EMA 10</span>
-              {symbolTrades.length > 0 && <span className="font-semibold text-corona">● {symbolTrades.length} صفقة مفتوحة على {symbol}</span>}
+              {symbolTrades.length > 0 && <span className="font-semibold text-corona">● {symbolTrades.length} صفقة للبوتات على {symbol}</span>}
             </div>
           </div>
 
-          <div className="space-y-4 rounded-2xl border border-line bg-surface p-5">
-            <div className="flex items-center justify-between">
-              <h2 className="text-base font-bold">حالة المحرك</h2>
-              <span className={`rounded-full border border-line px-3 py-1 text-[11px] font-bold ${engine.running ? "text-profit" : "text-muted"}`}>{engine.running ? "● يعمل" : "○ متوقف"}</span>
-            </div>
-            <dl className="divide-y divide-line text-[13px]">
-              {[
-                ["الاستراتيجيات", strategyNames.length ? (strategyNames.length > 2 ? `${strategyNames.slice(0,2).join(" + ")} +${strategyNames.length-2}` : strategyNames.join(" + ")) : "—"],
-                ["العملة والفريم", `${symbol} · ${tf}`],
-                ["التحديث القادم", nextIn!==null ? `00:${String(nextIn).padStart(2,"0")}` : "--:--"],
-                ["الرافعة", "x5"],
-                ["الوضع", "PAPER"],
-              ].map(([k,v])=>(
-                <div key={k} className="flex items-center justify-between py-2.5">
-                  <dt className="text-muted">{k}</dt><dd className="font-mono font-bold tabular" dir="ltr">{v}</dd>
-                </div>
-              ))}
-            </dl>
-            <PaperWallet/>
-          </div>
-        </section>
-
-        {/* trades (right) + strategies (left) */}
-        <section className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
-          <div className="min-w-0 overflow-hidden rounded-2xl border border-line bg-surface">
-            <div className="flex items-center justify-between px-5 py-4">
-              <h2 className="text-base font-bold">الصفقات</h2>
-              <div className="flex gap-0.5 rounded-[10px] bg-surface2 p-[3px]">
-                {([["open", `مفتوحة ${openTrades.length}`], ["closed", `مقفولة ${closedTrades.length}`]] as const).map(([id,lbl])=>(
-                  <button key={id} onClick={()=>setTab(id)} className={`rounded-lg px-3 py-1 text-xs font-semibold transition ${tab===id?"bg-line text-ink":"text-muted hover:text-ink"}`}>{lbl}</button>
-                ))}
-              </div>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[640px] text-[13px]">
-                <thead>
-                  <tr className="bg-surface2/50 text-[11px] text-muted">
-                    {["الزوج","الدخول", tab==="open" ? "الحالي" : "الخروج","الوقف","الهدف","الربح/الخسارة"].map(h=> <th key={h} className="px-5 py-2.5 text-right font-semibold">{h}</th>)}
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.length===0 ? (
-                    <tr><td colSpan={6} className="px-5 py-10 text-center text-sm text-faint">{tab==="open" ? "لا صفقات مفتوحة دلوقتي — المحرك بيستنى إشارة" : "لسه مفيش صفقات مقفولة"}</td></tr>
-                  ) : rows.slice(0, 8).map(t=>{
-                    const pnl = tab==="open" ? unrealized(t) : (t.pnl ?? 0)
-                    const now$ = tab==="open" ? (t.symbol===symbol && current ? current.close : null) : t.exit
-                    return (
-                      <tr key={t.id} className="border-t border-line">
-                        <td className="px-5 py-3.5">
-                          <div className="flex items-center gap-2">
-                            <span className="font-display font-medium" dir="ltr">{t.symbol}</span>
-                            <span className={`rounded-md px-1.5 py-0.5 font-mono text-[10px] font-bold ${t.side==="long" ? "bg-profit/10 text-profit" : "bg-loss/10 text-loss"}`}>{t.side.toUpperCase()}</span>
-                          </div>
-                        </td>
-                        <td className="px-5 py-3.5 font-mono tabular" dir="ltr" style={{textAlign:"right"}}>{fmt(t.entry)}</td>
-                        <td className="px-5 py-3.5 font-mono tabular" dir="ltr" style={{textAlign:"right"}}>{fmt(now$)}</td>
-                        <td className="px-5 py-3.5 font-mono text-loss/85 tabular" dir="ltr" style={{textAlign:"right"}}>{fmt(t.sl)}</td>
-                        <td className="px-5 py-3.5 font-mono text-profit/85 tabular" dir="ltr" style={{textAlign:"right"}}>{fmt(t.tp)}</td>
-                        <td className={`px-5 py-3.5 font-mono font-bold tabular ${pnl===null ? "text-faint" : pnl>=0 ? "text-profit" : "text-loss"}`} dir="ltr" style={{textAlign:"right"}}>{pnl===null ? "—" : signed(pnl)}</td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <div id="strategies" className="rounded-2xl border border-line bg-surface p-5">
+          <div id="strategies" className="scroll-mt-6 rounded-2xl border border-line bg-surface p-5">
             <div className="mb-3 flex items-center justify-between">
               <h2 className="text-base font-bold">الاستراتيجيات</h2>
-              <span className="font-mono text-[11px] text-muted">{selected.length} / {STRATEGIES.length} نشطة</span>
+              <span className="font-mono text-[11px] text-muted">{STRATEGIES.length} بوتات</span>
             </div>
-            <div className="max-h-[420px] overflow-y-auto pl-1">
-              <StrategyPicker selected={selected} onToggle={toggle} tier={tier}/>
-            </div>
+            <StrategyCards tier={tier}/>
+            <p className="mt-3 text-[11px] leading-5 text-faint">الأرقام من اختبار على كل عملات Binance من 2019 (والمشطوبة كمان)، هامش $20 × 2، شامل الرسوم والـ funding. نتايج سابقة، مش ضمان.</p>
           </div>
         </section>
+
+        <LiveBots bots={bots} loaded={loaded}/>
 
     </AppShell>
   )

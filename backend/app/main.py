@@ -92,12 +92,12 @@ def rate_limit(user_id: str, key: str, max_calls: int, per_s: int):
         raise HTTPException(429, f"too many requests — wait {int(per_s - (now - q[0])) + 1}s")
     q.append(now)
 
-# Plan limits — enforced here, not only in the UI (StrategyPicker unlocks the first N of this list).
-# Keep in sync with lib/strategies.ts STRATEGIES order and TIERS counts.
-STRATEGY_ORDER = ["rsi_macd", "classical", "ichimoku", "dow", "gann", "sr", "elliott", "smc", "vwap",
-                  "supertrend", "bollinger", "harmonic", "ict", "heikin", "ai", "wave_flats", "trend_daily"]
-TIER_STRATEGY_COUNT = {"free": 2, "starter": 6, "pro": 7, "elite": 17}
-SOLO_STRATEGIES = ("wave_flats", "trend_daily")  # own entries/exits — always run alone
+# Plan limits — enforced here, not only in the UI (a plan unlocks the first N of this list).
+# Keep in sync with lib/strategies.ts STRATEGIES order and TIERS counts: the four paper bots on the VPS.
+STRATEGY_ORDER = ["trend_daily", "momentum_ls", "listing_short", "ratio_trend"]
+TIER_STRATEGY_COUNT = {"free": 1, "starter": 2, "pro": 3, "elite": 4}
+SOLO_STRATEGIES = ("wave_flats", "trend_daily", "momentum_ls", "listing_short", "ratio_trend")  # own entries/exits
+PER_COIN = ("trend_daily",)  # the others trade a whole portfolio of coins — no single-coin backtest
 # Max backtest range in days (end date inclusive). None = unlimited. Keep in sync with lib/strategies.ts BACKTEST_DAYS.
 TIER_BACKTEST_DAYS = {"free": 7, "starter": 30, "pro": 90, "elite": None}
 TF_MINUTES = {"1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "2h": 120, "4h": 240, "1d": 1440}
@@ -217,11 +217,11 @@ async def api_backtest(req: BacktestReq, user: dict = Depends(require_user)):
         if locked:
             raise HTTPException(403, f"strategies not in your plan: {', '.join(locked)} — upgrade to unlock")
     else:
-        req.strategies = allowed  # empty = "all", which must still mean all *allowed*
-    solo = [s for s in req.strategies if s in SOLO_STRATEGIES]
-    if solo and (len(req.strategies) > 1 or req.strategies == allowed):
-        req.strategies = [x for x in req.strategies if x not in SOLO_STRATEGIES] or solo[:1]
-    if req.strategies == ["trend_daily"]: req.timeframe = "1d"
+        req.strategies = ["trend_daily"]  # empty = the one strategy that backtests on a single coin
+    if any(s not in PER_COIN for s in req.strategies):
+        raise HTTPException(400, "only the daily trend backtests on one coin — the other bots trade a portfolio (results on the home page)")
+    req.strategies = ["trend_daily"]
+    req.timeframe = "1d"
     _cleanup_backtest_files()
     import json as js
     sym_file = req.symbol.replace("/","")

@@ -1,7 +1,7 @@
 "use client"
 import { useEffect, useMemo, useState } from "react"
 import { Area, AreaChart, CartesianGrid, ComposedChart, Line, ReferenceLine, ResponsiveContainer, Scatter, Tooltip, XAxis, YAxis } from "recharts"
-import { STRATEGIES, BACKTEST_DAYS, backtestSpanDays, pfTone, toggleStrategy, TREND_ID } from "@/lib/strategies"
+import { STRATEGIES, BACKTEST_DAYS, BOT_PAGE, backtestSpanDays, pfTone, sharpeTone, TREND_ID } from "@/lib/strategies"
 import { getMyTier } from "@/lib/supabase"
 import { PAIRS } from "@/lib/pairs"
 import { AppShell } from "@/components/AppShell"
@@ -41,14 +41,14 @@ const inputCls = "w-full rounded-lg border border-line bg-surface2 px-3 py-2 tex
 
 export default function BacktestPage(){
   const [symbol, setSymbol] = useState("BTC/USDT")
-  const [timeframe, setTimeframe] = useState("1h")
+  const [timeframe, setTimeframe] = useState("1d")
   const [from, setFrom] = useState(()=> daysBack(toISODate(new Date()), 31))
   const [to, setTo] = useState(()=> toISODate(new Date()))
   const [amount, setAmount] = useState(20)
-  const [leverage, setLeverage] = useState(5)
-  const [selected, setSelected] = useState<string[]>(["rsi_macd"])
+  const [leverage, setLeverage] = useState(2)
+  // only the daily trend runs on one coin; the other three bots trade a whole portfolio (see the home page table)
+  const [selected, setSelected] = useState<string[]>([TREND_ID])
   const trend = selected.includes(TREND_ID)   // daily candles only
-  const [single, setSingle] = useState(true)
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<BacktestData|null>(null)
   const [ran, setRan] = useState<{from:string,to:string,strategies:string[]}|null>(null)
@@ -76,8 +76,8 @@ export default function BacktestPage(){
   const overLimit = maxDays !== null && span > maxDays
 
   function toggle(id:string){
-    setSelected(s=> toggleStrategy(s, id, single))
-    if(id === TREND_ID && !selected.includes(id)){ setTimeframe("1d"); setLeverage(2) }   // tested at x2; the stop sits before liquidation
+    if(!STRATEGIES.find(x=> x.id===id)?.perCoin) return
+    setSelected([id]); setTimeframe("1d"); setLeverage(2)    // tested at x2; the stop sits before liquidation
   }
   async function run(){
     if(from > to){ setError("التاريخ معكوس — «من» لازم يكون قبل «إلى»"); return }
@@ -91,6 +91,7 @@ export default function BacktestPage(){
         setRan({ from, to, strategies: selected })
         return
       }
+      if("final" in client && client.final){ setError(client.error || "فشل"); return }
       // Fallback: backend (Render), which also renders a chart image
       const j = await apiBacktest({ symbol, timeframe: trend ? "1d" : timeframe, from, to, strategies: selected, amount, leverage })
       setStdout((j.stdout||"") + (j.stderr ? "\n"+j.stderr : "") + (client.error ? "\nClient: "+client.error : ""))
@@ -197,24 +198,19 @@ export default function BacktestPage(){
           </div>
 
           <div className="space-y-3 border-t border-line pt-5">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-bold">الاستراتيجيات <span className="font-mono text-xs text-muted">({selected.length})</span></h2>
-              <div className="flex gap-0.5 rounded-[10px] bg-surface2 p-[3px]">
-                <button onClick={()=>{ setSingle(true); setSelected(s=> s.slice(0,1)) }} className={`rounded-lg px-3 py-1 text-xs font-semibold ${single ? "bg-line text-ink" : "text-muted"}`}>واحدة</button>
-                <button onClick={()=>setSingle(false)} className={`rounded-lg px-3 py-1 text-xs font-semibold ${!single ? "bg-line text-ink" : "text-muted"}`}>مجموعة</button>
-              </div>
-            </div>
-            <div className="max-h-[300px] space-y-1.5 overflow-y-auto pl-1">
+            <h2 className="text-sm font-bold">الاستراتيجية</h2>
+            <div className="space-y-1.5">
               {STRATEGIES.map(st=>{
                 const on = selected.includes(st.id)
                 return (
-                  <button key={st.id} onClick={()=>toggle(st.id)} aria-pressed={on}
-                    className={`flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2 text-right transition ${on ? "bg-surface2 ring-1 ring-corona/30" : "border border-line hover:bg-surface2/60"}`}>
+                  <button key={st.id} onClick={()=>toggle(st.id)} aria-pressed={on} disabled={!st.perCoin}
+                    className={`flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2 text-right transition disabled:cursor-default ${on ? "bg-surface2 ring-1 ring-corona/30" : "border border-line"} ${st.perCoin && !on ? "hover:bg-surface2/60" : ""}`}>
                     <div className="min-w-0">
-                      <div className="truncate text-sm font-bold">{st.nameAr}</div>
-                      <div className="font-mono text-[11px] text-muted"><span className={`font-bold ${pfTone(st.pf)}`}>PF {st.pf.toFixed(2)}</span><span className="mx-1.5 text-faint">·</span>WR {st.winRate}%<span className="mx-1.5 text-faint">·</span>{st.setsWon}/8{st.basis && <span className="text-corona"> · يومي</span>}</div>
+                      <div className="flex items-center gap-1.5 truncate text-sm font-bold">{st.nameAr}{st.risk === "high" && <span className="rounded-full bg-loss/10 px-1.5 text-[10px] text-loss">HIGH RISK</span>}</div>
+                      <div className="font-mono text-[11px] text-muted"><span className={`font-bold ${pfTone(st.pf)}`}>PF {st.pf.toFixed(2)}</span><span className="mx-1.5 text-faint">·</span>WR {st.winRate}%<span className="mx-1.5 text-faint">·</span>Sharpe <span className={sharpeTone(st.sharpeOut)}>{st.sharpeOut.toFixed(2)}</span></div>
+                      {!st.perCoin && <div className="mt-0.5 text-[11px] text-faint">بتشتغل على محفظة عملات كاملة — مش على عملة واحدة. <a href={BOT_PAGE} target="_blank" rel="noopener" onClick={e=> e.stopPropagation()} className="text-corona hover:underline">شوفها شغالة</a></div>}
                     </div>
-                    <span className={`grid h-5 w-5 shrink-0 place-items-center ${single ? "rounded-full" : "rounded-md"} border ${on ? "border-corona bg-corona text-void" : "border-faint"}`}>{on && <Check size={13} strokeWidth={3}/>}</span>
+                    {st.perCoin && <span className={`grid h-5 w-5 shrink-0 place-items-center rounded-full border ${on ? "border-corona bg-corona text-void" : "border-faint"}`}>{on && <Check size={13} strokeWidth={3}/>}</span>}
                   </button>
                 )
               })}
@@ -341,7 +337,7 @@ export default function BacktestPage(){
                   <div key={st.id} className="rounded-2xl border border-line bg-surface p-4">
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-sm font-bold">{st.nameAr} <span className="font-display font-medium text-muted">· {st.name}</span></span>
-                      <span className="font-mono text-[11px] text-muted"><span className={`font-bold ${pfTone(st.pf)}`}>PF {st.pf.toFixed(2)}</span> · WR {st.winRate}% · {st.trades} صفقة في الاختبار</span>
+                      <span className="font-mono text-[11px] text-muted"><span className={`font-bold ${pfTone(st.pf)}`}>PF {st.pf.toFixed(2)}</span> · WR {st.winRate}% · {st.trades} صفقة في الاختبار الكامل</span>
                     </div>
                     <p className="mt-2 text-xs leading-6 text-muted">{st.method}</p>
                   </div>

@@ -1,10 +1,14 @@
 "use client"
 import { useEffect, useState } from "react"
 import { apiKlines } from "@/lib/api"
-import { STATS_META, STRATEGIES, consistency, pfTone } from "@/lib/strategies"
+import { BOT_PAGE } from "@/lib/strategies"
+import { useLiveBots } from "@/lib/live-bots"
 
-/** Landing hero card: live BTC price + 48h chart, and the top strategies by the site's own backtest stats. */
+const money = (v: number) => `${v > 0 ? "+" : v < 0 ? "−" : ""}$${Math.abs(v).toFixed(2)}`
+
+/** Landing hero card: live BTC price + 48h chart, and the four paper bots live (bot.da3m.io data). */
 export function HeroPreview(){
+  const { bots, total, loaded } = useLiveBots(30_000)
   const [closes, setCloses] = useState<number[]>([])
   useEffect(()=>{
     const load = ()=> apiKlines("BTC/USDT", "1h", 48).then(k=> Array.isArray(k) && k.length && setCloses(k.map((c:any)=> +c.close))).catch(()=>{})
@@ -16,9 +20,6 @@ export function HeroPreview(){
   const w = 420, h = 120
   const mn = Math.min(...closes), mx = Math.max(...closes)
   const pts = closes.map((v, i)=> `${(i / Math.max(1, closes.length-1) * w).toFixed(1)},${(h - 6 - (v - mn) / ((mx - mn) || 1) * (h - 12)).toFixed(1)}`)
-  // ranked by how many of the 8 data sets they finished positive (whole period + last 40%), not win rate
-  const top = [...STRATEGIES].sort((a,b)=> consistency(b) - consistency(a) || b.pnl - a.pnl).slice(0, 3)
-  const total = STATS_META.sets * 2
 
   return (
     <div className="relative rounded-3xl border border-line bg-surface p-5 shadow-[0_30px_80px_-30px_rgba(245,184,65,0.25)]">
@@ -45,19 +46,23 @@ export function HeroPreview(){
       </svg>
       <div className="mt-4 border-t border-line pt-4">
         <div className="mb-3 flex items-center justify-between text-xs">
-          <span className="font-bold">الأثبت في الاختبار</span>
-          <span className="font-mono text-faint" dir="ltr">{STATS_META.sets} SETS · 1H/4H</span>
+          <span className="font-bold">البوتات شغالة دلوقتي</span>
+          <span className="flex items-center gap-1.5 font-mono text-faint" dir="ltr"><i className="h-1.5 w-1.5 animate-pulse rounded-full bg-profit"/> {loaded ? `${total.running}/4 LIVE · PAPER` : "…"}</span>
         </div>
-        <div className="space-y-2.5">
-          {top.map(s=>(
-            <div key={s.id} className="flex items-center gap-3">
-              <span className="w-28 shrink-0 truncate text-sm font-semibold">{s.nameAr}</span>
-              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-line" dir="ltr"><div className="h-full rounded-full bg-gradient-to-r from-umbra to-corona" style={{width: `${consistency(s) / total * 100}%`}}/></div>
-              <span className={`w-16 shrink-0 whitespace-nowrap text-left font-mono text-xs font-bold ${pfTone(s.pf)}`} dir="ltr">PF {s.pf.toFixed(2)}</span>
-            </div>
-          ))}
+        <div className="space-y-2">
+          {(loaded ? bots : []).map(b=>{
+            const t = b.realized + b.unrealized
+            return (
+              <div key={b.strategy.id} className="flex items-center gap-3">
+                <span className="min-w-0 flex-1 truncate text-sm font-semibold">{b.strategy.nameAr}{b.strategy.risk === "high" && <span className="mr-1.5 text-[10px] font-bold text-loss">HIGH RISK</span>}</span>
+                <span className="shrink-0 font-mono text-[11px] text-faint">{b.open} مفتوحة</span>
+                <span className={`w-20 shrink-0 text-left font-mono text-xs font-bold ${t > 0 ? "text-profit" : t < 0 ? "text-loss" : "text-muted"}`} dir="ltr">{money(t)}</span>
+              </div>
+            )
+          })}
+          {!loaded && <div className="py-2 text-center text-xs text-faint">بيحمّل البوتات…</div>}
         </div>
-        <p className="mt-3 text-[11px] leading-5 text-faint">الشريط = عدد المرات اللي خلصت فيها كسبانة من {total} (الفترة كلها + آخر 40%). نتايج سابقة، مش ضمان.</p>
+        <p className="mt-3 text-[11px] leading-5 text-faint">فلوس وهمية، بتتحدث لوحدها. <a href={BOT_PAGE} target="_blank" rel="noopener" className="text-corona hover:underline">كل الصفقات مباشر ←</a></p>
       </div>
     </div>
   )

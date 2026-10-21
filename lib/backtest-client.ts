@@ -99,7 +99,10 @@ export async function runBacktestClient(opts: {
   const candles = await fetchCandles(opts.symbol, opts.timeframe, fromMs - warm * tf, toMs)
   const inRange = candles.filter(c => c.ts >= fromMs)
   if(!candles.length) return { ok:false, error: "مقدرناش نجيب الشموع من Bybit ولا Binance — جرّب تاني بعد شوية" }
-  if(inRange.length < 20) return { ok:false, error: `الفترة قصيرة: ${inRange.length} شمعة بس — اختار مدة أطول أو فريم أصغر` }
+  // the daily trend fetches its own warm-up history, so a week of daily candles is enough to run it
+  const minCandles = trend ? 3 : 20
+  // `final`: the server fallback would hit the same limit — show this message instead of trying it
+  if(inRange.length < minCandles) return { ok:false, final: true, error: `الفترة قصيرة: ${inRange.length} شمعة بس — اختار مدة أطول` }
 
   const funding = trend ? await fetchFundingDaily(opts.symbol, candles) : undefined
   const trades = await runInWorker(candles, (trend ? [TREND] : wave ? [WAVE] : opts.strategies) as Strategy[], opts.amount, opts.leverage, fromMs, opts.timeframe, funding)

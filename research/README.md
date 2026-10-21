@@ -285,3 +285,22 @@ too short — a bot is often cut just before it recovers. With the HIGH RISK rat
 
 **After 15 ideas:** the three core paper bots at equal weights (+4,285, max DD 355, Sharpe 2.09 after 2024) remain
 the best combination tested; everything outside trend-following and relative strength failed on daily candles.
+
+### 16–18. Hourly: intraday momentum, BTC lead-lag, funding-time effect — not adopted
+
+`research/hourly_data.py` (hourly candles for the 106 coins ever in the top 10 — Bybit, Binance for the rest — and
+exact-time funding) and `research/hourly_study.py`. Daily membership from the previous day's top 10.
+
+| idea | variants positive | in-sample pick, Sharpe after 2024 |
+|---|---|---|
+| intraday momentum (Gao et al. 2018; Shen, Urquhart & Wang 2022) | 4 / 24 | −0.72 (and $476 of fees) |
+| BTC → altcoin lead-lag | 1 / 8 | −0.56 |
+| funding-time effect | 0 / 9 | −0.95 |
+
+None improved the three core bots. On hourly candles the extra trades' costs eat any small edge.
+
+## The site now shows only the four paper bots
+
+`research/bots_stats.py` writes `lib/bot-stats.json` (the numbers the site shows); the dashboard's live section and
+the home page read the bots' files on https://bot.da3m.io (CORS allowed in `deploy/vps/nginx-bot.da3m.io.conf`).
+The old score strategies, Wave Flats and their numbers (`lib/strategy-stats.json`) are no longer shown.

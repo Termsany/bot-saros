@@ -6,17 +6,17 @@ import { CandlestickChart, House, KeyRound, Layers, LayoutDashboard, Sparkles } 
 const NAV = [
   { href: "/dashboard", label: "لوحة التحكم", icon: LayoutDashboard },
   { href: "/backtest", label: "Backtest", icon: CandlestickChart },
-  { href: "/dashboard#strategies", label: "الاستراتيجيات", icon: Layers },
+  { href: "/dashboard#live-bots", label: "البوتات مباشر", icon: Layers },
   { href: "/llm-lab", label: "مختبر AI", icon: Sparkles },
   { href: "/settings/keys", label: "مفاتيح المنصات", icon: KeyRound },
   { href: "/", label: "الرئيسية", icon: House },
 ]
 
 const PLAN_COPY: Record<string, string> = {
-  free: "استراتيجيتان · Backtest 7 أيام",
-  starter: "6 استراتيجيات · Backtest 30 يوم",
-  pro: "7 استراتيجيات · Backtest 90 يوم · Futures",
-  elite: "17 استراتيجية · Backtest بلا حدود",
+  free: "بوت الترند اليومي · Backtest 7 أيام",
+  starter: "بوتين: ترند + مومنتم · Backtest 30 يوم",
+  pro: "3 بوتات · Backtest 90 يوم · Futures",
+  elite: "الـ 4 بوتات · Backtest بلا حدود",
 }
 
 /** App layout for signed-in pages: RTL sidebar (right) + content + footer. */
