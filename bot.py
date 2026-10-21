@@ -142,9 +142,10 @@ def write_public_status(state, analyses, symbols_allowed):
         margin = pos["entry"] * pos["qty"] / max(1, int(pos.get("leverage", lev)))
         positions.append({"symbol": sym.split(":")[0], "side": pos.get("side", "long"), "entry": pos["entry"], "price": price,
                           "qty": pos["qty"], "margin": round(margin, 2), "sl": pos.get("sl"), "pnl": round(pnl, 4),
-                          "pnl_pct": round(pnl / margin * 100, 2) if margin else 0, "opened": pos.get("time")})
-    history = [{"symbol": h["symbol"].split(":")[0], "entry": h.get("entry"), "exit": h.get("exit"), "pnl": round(float(h.get("pnl", 0)), 4),
-                "reason": h.get("reason", ""), "time": h.get("time")} for h in state.get("history", [])[-200:]]
+                          "pnl_pct": round(pnl / margin * 100, 2) if margin else 0, "opened": pos.get("time"), "rank": pos.get("rank")})
+    history = [{"symbol": h["symbol"].split(":")[0], "side": h.get("side", "long"), "entry": h.get("entry"), "exit": h.get("exit"), "qty": h.get("qty"),
+                "pnl": round(float(h.get("pnl", 0)), 4), "reason": h.get("reason", ""), "time": h.get("time"),
+                "opened": h.get("opened"), "rank": h.get("rank")} for h in state.get("history", [])[-200:]]
     signals = [{"symbol": sym.split(":")[0], "price": a.get("price"), "on": bool((a.get("trend") or {}).get("on")),
                 "in_list": bool(a.get("in_universe", True)), "size": round((a.get("trend") or {}).get("size", 0) * 100)}
                for sym, a in sorted(analyses.items())]
@@ -190,7 +191,7 @@ def _listing_close(ex, state, sym, price, reason):
     except Exception as e: log(f"funding {sym}: {e}")
     pnl = (pos["entry"] - price) * q - (pos["entry"] * q + price * q) * fee + funding
     margin = pos["entry"] * q / max(1, int(pos.get("leverage", 2)))
-    state["history"].append({"symbol": sym, "side": "short", "entry": pos["entry"], "exit": price, "qty": q, "pnl": pnl,
+    state["history"].append({"symbol": sym, "side": "short", "entry": pos["entry"], "exit": price, "qty": q, "pnl": pnl, "opened": pos["time"],
                              "pnl_pct": pnl / margin * 100 if margin else 0, "funding": funding, "reason": reason,
                              "time": datetime.now(timezone.utc).isoformat(), "type": "paper"})
     st = state["stats"]; st["trades"] += 1; st["pnl"] += pnl; st["wins" if pnl > 0 else "losses"] += 1
@@ -254,7 +255,7 @@ def write_listing_status(state, prices, upcoming):
             "positions": sorted(pos, key=lambda x: x["opened"]),
             "upcoming": [{"symbol": s.split(":")[0], "days_left": round(LISTING["skip_days"] - age, 1)} for s, _, age in upcoming[:12]],
             "history": [{"symbol": h["symbol"].split(":")[0], "entry": h["entry"], "exit": h["exit"], "pnl": round(h["pnl"], 4),
-                         "reason": h.get("reason", ""), "time": h.get("time")} for h in state.get("history", [])[-200:]][::-1]}
+                         "reason": h.get("reason", ""), "time": h.get("time"), "opened": h.get("opened")} for h in state.get("history", [])[-200:]][::-1]}
     try:
         d = Path(out_dir); tmp = d / "listing.json.tmp"
         tmp.write_text(json.dumps(data, ensure_ascii=False, default=str), encoding="utf-8"); tmp.replace(d / "listing.json")
@@ -295,6 +296,7 @@ def _paper_close(ex, state, sym, price, reason):
     pnl = sg * (price - pos["entry"]) * q - (pos["entry"] * q + price * q) * fee - sg * funding
     margin = pos["entry"] * q / max(1, int(pos.get("leverage", 2)))
     state["history"].append({"symbol": sym, "side": pos["side"], "entry": pos["entry"], "exit": price, "qty": q, "pnl": pnl,
+                             "opened": pos["time"], "ret": round(float(pos.get("ret", 0)) * 100, 1),
                              "pnl_pct": pnl / margin * 100 if margin else 0, "funding": -sg * funding, "reason": reason,
                              "time": datetime.now(timezone.utc).isoformat(), "type": "paper"})
     st = state["stats"]; st["trades"] += 1; st["pnl"] += pnl; st["wins" if pnl > 0 else "losses"] += 1
@@ -365,7 +367,8 @@ def write_momentum_status(state, prices):
                       "realized": round(float(st.get("pnl", 0)), 4), "unrealized": round(sum(x["pnl"] for x in pos), 4), "open": len(pos)},
             "positions": sorted(pos, key=lambda x: (x["side"], -x["ret"])),
             "history": [{"symbol": h["symbol"].split(":")[0], "side": h.get("side"), "entry": h["entry"], "exit": h["exit"], "pnl": round(h["pnl"], 4),
-                         "reason": h.get("reason", ""), "time": h.get("time")} for h in state.get("history", [])[-300:]][::-1]}
+                         "reason": h.get("reason", ""), "time": h.get("time"), "opened": h.get("opened"), "ret": h.get("ret")}
+                        for h in state.get("history", [])[-300:]][::-1]}
     try:
         d = Path(out_dir); tmp = d / "momentum.json.tmp"
         tmp.write_text(json.dumps(data, ensure_ascii=False, default=str), encoding="utf-8"); tmp.replace(d / "momentum.json")
@@ -384,6 +387,8 @@ def _daily_closed(ex, sym, cache):
     if sym not in cache: cache[sym] = ex.fetch_ohlcv(sym, "1d", limit=200)[:-1]   # closed candles only
     return cache[sym]
 
+_ratio_rank = {}
+
 def ratio_members(ex, cache):
     syms = [x for x, _, _ in listing_markets(ex)]
     tick = ex.fetch_tickers()
@@ -394,7 +399,9 @@ def ratio_members(ex, cache):
             k = _daily_closed(ex, sym, cache)
             if len(k) >= RATIO["min_days"]: rows.append((sum(r[4] * r[5] for r in k[-30:]) / 30, sym))
         except Exception as e: log(f"ratio {sym}: {e}")
-    return sorted(sym for _, sym in sorted(rows, reverse=True)[:RATIO["top"]])
+    top = [sym for _, sym in sorted(rows, reverse=True)[:RATIO["top"]]]
+    _ratio_rank.clear(); _ratio_rank.update({sym: i + 1 for i, sym in enumerate(top)})      # 1 = most volume
+    return sorted(top)
 
 def ratio_signal(ex, a, b, cache):
     ka, kb = {r[0]: r[4] for r in _daily_closed(ex, a, cache)}, {r[0]: r[4] for r in _daily_closed(ex, b, cache)}
@@ -414,7 +421,7 @@ def _ratio_close_pair(ex, state, key, prices, reason, fcache):
             except Exception as err: log(f"funding {sym}: {err}"); fcache[(sym, since)] = 0.0
         pnl += sg * (x - e) * q - (e * q + x * q) * fee - sg * fcache[(sym, since)] * q * e
     st = state["stats"]; st["trades"] += 1; st["pnl"] += pnl; st["wins" if pnl > 0 else "losses"] += 1
-    state["history"].append({"symbol": key, "long": pr["legs"][0]["sym"], "short": pr["legs"][1]["sym"], "pnl": pnl, "reason": reason,
+    state["history"].append({"symbol": key, "long": pr["legs"][0]["sym"], "short": pr["legs"][1]["sym"], "pnl": pnl, "reason": reason, "ranks": pr.get("ranks"),
                              "opened": pr["time"], "time": datetime.now(timezone.utc).isoformat(), "type": "paper"})
     return pnl
 
@@ -428,6 +435,7 @@ def run_once_ratio(ex):
             members = ratio_members(ex, cache)
             if len(members) == R["top"]:
                 state["ratio_members"], state["ratio_members_at"] = members, today.isoformat()
+                state["ratio_rank"] = dict(_ratio_rank)
                 log(f"🔝 ratio: أعلى {R['top']}: {', '.join(m.split('/')[0] for m in members)}")
         members = state.get("ratio_members") or []
         wanted = {f"{a}|{b}" for i, a in enumerate(members) for b in members[i + 1:]}
@@ -448,7 +456,8 @@ def run_once_ratio(ex):
                 for sym, side in ((a, "long"), (b, "short")) if sig == 1 else ((b, "long"), (a, "short")):
                     x = prices.get(sym) or float(ex.fetch_ticker(sym)["last"]); prices[sym] = x
                     legs.append({"sym": sym, "side": side, "entry": x, "qty": position_size(x) * lev / x})
-                state["pairs"][key] = {"sign": sig, "time": now.isoformat(), "legs": legs}
+                rk = state.get("ratio_rank") or {}
+                state["pairs"][key] = {"sign": sig, "time": now.isoformat(), "legs": legs, "ranks": [rk.get(a), rk.get(b)]}
         state["ratio_day"] = today.isoformat(); save_state(state)
         log(f"🔄 ratio: {len(state['pairs'])} زوج مفتوح | قفل اليوم {closed:+.4f} | قلب {flips}")
         if closed or flips:
@@ -472,17 +481,18 @@ def write_ratio_status(state, prices):
             legs.append({"symbol": leg["sym"].split(":")[0], "id": leg["sym"].split("/")[0] + "USDT", "side": leg["side"],
                          "entry": leg["entry"], "price": x, "qty": leg["qty"], "pnl": round(lp, 4)})
         margin = sum(l["entry"] * l["qty"] for l in legs) / max(1, int(CONFIG.get("leverage", 2)))
-        pairs.append({"pair": key, "long": legs[0], "short": legs[1], "pnl": round(pnl, 4), "margin": round(margin, 2), "opened": pr["time"]})
+        pairs.append({"pair": key, "long": legs[0], "short": legs[1], "pnl": round(pnl, 4), "margin": round(margin, 2), "opened": pr["time"],
+                      "ranks": pr.get("ranks")})
     st = state.get("stats", {}); at = state.get("ratio_members_at")
     data = {"updated": datetime.now(timezone.utc).isoformat(), "risk": "high", "mode": "paper" if CONFIG["paper_trading"] else "live",
             "rules": RATIO, "leverage": int(CONFIG.get("leverage", 2)), "margin": CONFIG.get("trade_amount_usdt"), "started": CONFIG.get("started_at"),
-            "members": [m.split("/")[0] for m in state.get("ratio_members", [])],
+            "members": [m.split("/")[0] for m in sorted(state.get("ratio_members", []), key=lambda m: (state.get("ratio_rank") or {}).get(m, 99))],
             "next_members": (datetime.fromisoformat(at) + pd.Timedelta(days=RATIO["every_days"])).isoformat() if at else None,
             "stats": {"closed": st.get("trades", 0), "wins": st.get("wins", 0), "losses": st.get("losses", 0),
                       "realized": round(float(st.get("pnl", 0)), 4), "unrealized": round(sum(p["pnl"] for p in pairs), 4), "open": len(pairs)},
             "pairs": sorted(pairs, key=lambda p: p["pair"]),
             "history": [{"pair": f"{h['long'].split('/')[0]} / {h['short'].split('/')[0]}", "pnl": round(h["pnl"], 4), "reason": h.get("reason", ""),
-                         "time": h.get("time")} for h in state.get("history", [])[-300:]][::-1]}
+                         "time": h.get("time"), "opened": h.get("opened"), "ranks": h.get("ranks")} for h in state.get("history", [])[-300:]][::-1]}
     try:
         d = Path(out_dir); tmp = d / "ratio.json.tmp"
         tmp.write_text(json.dumps(data, ensure_ascii=False, default=str), encoding="utf-8"); tmp.replace(d / "ratio.json")
@@ -915,7 +925,7 @@ def check_sl_tp(state, prices, ex=None):
                 pnl=(price-entry)*qty if pos.get("side","long")=="long" else (entry-price)*qty; pnl_pct=(pnl/(entry*qty)*100) if entry*qty else 0
                 log(f"🔒 اغلاق {symbol} {reason} @ {price:.4f} PnL {pnl:+.4f} ({pnl_pct:+.2f}%)")
                 notify(f"🔒 قفل {symbol} — {reason}\nدخول {entry:.6g} → خروج {price:.6g}\nPnL {pnl:+.2f}$ (Paper)")
-                state["history"].append({"symbol":symbol,"side":pos.get("side","long"),"entry":entry,"exit":price,"qty":qty,"pnl":pnl,"pnl_pct":pnl_pct,"reason":reason,"time":datetime.now(timezone.utc).isoformat(),"type":"paper"})
+                state["history"].append({"symbol":symbol,"side":pos.get("side","long"),"entry":entry,"exit":price,"qty":qty,"pnl":pnl,"pnl_pct":pnl_pct,"reason":reason,"time":datetime.now(timezone.utc).isoformat(),"type":"paper","opened":pos.get("time"),"rank":pos.get("rank")})
             else:
                 close_side="close_long" if pos.get("side","long")=="long" else "close_short"; _lev=int(CONFIG.get("leverage",5)) if CONFIG.get("market","future")=="future" else 1; res=place_order(ex or get_exchange(auth=True)[0],symbol,close_side,qty*price/_lev,price); pnl=(res["price"]-entry)*res["qty"] if pos.get("side","long")=="long" else (entry-res["price"])*res["qty"]
                 log(f"🔒 بيع حقيقي {symbol} @ {res['price']:.4f} PnL {pnl:+.4f}")
@@ -967,7 +977,7 @@ def try_enter_trend(symbol, analysis, state, ex):
         pnl=(price-pos["entry"])*pos["qty"]
         log(f"📉 اغلاق {symbol} — الترند وقف @ {price:.6g} PnL {pnl:+.4f}")
         notify(f"📉 قفل {symbol} — الترند وقف\nدخول {pos['entry']:.6g} → خروج {price:.6g}\nPnL {pnl:+.2f}$ (Paper)")
-        state["history"].append({"symbol":symbol,"side":"long","entry":pos["entry"],"exit":price,"qty":pos["qty"],"pnl":pnl,"pnl_pct":pnl/(pos["entry"]*pos["qty"])*100,"reason":"الترند وقف","time":datetime.now(timezone.utc).isoformat(),"type":"paper"})
+        state["history"].append({"symbol":symbol,"side":"long","entry":pos["entry"],"exit":price,"qty":pos["qty"],"pnl":pnl,"pnl_pct":pnl/(pos["entry"]*pos["qty"])*100,"reason":"الترند وقف","time":datetime.now(timezone.utc).isoformat(),"type":"paper","opened":pos.get("time"),"rank":pos.get("rank")})
         state["stats"]["trades"]+=1; state["stats"]["pnl"]+=float(pnl); state["stats"]["wins" if pnl>0 else "losses"]+=1
         state["positions"].pop(symbol,None); state["last_trade"][symbol]=datetime.now(timezone.utc).isoformat(); save_state(state)
         return
@@ -983,7 +993,7 @@ def try_enter_trend(symbol, analysis, state, ex):
         res=place_order(ex,symbol,"long",position_size(price, ex)*sig["size"],price)
         sl=res["price"]*(1-stt.STOP_SHARE/lev)
         state["positions"][symbol]={"side":"long","entry":res["price"],"qty":res["qty"],"cost":res["cost"],"notional":res.get("notional"),"leverage":res.get("leverage",lev),
-            "time":datetime.now(timezone.utc).isoformat(),"sl":sl,"tp":None,"breakeven":False,"trend":True}
+            "time":datetime.now(timezone.utc).isoformat(),"sl":sl,"tp":None,"breakeven":False,"trend":True,"rank":analysis.get("rank")}
         state["last_trade"][symbol]=datetime.now(timezone.utc).isoformat(); save_state(state)
         log(f"✅ 🟢 لونج وهمي {symbol} ترند يومي x{lev} @ {res['price']:.6g} حجم {sig['size']*100:.0f}% وقف حماية {sl:.6g}")
         notify(f"🟢 لونج {symbol} — ترند يومي x{lev} (Paper)\nدخول {res['price']:.6g} · حجم {sig['size']*100:.0f}% من ${position_size(price, ex)*lev:.0f}\nوقف حماية {sl:.6g} · الخروج لما الترند يقف")
@@ -1110,6 +1120,7 @@ def run_once():
         try:
             df=fetch_ohlcv(sym, CONFIG["timeframe"], limit=candles_needed(), ex=ex)
             a=analyze(sym, df); a["in_universe"]=allowed is None or sym in allowed; analyses[sym]=a; prices[sym]=a["price"]
+            if sym in _universe["symbols"]: a["rank"]=_universe["symbols"].index(sym)+1   # 1 = most volume
             bd=" | ".join(f"{k} {v[0]:+.2f}" for k,v in a["breakdown"].items())
             # اختصر SHIB/PEPE لعرض أوضح
             log(f"{sym:10s} @ {a['price']:.6g} سكور {a['total']:+.3f} {a['decision']:8s} | {bd} | SL {a['sl']:.4g} TP {a['tp']:.4g}" if a.get('tp') else f"{sym:10s} @ {a['price']:.6g} {a['decision']:8s} | {bd} | وقف حماية {a['sl']:.4g}")

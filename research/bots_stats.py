@@ -70,6 +70,47 @@ def min_capital(trades, max_dd, min_notional, legs_per_trade=1):
 
 
 
+def momentum_positions_n(data, rk, L, n):
+    """pump_momentum_study.momentum_positions with n coins per side instead of 5."""
+    closes = pd.DataFrame({s: df.set_index(pd.to_datetime(df.ts, unit="ms")).close for s, df in data.items()})
+    past = closes / closes.shift(7 * L) - 1
+    pos = []
+    for d in closes.index[7 * L + 30::7]:
+        if d not in rk.index: continue
+        r = rk.loc[d]; p = past.loc[d, r[r <= 50].index].dropna()
+        if len(p) < 20: continue
+        p = p.sort_values()
+        pos += [(s, d, "short") for s in p.index[:n]] + [(s, d, "long") for s in p.index[-n:]]
+    return pos
+
+
+# Sizes a client can pick from (research for the capital-based setup on the site): fewer coins / positions.
+PROFILES = {
+    "trend_daily":   [("small", "أعلى 3 عملات", 3), ("medium", "أعلى 5 عملات", 5), ("full", "أعلى 10 عملات", 10)],
+    "momentum_ls":   [("small", "أقوى 2 + أضعف 2", 2), ("medium", "أقوى 3 + أضعف 3", 3), ("full", "أقوى 5 + أضعف 5", 5)],
+    "listing_short": [("small", "لحد 3 صفقات", 3), ("medium", "لحد 5 صفقات", 5), ("full", "لحد 10 صفقات", 10)],
+    "ratio_trend":   [("small", "أعلى 4 عملات (6 أزواج)", 4), ("medium", "أعلى 5 عملات (10 أزواج)", 5), ("full", "أعلى 7 عملات (21 زوج)", 7)],
+}
+
+
+def profile_trades(bot, n, data, fund, ever10, rk100, new):
+    if bot == "trend_daily":
+        rkn = ranks(data); out = []
+        for s in ever10:
+            df = data[s]; allow = list((rkn[s].reindex(pd.to_datetime(df.ts, unit="ms")) <= n).fillna(False))
+            if not any(allow): continue
+            out += [dict(t, symbol=s) for t in st.run_trend_daily(list(df.open), list(df.high), list(df.low), list(df.close), list(df.ts),
+                                                                  [fund[s].get(int(t), 0.0) for t in df.ts], AMOUNT, LEV, FEE, 0, allow)]
+        return out
+    if bot == "momentum_ls":
+        return [dict(t, symbol=s) for s, d, side in momentum_positions_n(data, rk100, 2, n) if (t := pm.momentum_trade(data[s], fund[s], d, side))]
+    if bot == "listing_short":
+        lst = []
+        for s in new: lst += [dict(t, symbol=s) for t in ss.run_listing_short(data[s], [fund[s].get(int(t), 0.0) for t in data[s].ts], 30, 90, 0.4)]
+        return pm.cap(lst, n)
+    return rf.dynamic_trades(data, fund, pm.rank_table(data, 120), n, 50)[0]
+
+
 def trades_at(lev, data, fund, rk10, ever10, rk100, new):
     """The trend, momentum and new-listing trades re-simulated at leverage `lev`: the protective stop moves to
     0.8 / leverage below (above) entry so it closes before the margin is liquidated (40% at x2, 16% at x5)."""
@@ -115,6 +156,16 @@ def main():
         tested = int(math.ceil((AMOUNT * mx + out[k]["maxDD"]) / 10) * 10)
         out[k].update({"minMargin": m, "minCapital": cap, "maxOpen": mx, "testedCapital": tested})
         print(f"  {k:<14} max open {mx:>3}  min margin/trade ${m:>6}  min capital ${cap:>6}  (as tested at $20: ${tested})")
+    # sizes for the capital-based setup: each one simulated on its own (fewer coins changes the strategy)
+    for k, plist in PROFILES.items():
+        out[k]["profiles"] = []
+        for pid, label, n in plist:
+            tr = bots[k] if pid == "full" else profile_trades(k, n, data, fund, ever10, rk100, new)
+            d = ss.summary(tr, f"{k} {pid}")["_daily"]; st_ = stats(tr, d)
+            m, cap, mx = min_capital(tr, st_["maxDD"], mn, 2 if k == "ratio_trend" else 1)
+            out[k]["profiles"].append({"id": pid, "label": label, "n": n, **{x: st_[x] for x in ("trades", "winRate", "pf", "pnl", "maxDD", "sharpeIn", "sharpeOut", "pnlOut")},
+                                       "minMargin": m, "minCapital": cap, "maxOpen": mx})
+            print(f"  {k:<14} {pid:<6} {label:<24} trades {st_['trades']:>5} pnl {st_['pnl']:>8} DD {st_['maxDD']:>7} sharpe {st_['sharpeIn']:>5}/{st_['sharpeOut']:>5}  open {mx:>3}  min ${cap}")
     core = pd.DataFrame({k: dailies[k] for k in ("trend_daily", "momentum_ls", "listing_short")}).fillna(0).sum(axis=1)
     allf = pd.DataFrame(dailies).fillna(0).sum(axis=1)
     combo = {"core": stats([{"pnl": x} for x in core.values if x], core), "all": stats([{"pnl": x} for x in allf.values if x], allf)}

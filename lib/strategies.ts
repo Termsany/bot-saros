@@ -6,7 +6,9 @@ export type BotStats = { trades: number; winRate: number; pf: number; pnl: numbe
   pnlOut: number; years: Record<string, number>; equity: [string, number][]
   /** smallest capital that runs it as tested (x2) on Binance: margin per trade large enough for every order to meet the
    *  exchange minimum ($5, ETH $20, BTC $50) × most positions open at once + worst drawdown at that size */
-  minCapital: number; minMargin: number; maxOpen: number; testedCapital: number }
+  minCapital: number; minMargin: number; maxOpen: number; testedCapital: number
+  /** smaller tested sizes (fewer coins / positions) for the capital-based setup — see lib/personal.ts */
+  profiles?: import("./personal").Profile[] }
 /** `live` = the file the bot writes on the VPS (https://bot.da3m.io/<live>.json). `perCoin` = can be backtested on one coin. */
 export type Strategy = { id: string; name: string; nameAr: string; desc: string; method: string; tier: "free"|"starter"|"pro"|"elite"; icon: string
   risk: "normal" | "high"; live: string; perCoin: boolean; sides: string } & BotStats

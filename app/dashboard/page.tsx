@@ -7,6 +7,7 @@ import { Kpi } from "@/components/Kpi"
 import { Bell, RefreshCw } from "lucide-react"
 import { StrategyCards } from "@/components/StrategyCards"
 import { LiveBots } from "@/components/LiveBots"
+import { MyAccount } from "@/components/MyAccount"
 import { PAIRS, NAMES } from "@/lib/pairs"
 import { STRATEGIES } from "@/lib/strategies"
 import { apiKlines } from "@/lib/api"
@@ -226,6 +227,8 @@ export default function Dashboard(){
             <p className="mt-3 text-[11px] leading-5 text-faint">الأرقام من اختبار على كل عملات Binance من 2019 (والمشطوبة كمان)، هامش $20 × 2، شامل الرسوم والـ funding. نتايج سابقة، مش ضمان.</p>
           </div>
         </section>
+
+        {tierReady && <MyAccount tier={tier} bots={bots}/>}
 
         <LiveBots bots={bots} loaded={loaded}/>
 

@@ -8,7 +8,7 @@ export type LivePosition = { label: string; side: "long" | "short" | "pair"; ent
 export type LiveBot = {
   strategy: Strategy; ok: boolean; updated?: string; fresh: boolean
   realized: number; unrealized: number; open: number; closed: number; wins: number; losses: number
-  positions: LivePosition[]; note?: string
+  positions: LivePosition[]; note?: string; raw?: any
 }
 
 function normalise(s: Strategy, d: any): LiveBot {
@@ -27,7 +27,7 @@ function normalise(s: Strategy, d: any): LiveBot {
     if (s.live === "momentum" && d.next_rebalance) note = `التبديل الجاي: ${new Date(d.next_rebalance).toLocaleDateString("ar-EG", { weekday: "long", day: "numeric", month: "short", timeZone: "UTC" })}`
   }
   return { strategy: s, ok: true, updated: d.updated, fresh, realized: +st.realized || 0, unrealized: +st.unrealized || 0,
-    open: positions.length, closed: st.closed || 0, wins: st.wins || 0, losses: st.losses || 0, positions, note }
+    open: positions.length, closed: st.closed || 0, wins: st.wins || 0, losses: st.losses || 0, positions, note, raw: d }
 }
 
 export function useLiveBots(intervalMs = 15_000){

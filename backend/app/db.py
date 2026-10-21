@@ -44,6 +44,15 @@ class BacktestRun(Base):
     stats = Column(Text)  # json
     created_at = Column(String)
 
+class UserSetting(Base):
+    """Per-user setup for the personal paper portfolio: capital and the bot it follows (dashboard)."""
+    __tablename__ = "user_settings"
+    user_id = Column(String, primary_key=True)
+    capital = Column(Float)
+    strategy = Column(String)
+    started_at = Column(String)   # reset whenever capital or strategy changes — the portfolio counts from here
+    updated_at = Column(String)
+
 engine = create_async_engine(DATABASE_URL, echo=False)
 async_session = async_sessionmaker(engine, expire_on_commit=False)
 

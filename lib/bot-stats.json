@@ -362,7 +362,57 @@
    "minMargin": 32.61,
    "minCapital": 1170,
    "maxOpen": 20,
-   "testedCapital": 720
+   "testedCapital": 720,
+   "profiles": [
+    {
+     "id": "small",
+     "label": "أعلى 3 عملات",
+     "n": 3,
+     "trades": 250,
+     "winRate": 35.6,
+     "pf": 2.69,
+     "pnl": 512.73,
+     "maxDD": 69.11,
+     "sharpeIn": 0.51,
+     "sharpeOut": 1.05,
+     "pnlOut": 321.52,
+     "minMargin": 27.5,
+     "minCapital": 270,
+     "maxOpen": 6
+    },
+    {
+     "id": "medium",
+     "label": "أعلى 5 عملات",
+     "n": 5,
+     "trades": 466,
+     "winRate": 33.9,
+     "pf": 1.89,
+     "pnl": 591.09,
+     "maxDD": 148.86,
+     "sharpeIn": 0.52,
+     "sharpeOut": 1.01,
+     "pnlOut": 365.36,
+     "minMargin": 47.48,
+     "minCapital": 790,
+     "maxOpen": 9
+    },
+    {
+     "id": "full",
+     "label": "أعلى 10 عملات",
+     "n": 10,
+     "trades": 911,
+     "winRate": 30.4,
+     "pf": 2.2,
+     "pnl": 1675.26,
+     "maxDD": 311.89,
+     "sharpeIn": 0.85,
+     "sharpeOut": 1.33,
+     "pnlOut": 727.67,
+     "minMargin": 32.61,
+     "minCapital": 1170,
+     "maxOpen": 20
+    }
+   ]
   },
   "momentum_ls": {
    "trades": 3400,
@@ -715,7 +765,57 @@
    "minMargin": 27.5,
    "minCapital": 610,
    "maxOpen": 10,
-   "testedCapital": 450
+   "testedCapital": 450,
+   "profiles": [
+    {
+     "id": "small",
+     "label": "أقوى 2 + أضعف 2",
+     "n": 2,
+     "trades": 1360,
+     "winRate": 48.5,
+     "pf": 1.15,
+     "pnl": 677.79,
+     "maxDD": 232.01,
+     "sharpeIn": 0.17,
+     "sharpeOut": 0.97,
+     "pnlOut": 587.71,
+     "minMargin": 11.0,
+     "minCapital": 180,
+     "maxOpen": 4
+    },
+    {
+     "id": "medium",
+     "label": "أقوى 3 + أضعف 3",
+     "n": 3,
+     "trades": 2040,
+     "winRate": 48.6,
+     "pf": 1.18,
+     "pnl": 1161.2,
+     "maxDD": 153.79,
+     "sharpeIn": 0.48,
+     "sharpeOut": 1.19,
+     "pnlOut": 826.82,
+     "minMargin": 11.0,
+     "minCapital": 160,
+     "maxOpen": 6
+    },
+    {
+     "id": "full",
+     "label": "أقوى 5 + أضعف 5",
+     "n": 5,
+     "trades": 3400,
+     "winRate": 48.7,
+     "pf": 1.19,
+     "pnl": 1880.6,
+     "maxDD": 242.45,
+     "sharpeIn": 0.68,
+     "sharpeOut": 1.32,
+     "pnlOut": 1221.08,
+     "minMargin": 27.5,
+     "minCapital": 610,
+     "maxOpen": 10
+    }
+   ]
   },
   "listing_short": {
    "trades": 250,
@@ -1068,7 +1168,57 @@
    "minMargin": 2.75,
    "minCapital": 80,
    "maxOpen": 10,
-   "testedCapital": 560
+   "testedCapital": 560,
+   "profiles": [
+    {
+     "id": "small",
+     "label": "لحد 3 صفقات",
+     "n": 3,
+     "trades": 90,
+     "winRate": 52.2,
+     "pf": 1.23,
+     "pnl": 147.95,
+     "maxDD": 226.12,
+     "sharpeIn": 0.28,
+     "sharpeOut": 0.4,
+     "pnlOut": 85.53,
+     "minMargin": 2.75,
+     "minCapital": 40,
+     "maxOpen": 3
+    },
+    {
+     "id": "medium",
+     "label": "لحد 5 صفقات",
+     "n": 5,
+     "trades": 144,
+     "winRate": 52.8,
+     "pf": 1.35,
+     "pnl": 361.06,
+     "maxDD": 298.51,
+     "sharpeIn": 0.29,
+     "sharpeOut": 0.98,
+     "pnlOut": 274.16,
+     "minMargin": 2.75,
+     "minCapital": 60,
+     "maxOpen": 5
+    },
+    {
+     "id": "full",
+     "label": "لحد 10 صفقات",
+     "n": 10,
+     "trades": 250,
+     "winRate": 52.8,
+     "pf": 1.42,
+     "pnl": 728.88,
+     "maxDD": 354.5,
+     "sharpeIn": 0.61,
+     "sharpeOut": 1.25,
+     "pnlOut": 496.14,
+     "minMargin": 2.75,
+     "minCapital": 80,
+     "maxOpen": 10
+    }
+   ]
   },
   "ratio_trend": {
    "trades": 3931,
@@ -1421,7 +1571,57 @@
    "minMargin": 27.5,
    "minCapital": 2250,
    "maxOpen": 42,
-   "testedCapital": 1640
+   "testedCapital": 1640,
+   "profiles": [
+    {
+     "id": "small",
+     "label": "أعلى 4 عملات (6 أزواج)",
+     "n": 4,
+     "trades": 1099,
+     "winRate": 30.0,
+     "pf": 1.09,
+     "pnl": 183.97,
+     "maxDD": 334.64,
+     "sharpeIn": 0.08,
+     "sharpeOut": 0.39,
+     "pnlOut": 136.92,
+     "minMargin": 27.5,
+     "minCapital": 800,
+     "maxOpen": 12
+    },
+    {
+     "id": "medium",
+     "label": "أعلى 5 عملات (10 أزواج)",
+     "n": 5,
+     "trades": 1829,
+     "winRate": 30.1,
+     "pf": 1.39,
+     "pnl": 1335.19,
+     "maxDD": 361.05,
+     "sharpeIn": 0.9,
+     "sharpeOut": 0.67,
+     "pnlOut": 310.0,
+     "minMargin": 27.5,
+     "minCapital": 1050,
+     "maxOpen": 20
+    },
+    {
+     "id": "full",
+     "label": "أعلى 7 عملات (21 زوج)",
+     "n": 7,
+     "trades": 3931,
+     "winRate": 31.3,
+     "pf": 1.37,
+     "pnl": 3196.11,
+     "maxDD": 794.94,
+     "sharpeIn": 1.31,
+     "sharpeOut": 0.77,
+     "pnlOut": 1228.77,
+     "minMargin": 27.5,
+     "minCapital": 2250,
+     "maxOpen": 42
+    }
+   ]
   }
  },
  "combined": {

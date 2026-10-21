@@ -37,6 +37,20 @@ export async function apiUserTier(): Promise<string|null>{
     const r=await fetch(`${API}/api/user/tier`, { headers }); return r.ok ? (await r.json()).tier : null
   }catch{ return null }
 }
+export type UserSettings = { capital?: number; strategy?: string; started_at?: string }
+/** The user's capital + chosen bot (personal paper portfolio on the dashboard). */
+export async function apiGetSettings(): Promise<UserSettings|null>{
+  try{
+    const headers = await signedInHeaders(); if(!headers) return null
+    const r=await fetch(`${API}/api/user/settings`, { headers }); return r.ok ? r.json() : {}
+  }catch{ return {} }
+}
+export async function apiSaveSettings(body: { capital: number; strategy: string }): Promise<UserSettings>{
+  const r=await fetch(`${API}/api/user/settings`, { method:"POST", headers: await authHeaders(JSON_CT), body: JSON.stringify(body) })
+  const d = await r.json().catch(()=>({}))
+  if(!r.ok) throw new Error(d.detail || "ما اتحفظش")
+  return d
+}
 export function chartUrl(file:string){ return `${API}/api/chart?file=${encodeURIComponent(file)}` }
 export const API_URL = API
 

@@ -13,7 +13,7 @@ import sys, re, uuid
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from app.db import init_db, async_session, Trade, BacktestRun
+from app.db import init_db, async_session, Trade, BacktestRun, UserSetting
 from app.auth import require_user, require_admin, require_admin_or_cron
 from sqlalchemy import select, desc
 import ccxt, pandas as pd, numpy as np
@@ -448,6 +448,43 @@ async def bot_loop(cfg):
         except asyncio.CancelledError: print("bot loop stopped"); break
         except Exception as e: print(f"loop err {e}")
         await asyncio.sleep(int(botmod.CONFIG.get("poll_seconds",60)))
+
+
+class SettingsReq(BaseModel):
+    capital: float = Field(..., ge=10, le=10_000_000)
+    strategy: str
+
+    @field_validator("strategy")
+    @classmethod
+    def _strategy(cls, v):
+        if v not in STRATEGY_ORDER: raise ValueError("unknown strategy")
+        return v
+
+
+@app.get("/api/user/settings")
+async def get_settings(user: dict = Depends(require_user)):
+    """The caller's own capital and followed bot (personal paper portfolio on the dashboard)."""
+    async with async_session() as sess:
+        row = await sess.get(UserSetting, user["id"])
+        return {"capital": row.capital, "strategy": row.strategy, "started_at": row.started_at} if row else {}
+
+
+@app.post("/api/user/settings")
+async def save_settings(req: SettingsReq, user: dict = Depends(require_user)):
+    rate_limit(user["id"], "settings", 20, 60)
+    tier = await get_tier(user)
+    if req.strategy not in STRATEGY_ORDER[:TIER_STRATEGY_COUNT[tier]]:
+        raise HTTPException(403, f"{req.strategy} is not in your {tier} plan — upgrade to unlock")
+    now = datetime.now(timezone.utc).isoformat()
+    async with async_session() as sess:
+        row = await sess.get(UserSetting, user["id"])
+        if row is None:
+            row = UserSetting(user_id=user["id"], started_at=now); sess.add(row)
+        elif row.capital != req.capital or row.strategy != req.strategy:
+            row.started_at = now                                   # a new setup starts a new personal record
+        row.capital, row.strategy, row.updated_at = req.capital, req.strategy, now
+        await sess.commit()
+        return {"capital": row.capital, "strategy": row.strategy, "started_at": row.started_at}
 
 
 @app.get("/api/user/tier")
