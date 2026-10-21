@@ -260,6 +260,117 @@ def write_listing_status(state, prices, upcoming):
         tmp.write_text(json.dumps(data, ensure_ascii=False, default=str), encoding="utf-8"); tmp.replace(d / "listing.json")
     except Exception as e: log(f"public listing status: {e}")
 
+MOM = {"weeks": 2, "top": 50, "n": 5, "min_days": 60, "stop": 0.40, "every_days": 7}
+
+def momentum_mode():
+    """Paper cross-sectional momentum on Binance: every 7 days rank the top 50 USDT perpetuals by 30-day volume on
+    their last 2 weeks' return, long the strongest 5 and short the weakest 5 for a week, stop 40% —
+    research/pump_momentum_study.py idea 2 (Liu, Tsyvinski & Wu 2022)."""
+    return "momentum_ls" in (CONFIG.get("enabled_strategies") or [])
+
+def momentum_rank(ex):
+    """[(symbol, return over MOM weeks)] weakest first, among the top MOM["top"] by 30-day average USDT volume
+    (crypto perpetuals with >= min_days closed daily candles)."""
+    syms = [s for s, _, _ in listing_markets(ex)]
+    tick = ex.fetch_tickers()
+    cands = sorted(syms, key=lambda s: -float((tick.get(s) or {}).get("quoteVolume") or 0))[:MOM["top"] * 3]
+    rows = []
+    for sym in cands:
+        try:
+            k = ex.fetch_ohlcv(sym, "1d", limit=70)[:-1]          # closed candles only
+            if len(k) < MOM["min_days"]: continue
+            rows.append((sum(r[4] * r[5] for r in k[-30:]) / 30, sym, k[-1][4] / k[-1 - 7 * MOM["weeks"]][4] - 1))
+        except Exception as e: log(f"momentum {sym}: {e}")
+    top = sorted(rows, reverse=True)[:MOM["top"]]
+    return [(sym, ret) for _, sym, ret in sorted(top, key=lambda r: r[2])]
+
+def _paper_close(ex, state, sym, price, reason):
+    """Close a paper position with fees and the real funding paid/received since entry (longs pay positive funding)."""
+    pos = state["positions"].pop(sym); q = pos["qty"]; sg = 1 if pos["side"] == "long" else -1; fee = 0.0004
+    funding = 0.0
+    try:
+        since = int(datetime.fromisoformat(pos["time"]).timestamp() * 1000)
+        funding = sum(float(r["fundingRate"]) for r in ex.fetch_funding_rate_history(sym, since=since, limit=1000)) * q * pos["entry"]
+    except Exception as e: log(f"funding {sym}: {e}")
+    pnl = sg * (price - pos["entry"]) * q - (pos["entry"] * q + price * q) * fee - sg * funding
+    margin = pos["entry"] * q / max(1, int(pos.get("leverage", 2)))
+    state["history"].append({"symbol": sym, "side": pos["side"], "entry": pos["entry"], "exit": price, "qty": q, "pnl": pnl,
+                             "pnl_pct": pnl / margin * 100 if margin else 0, "funding": -sg * funding, "reason": reason,
+                             "time": datetime.now(timezone.utc).isoformat(), "type": "paper"})
+    st = state["stats"]; st["trades"] += 1; st["pnl"] += pnl; st["wins" if pnl > 0 else "losses"] += 1
+    return pnl
+
+def run_once_momentum(ex):
+    M = MOM; state = load_state(); now = datetime.now(timezone.utc); prices = {}
+    # protective stops during the week
+    for sym, pos in list(state["positions"].items()):
+        try:
+            price = float(ex.fetch_ticker(sym)["last"]); prices[sym] = price
+            hit = price >= pos["sl"] if pos["side"] == "short" else price <= pos["sl"]
+            if hit:
+                pnl = _paper_close(ex, state, sym, price, f"وقف {pos['sl']:.6g}"); save_state(state)
+                log(f"🔒 وقف {pos['side']} {sym} @ {price:.6g} PnL {pnl:+.4f}")
+                notify(f"🔒 مومنتم: وقف {'لونج' if pos['side'] == 'long' else 'شورت'} {sym.split(':')[0]} @ {price:.6g}\nPnL {pnl:+.2f}$ · Paper")
+        except Exception as e: log(f"مومنتم {sym}: {e}")
+    # weekly rebalance, at the first cycle after the daily close (00:00 UTC) once 7 days have passed
+    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    last = state.get("mom_last")
+    if last is None or today - datetime.fromisoformat(last) >= pd.Timedelta(days=M["every_days"]):
+        ranked = momentum_rank(ex)
+        if len(ranked) >= 20:
+            closed = 0.0
+            for sym in list(state["positions"]):
+                try:
+                    price = float(ex.fetch_ticker(sym)["last"]); closed += _paper_close(ex, state, sym, price, "تبديل أسبوعي")
+                except Exception as e: log(f"قفل {sym}: {e}")
+            if not CONFIG["paper_trading"]: log("⏸️ المومنتم Paper بس"); save_state(state); return
+            lev = int(CONFIG.get("leverage", 2)); picks = [(s, r, "short") for s, r in ranked[:M["n"]]] + [(s, r, "long") for s, r in ranked[-M["n"]:]]
+            for sym, ret, side in picks:
+                try:
+                    price = float(ex.fetch_ticker(sym)["last"]); prices[sym] = price; q = position_size(price) * lev / price
+                    sl = price * (1 + M["stop"]) if side == "short" else price * (1 - M["stop"])
+                    state["positions"][sym] = {"side": side, "entry": price, "qty": q, "leverage": lev, "time": now.isoformat(),
+                                               "sl": sl, "tp": None, "ret": ret}
+                except Exception as e: log(f"فتح {sym}: {e}")
+            state["mom_last"] = today.isoformat()
+            state["mom_ranking"] = [{"symbol": s.split(":")[0], "ret": round(r * 100, 1)} for s, r in ranked]
+            save_state(state)
+            longs = ", ".join(f"{s.split('/')[0]} {r * 100:+.0f}%" for s, r, sd in picks if sd == "long")
+            shorts = ", ".join(f"{s.split('/')[0]} {r * 100:+.0f}%" for s, r, sd in picks if sd == "short")
+            log(f"🔄 مومنتم: تبديل أسبوعي — قفل {closed:+.4f} | لونج: {longs} | شورت: {shorts}")
+            notify(f"🔄 مومنتم — تبديل أسبوعي (Paper)\nالأسبوع اللي فات: {closed:+.2f}$\n🟢 لونج الأقوى: {longs}\n🔴 شورت الأضعف: {shorts}")
+        else: log(f"مومنتم: {len(ranked)} عملة بس في القائمة — مفيش تبديل")
+    for sym in state["positions"]:
+        if sym not in prices:
+            try: prices[sym] = float(ex.fetch_ticker(sym)["last"])
+            except Exception: pass
+    write_momentum_status(state, prices)
+    log(f"📊 مومنتم: {len(state['positions'])} مفتوحة | PnL محقق {state['stats']['pnl']:+.4f}")
+
+def write_momentum_status(state, prices):
+    out_dir = CONFIG.get("public_dir")
+    if not out_dir: return
+    pos = []
+    for sym, p in state["positions"].items():
+        price = prices.get(sym, p["entry"]); sg = 1 if p["side"] == "long" else -1
+        pnl = sg * (price - p["entry"]) * p["qty"]; margin = p["entry"] * p["qty"] / max(1, int(p.get("leverage", 2)))
+        pos.append({"symbol": sym.split(":")[0], "id": sym.split("/")[0] + "USDT", "side": p["side"], "entry": p["entry"], "price": price,
+                    "qty": p["qty"], "margin": round(margin, 2), "sl": p["sl"], "pnl": round(pnl, 4),
+                    "pnl_pct": round(pnl / margin * 100, 2) if margin else 0, "ret": round(p.get("ret", 0) * 100, 1), "opened": p["time"]})
+    st = state.get("stats", {}); last = state.get("mom_last")
+    data = {"updated": datetime.now(timezone.utc).isoformat(), "mode": "paper" if CONFIG["paper_trading"] else "live", "rules": MOM,
+            "leverage": int(CONFIG.get("leverage", 2)), "margin": CONFIG.get("trade_amount_usdt"), "started": CONFIG.get("started_at"),
+            "last_rebalance": last, "next_rebalance": (datetime.fromisoformat(last) + pd.Timedelta(days=MOM["every_days"])).isoformat() if last else None,
+            "stats": {"closed": st.get("trades", 0), "wins": st.get("wins", 0), "losses": st.get("losses", 0),
+                      "realized": round(float(st.get("pnl", 0)), 4), "unrealized": round(sum(x["pnl"] for x in pos), 4), "open": len(pos)},
+            "positions": sorted(pos, key=lambda x: (x["side"], -x["ret"])),
+            "history": [{"symbol": h["symbol"].split(":")[0], "side": h.get("side"), "entry": h["entry"], "exit": h["exit"], "pnl": round(h["pnl"], 4),
+                         "reason": h.get("reason", ""), "time": h.get("time")} for h in state.get("history", [])[-300:]][::-1]}
+    try:
+        d = Path(out_dir); tmp = d / "momentum.json.tmp"
+        tmp.write_text(json.dumps(data, ensure_ascii=False, default=str), encoding="utf-8"); tmp.replace(d / "momentum.json")
+    except Exception as e: log(f"public momentum status: {e}")
+
 def trend_mode():
     """Daily trend runs alone on daily candles, long only, exits when the trend turns (strategies_trend.py)."""
     return "trend_daily" in (CONFIG.get("enabled_strategies") or [])
@@ -859,6 +970,10 @@ def try_enter(symbol, analysis, state, ex):
 
 
 def run_once():
+    if momentum_mode():
+        global _momentum_ex
+        if "_momentum_ex" not in globals(): _momentum_ex = ccxt.binanceusdm({"enableRateLimit": True})   # the backtest's data is Binance's
+        return run_once_momentum(_momentum_ex)
     if listing_mode():
         global _listing_ex
         if "_listing_ex" not in globals(): _listing_ex = ccxt.binanceusdm({"enableRateLimit": True})   # the backtest's listings are Binance's
@@ -894,7 +1009,11 @@ def run_once():
 def run_loop():
     mode="Paper وهمي" if CONFIG["paper_trading"] else "LIVE حقيقي"
     CONFIG["started_at"]=datetime.now(timezone.utc).isoformat()
-    if listing_mode():
+    if momentum_mode():
+        M=MOM
+        log(f"=== مومنتم: لونج أقوى {M['n']} وشورت أضعف {M['n']} من أعلى {M['top']} فوليوم (عائد {M['weeks']} أسبوع) — {mode} — تبديل كل {M['every_days']} أيام، وقف {M['stop']:.0%} | هامش {CONFIG['trade_amount_usdt']} USDT x{CONFIG.get('leverage',2)} ===")
+        notify(f"▶️ بوت المومنتم اشتغل ({mode})\nكل أسبوع: لونج أقوى {M['n']} وشورت أضعف {M['n']} من أعلى {M['top']} عملة فوليوم")
+    elif listing_mode():
         L=LISTING
         log(f"=== شورت العملات الجديدة — {mode} — دخول بعد {L['skip_days']} يوم، خروج بعد {L['hold_days']} يوم، وقف {L['stop']:.0%}، أقصى {L['max_open']} | هامش {CONFIG['trade_amount_usdt']} USDT x{CONFIG.get('leverage',2)} ===")
         notify(f"▶️ بوت شورت العملات الجديدة اشتغل ({mode})\nدخول بعد {L['skip_days']} يوم من الإدراج · خروج بعد {L['hold_days']} يوم · وقف {L['stop']:.0%} · أقصى {L['max_open']} صفقات")
@@ -987,6 +1106,8 @@ if __name__=="__main__":
         LOG_PATH=Path(__file__).parent / (Path(args.state).stem + ".log")
     elif listing_mode():
         STATE_PATH=Path(__file__).parent / "state_listing.json"; LOG_PATH=Path(__file__).parent / "state_listing.log"
+    elif momentum_mode():
+        STATE_PATH=Path(__file__).parent / "state_momentum.json"; LOG_PATH=Path(__file__).parent / "state_momentum.log"
     if args.paper: CONFIG["paper_trading"]=True
     if args.live: CONFIG["paper_trading"]=False
     if args.port: CONFIG["dashboard_port"]=args.port

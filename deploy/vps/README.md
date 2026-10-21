@@ -40,3 +40,11 @@ Logs: `journalctl -u raqm-api -f` · deploys: `journalctl -u raqm-api-update`.
 perpetual 30 days after listing, hold 90 days, stop 40% above entry, at most 10 open, $20 × 2, paper only
 (research/README.md "Short side"). Own state/log files next to the trend bot; the page reads `listing.json`.
 Logs: `journalctl -u raqm-listing -f`.
+
+## Third paper bot: weekly momentum long/short
+
+`raqm-momentum.service` runs `bot.py --strategy momentum_ls --state state_momentum.json`: every 7 days (first cycle
+after 00:00 UTC) rank the top 50 Binance crypto USDT perpetuals by 30-day volume on their 2-week return, long the
+strongest 5 and short the weakest 5 for a week, stop 40%, $20 × 2, fees + real funding, paper only. Page data
+`momentum.json`. Live prices on the page come from `wss://fstream.binance.com/market/ws` (Binance moved market
+streams there; the old `/ws` path accepts subscriptions but sends nothing). Logs: `journalctl -u raqm-momentum -f`.

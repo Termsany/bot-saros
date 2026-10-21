@@ -183,3 +183,24 @@ The useful result: the two strategies on paper complement each other —
 | **both (what runs now)** | **+2,401** | **265** | **1.79** | **−88** |
 
 Together the drawdown is smaller than either alone: the short earns in falls, the long in rallies.
+
+### 4. Pump fade and 5. cross-sectional momentum
+
+`research/pump_momentum_study.py` — funding for the traded windows from Bybit (523) with Binance for the rest (76).
+
+**Pump fade — not adopted** (Kamps & Kleinberg 2018): short a top-100 coin after a day up ≥30/50% on ≥3/5×
+its volume. 9 of 48 variants made money, none after a +30% day; the in-sample pick made +114 with out-of-sample
+Sharpe 0.13. Pumped coins tend to keep rising — in line with MAX momentum in crypto (Li, Urquhart, Wang & Zhang 2021).
+
+**Cross-sectional momentum — works as long/short only** (Liu, Tsyvinski & Wu 2022): every 7 days rank the top 50
+by volume on the last 1/2/4 weeks' return. Shorting only the weakest 5 lost before 2024 and won after (unstable);
+long the strongest 5 + short the weakest 5 made money in all 3 variants. In-sample pick (2 weeks):
++1,831, max DD 243, Sharpe 0.67 before 2024 / 1.30 after, every year positive except 2022 (−80).
+
+| | PnL | max DD | Sharpe < 2024 | Sharpe 2024 → | 2022 |
+|---|---|---|---|---|---|
+| the two paper bots (long trend + new listings) | +2,401 | 265 | 0.97 | 1.79 | −88 |
+| **+ momentum long/short** | **+4,232** | 354 | **1.15** | **2.08** | −167 |
+
+Runs as a third paper bot (`bot.py --strategy momentum_ls`, `deploy/vps/raqm-momentum.service`): ~10 trades a week,
+~20 open at most, its long side can hold the same coins as the trend bot.

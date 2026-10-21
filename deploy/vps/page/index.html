@@ -137,10 +137,30 @@
     </table></div>
   </section>
 
+  <section id="momSec" style="margin-top:44px;border-top:1px solid var(--line);padding-top:26px">
+    <div class="head"><h2>مومنتم: لونج الأقوى وشورت الأضعف — تجربة Paper</h2><span class="count" id="msUpdated"></span></div>
+    <p class="sub" style="font-size:13px">بوت تالت منفصل: كل أسبوع بيرتّب أعلى 50 عملة فوليوم على Binance حسب أدائها آخر أسبوعين، وبيعمل لونج على أقوى 5 وشورت على أضعف 5، ويقفلهم ويبدّل بعد أسبوع (وقف 40%). مبني على أبحاث الزخم بين العملات — بنجربه Paper قبل أي قرار.</p>
+    <div class="kpis" style="margin-top:14px">
+      <div class="card kpi"><div class="label">ربح محقق</div><div class="value mono" id="msRealized">—</div><div class="note" id="msWl">—</div></div>
+      <div class="card kpi"><div class="label">ربح الصفقات المفتوحة</div><div class="value mono" id="msUnreal">—</div><div class="note">بالسعر اللحظي من Binance</div></div>
+      <div class="card kpi"><div class="label">مفتوحة</div><div class="value mono" id="msOpen" style="font-size:18px">—</div><div class="note" id="msMargin">—</div></div>
+      <div class="card kpi"><div class="label">التبديل الجاي</div><div class="value mono" id="msNext" style="font-size:18px">—</div><div class="note" id="msTotal">—</div></div>
+    </div>
+    <div class="table" style="margin-top:14px"><table>
+      <thead><tr><th>العملة</th><th>الاتجاه</th><th>أداء أسبوعين</th><th>الدخول</th><th>السعر الحالي</th><th>الوقف</th><th>الربح $</th><th>على الهامش</th></tr></thead>
+      <tbody id="msPositions"><tr><td colspan="8" class="empty">بيحمّل…</td></tr></tbody>
+    </table></div>
+    <div class="head" style="margin-top:16px"><h2 style="font-size:14px">اتقفلت</h2><span class="count" id="msHistCount"></span></div>
+    <div class="table"><table>
+      <thead><tr><th>العملة</th><th>الاتجاه</th><th>الدخول</th><th>الخروج</th><th>الربح $</th><th>السبب</th><th>الوقت</th></tr></thead>
+      <tbody id="msHistory"><tr><td colspan="7" class="empty">لسه مفيش صفقات اتقفلت</td></tr></tbody>
+    </table></div>
+  </section>
+
   <footer>
     نتايج Paper حيّة من البوت، مش نصيحة استثمارية ومش ضمان لأي ربح. اختبار الاستراتيجية التاريخي في
     <a href="https://github.com/Termsany/bot-saros/blob/main/research/README.md" rel="noopener">research/README.md</a>.
-    الأسعار لحظية من Bybit (الترند) وBinance (الشورت)، وبيانات البوتين بتتحدث كل 15 ثانية.
+    الأسعار لحظية من Bybit (الترند) وBinance (الشورت والمومنتم)، وبيانات البوتات بتتحدث كل 15 ثانية.
   </footer>
 </div>
 
@@ -309,13 +329,14 @@ async function loadListing(){
   catch{ if(!LS) renderListing() }
 }
 function bsubscribe(){
-  if(!LS || !bws || bws.readyState !== 1) return
-  const add = LS.positions.map(p => p.id).filter(x => !bsubs.has(x))
+  if(!bws || bws.readyState !== 1) return
+  const ids = [...(LS ? LS.positions : []), ...(typeof MS !== "undefined" && MS ? MS.positions : [])].map(p => p.id)
+  const add = ids.filter(x => !bsubs.has(x))
   if(add.length) bws.send(JSON.stringify({ method: "SUBSCRIBE", params: add.map(x => `${x.toLowerCase()}@miniTicker`), id: Date.now() }))
   add.forEach(x => bsubs.add(x))
 }
 function bconnect(){
-  bws = new WebSocket("wss://fstream.binance.com/ws")
+  bws = new WebSocket("wss://fstream.binance.com/market/ws")   // Binance moved market streams to /market (the old /ws path accepts subscriptions but sends nothing)
   bws.onopen = () => { bsubs = new Set(); bsubscribe() }
   bws.onmessage = e => { const m = JSON.parse(e.data); if(m.e === "24hrMiniTicker"){ blive[m.s] = +m.c; bdirty = true } }
   bws.onclose = () => setTimeout(bconnect, 3000)
@@ -324,6 +345,54 @@ function bconnect(){
 loadListing(); bconnect()
 setInterval(loadListing, 15000)
 setInterval(() => { if(bdirty){ bdirty = false; renderListing() } }, 1000)
+// ── weekly momentum long/short (third paper bot): momentum.json every 15 s, prices on the same Binance stream ──
+let MS = null
+const sideTag = s => s === "long" ? `<span style="color:var(--profit);font-weight:700">LONG</span>` : `<span style="color:var(--loss);font-weight:700">SHORT</span>`
+function renderMomentum(){
+  const sec = $("momSec")
+  if(!MS){ sec.style.display = "none"; return }
+  sec.style.display = ""
+  const d = MS
+  $("msUpdated").textContent = `آخر دورة ${ago(d.updated)}`
+  const pos = d.positions.map(p => {
+    const price = blive[p.id] ?? p.price, sg = p.side === "long" ? 1 : -1, pnl = sg * (price - p.entry) * p.qty
+    return { ...p, price, pnl, pnl_pct: p.margin ? pnl / p.margin * 100 : 0 }
+  })
+  const s = d.stats, unreal = pos.reduce((a, p) => a + p.pnl, 0), total = s.realized + unreal
+  $("msRealized").innerHTML = `<span class="${tone(s.realized)}">${usd(s.realized)}</span>`
+  $("msWl").textContent = `${s.closed} اتقفلت · ${s.wins} كسبانة / ${s.losses} خسرانة`
+  $("msUnreal").innerHTML = `<span class="${tone(unreal)}">${usd(unreal)}</span>`
+  $("msOpen").textContent = `${pos.filter(p => p.side === "long").length} لونج · ${pos.filter(p => p.side === "short").length} شورت`
+  $("msMargin").textContent = `هامش مستخدم $${pos.reduce((a, p) => a + p.margin, 0).toFixed(0)}`
+  $("msNext").textContent = d.next_rebalance ? new Date(d.next_rebalance).toLocaleDateString("ar-EG", {weekday: "long", day: "numeric", month: "short", timeZone: "UTC"}) : "—"
+  $("msTotal").innerHTML = `الإجمالي <b class="mono ${tone(total)}">${usd(total)}</b>`
+  $("msPositions").innerHTML = pos.length ? pos.map(p => `<tr>
+      <td class="coin">${esc(p.symbol.replace("/USDT", ""))}</td>
+      <td>${sideTag(p.side)}</td>
+      <td class="num mono ${tone(p.ret)}">${p.ret > 0 ? "+" : ""}${Number(p.ret).toFixed(0)}%</td>
+      <td class="num mono">${px(p.entry)}</td>
+      <td class="num mono">${px(p.price)}</td>
+      <td class="num mono" style="color:var(--faint)">${px(p.sl)}</td>
+      <td class="num mono ${tone(p.pnl)}">${usd(p.pnl)}</td>
+      <td class="num mono ${tone(p.pnl_pct)}">${p.pnl_pct > 0 ? "+" : ""}${p.pnl_pct.toFixed(1)}%</td></tr>`).join("")
+    : `<tr><td colspan="8" class="empty">مفيش صفقات مفتوحة — مستني التبديل الأسبوعي</td></tr>`
+  $("msHistCount").textContent = d.history.length ? `آخر ${d.history.length}` : ""
+  if(d.history.length) $("msHistory").innerHTML = d.history.slice(0, 100).map(h => `<tr>
+      <td class="coin">${esc(h.symbol.replace("/USDT", ""))}</td>
+      <td>${sideTag(h.side)}</td>
+      <td class="num mono">${px(h.entry)}</td>
+      <td class="num mono">${px(h.exit)}</td>
+      <td class="num mono ${tone(h.pnl)}">${usd(h.pnl)}</td>
+      <td style="color:var(--muted)">${esc(h.reason)}</td>
+      <td class="mono" style="color:var(--muted)">${day(h.time)}</td></tr>`).join("")
+}
+async function loadMomentum(){
+  try{ const r = await fetch(`momentum.json?t=${Date.now()}`, {cache: "no-store"}); if(!r.ok) throw 0; MS = await r.json(); renderMomentum(); bsubscribe() }
+  catch{ if(!MS) renderMomentum() }
+}
+loadMomentum()
+setInterval(loadMomentum, 15000)
+setInterval(() => { if(MS) renderMomentum() }, 1000)
 </script>
 </body>
 </html>
