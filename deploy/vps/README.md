@@ -48,3 +48,12 @@ after 00:00 UTC) rank the top 50 Binance crypto USDT perpetuals by 30-day volume
 strongest 5 and short the weakest 5 for a week, stop 40%, $20 × 2, fees + real funding, paper only. Page data
 `momentum.json`. Live prices on the page come from `wss://fstream.binance.com/market/ws` (Binance moved market
 streams there; the old `/ws` path accepts subscriptions but sends nothing). Logs: `journalctl -u raqm-momentum -f`.
+
+## Fourth paper bot: ratio trend — HIGH RISK experiment
+
+`raqm-ratio.service` runs `bot.py --strategy ratio_trend --state state_ratio.json`: every pair among the top 7 Binance
+crypto perpetuals by 30-day volume (membership refreshed weekly), once a day after the daily close: ratio above its
+50-day average -> long the first / short the second, below -> the reverse; a pair closes when a coin leaves the list.
+$20 × 2 per leg (21 pairs ≈ $840 margin), fees + real funding, no stop, paper only. In the fair backtest
+(research/ratio_fairness.py) its drawdown reached 795 and it lowered the three bots' combined result — it runs only
+to watch it, and the page marks it HIGH RISK. Page data `ratio.json`. Logs: `journalctl -u raqm-ratio -f`.

@@ -157,10 +157,31 @@
     </table></div>
   </section>
 
+  <section id="ratioSec" style="margin-top:44px;border-top:1px solid var(--line);padding-top:26px">
+    <div class="head"><h2>Ratio trend بين أكبر العملات <span style="margin-inline-start:8px;font-size:11px;font-weight:700;color:var(--loss);border:1px solid rgba(255,84,112,.45);background:rgba(255,84,112,.1);border-radius:999px;padding:2px 9px">⚠️ HIGH RISK</span></h2><span class="count" id="rsUpdated"></span></div>
+    <p class="sub" style="font-size:13px">بوت رابع تجريبي: كل الأزواج بين أعلى 7 عملات فوليوم على Binance (21 زوج). لو نسبة سعر العملتين فوق متوسط 50 يوم: لونج الأولى وشورت التانية، والعكس. <b style="color:var(--loss)">مخاطرته عالية:</b> في الاختبار العادل كان أقصى تراجع 795$ وقلّل نتيجة البوتات التلاتة لما اتضاف ليها — شغال Paper عشان نتابع أداءه بس.</p>
+    <div class="chips" id="rsMembers"></div>
+    <div class="kpis" style="margin-top:14px">
+      <div class="card kpi"><div class="label">ربح محقق</div><div class="value mono" id="rsRealized">—</div><div class="note" id="rsWl">—</div></div>
+      <div class="card kpi"><div class="label">ربح الأزواج المفتوحة</div><div class="value mono" id="rsUnreal">—</div><div class="note">بالسعر اللحظي من Binance</div></div>
+      <div class="card kpi"><div class="label">أزواج مفتوحة</div><div class="value mono" id="rsOpen">—</div><div class="note" id="rsMargin">—</div></div>
+      <div class="card kpi"><div class="label">الإجمالي</div><div class="value mono" id="rsTotal">—</div><div class="note" id="rsNext">—</div></div>
+    </div>
+    <div class="table" style="margin-top:14px"><table>
+      <thead><tr><th>لونج</th><th>شورت</th><th>دخول لونج</th><th>دخول شورت</th><th>الربح $</th><th>من</th></tr></thead>
+      <tbody id="rsPairs"><tr><td colspan="6" class="empty">بيحمّل…</td></tr></tbody>
+    </table></div>
+    <div class="head" style="margin-top:16px"><h2 style="font-size:14px">اتقفلت</h2><span class="count" id="rsHistCount"></span></div>
+    <div class="table"><table>
+      <thead><tr><th>الزوج (لونج / شورت)</th><th>الربح $</th><th>السبب</th><th>الوقت</th></tr></thead>
+      <tbody id="rsHistory"><tr><td colspan="4" class="empty">لسه مفيش أزواج اتقفلت</td></tr></tbody>
+    </table></div>
+  </section>
+
   <footer>
     نتايج Paper حيّة من البوت، مش نصيحة استثمارية ومش ضمان لأي ربح. اختبار الاستراتيجية التاريخي في
     <a href="https://github.com/Termsany/bot-saros/blob/main/research/README.md" rel="noopener">research/README.md</a>.
-    الأسعار لحظية من Bybit (الترند) وBinance (الشورت والمومنتم)، وبيانات البوتات بتتحدث كل 15 ثانية.
+    الأسعار لحظية من Bybit (الترند) وBinance (الشورت والمومنتم والـ ratio)، وبيانات البوتات بتتحدث كل 15 ثانية.
   </footer>
 </div>
 
@@ -330,7 +351,8 @@ async function loadListing(){
 }
 function bsubscribe(){
   if(!bws || bws.readyState !== 1) return
-  const ids = [...(LS ? LS.positions : []), ...(typeof MS !== "undefined" && MS ? MS.positions : [])].map(p => p.id)
+  const ids = [...(LS ? LS.positions : []), ...(typeof MS !== "undefined" && MS ? MS.positions : []),
+               ...(typeof RS !== "undefined" && RS ? RS.pairs.flatMap(p => [p.long, p.short]) : [])].map(p => p.id)
   const add = ids.filter(x => !bsubs.has(x))
   if(add.length) bws.send(JSON.stringify({ method: "SUBSCRIBE", params: add.map(x => `${x.toLowerCase()}@miniTicker`), id: Date.now() }))
   add.forEach(x => bsubs.add(x))
@@ -393,6 +415,47 @@ async function loadMomentum(){
 loadMomentum()
 setInterval(loadMomentum, 15000)
 setInterval(() => { if(MS) renderMomentum() }, 1000)
+// ── HIGH RISK ratio trend (fourth paper bot): ratio.json every 15 s, legs priced on the same Binance stream ──
+let RS = null
+function renderRatio(){
+  const sec = $("ratioSec")
+  if(!RS){ sec.style.display = "none"; return }
+  sec.style.display = ""
+  const d = RS
+  $("rsUpdated").textContent = `آخر دورة ${ago(d.updated)}`
+  $("rsMembers").innerHTML = d.members.map(m => `<span class="chip"><b>${esc(m)}</b></span>`).join("")
+  const legPnl = l => (l.side === "long" ? 1 : -1) * ((blive[l.id] ?? l.price) - l.entry) * l.qty
+  const pairs = d.pairs.map(p => ({ ...p, pnl: legPnl(p.long) + legPnl(p.short) }))
+  const s = d.stats, unreal = pairs.reduce((a, p) => a + p.pnl, 0), total = s.realized + unreal
+  $("rsRealized").innerHTML = `<span class="${tone(s.realized)}">${usd(s.realized)}</span>`
+  $("rsWl").textContent = `${s.closed} اتقفلت · ${s.wins} كسبانة / ${s.losses} خسرانة`
+  $("rsUnreal").innerHTML = `<span class="${tone(unreal)}">${usd(unreal)}</span>`
+  $("rsOpen").textContent = pairs.length
+  $("rsMargin").textContent = `هامش مستخدم $${pairs.reduce((a, p) => a + p.margin, 0).toFixed(0)}`
+  $("rsTotal").innerHTML = `<span class="${tone(total)}">${usd(total)}</span>`
+  $("rsNext").textContent = d.next_members ? `تحديث القائمة ${day(d.next_members)}` : ""
+  $("rsPairs").innerHTML = pairs.length ? pairs.map(p => `<tr>
+      <td class="coin" style="color:var(--profit)">${esc(p.long.symbol.replace("/USDT", ""))}</td>
+      <td class="coin" style="color:var(--loss)">${esc(p.short.symbol.replace("/USDT", ""))}</td>
+      <td class="num mono">${px(p.long.entry)}</td>
+      <td class="num mono">${px(p.short.entry)}</td>
+      <td class="num mono ${tone(p.pnl)}">${usd(p.pnl)}</td>
+      <td class="mono" style="color:var(--muted)">${day(p.opened)}</td></tr>`).join("")
+    : `<tr><td colspan="6" class="empty">مفيش أزواج مفتوحة</td></tr>`
+  $("rsHistCount").textContent = d.history.length ? `آخر ${d.history.length}` : ""
+  if(d.history.length) $("rsHistory").innerHTML = d.history.slice(0, 100).map(h => `<tr>
+      <td class="coin">${esc(h.pair)}</td>
+      <td class="num mono ${tone(h.pnl)}">${usd(h.pnl)}</td>
+      <td style="color:var(--muted)">${esc(h.reason)}</td>
+      <td class="mono" style="color:var(--muted)">${day(h.time)}</td></tr>`).join("")
+}
+async function loadRatio(){
+  try{ const r = await fetch(`ratio.json?t=${Date.now()}`, {cache: "no-store"}); if(!r.ok) throw 0; RS = await r.json(); renderRatio(); bsubscribe() }
+  catch{ if(!RS) renderRatio() }
+}
+loadRatio()
+setInterval(loadRatio, 15000)
+setInterval(() => { if(RS) renderRatio() }, 1000)
 </script>
 </body>
 </html>

@@ -1,0 +1,23 @@
+[Unit]
+Description=Raqm bot — HIGH RISK ratio trend among the top 7 Binance coins (paper experiment, research/ratio_fairness.py)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=raqm
+Group=raqm
+WorkingDirectory=/opt/raqm-bot
+EnvironmentFile=-/opt/raqm-bot/.env
+Environment=PYTHONUNBUFFERED=1
+# own state file (state_ratio.json / state_ratio.log); page data -> ratio.json
+ExecStart=/opt/raqm-bot/venv/bin/python bot.py --paper --strategy ratio_trend --amount 20 --leverage 2 --poll 60 --notify --public /var/www/bot.da3m.io --state state_ratio.json
+Restart=always
+RestartSec=30
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/raqm-bot /var/www/bot.da3m.io
+
+[Install]
+WantedBy=multi-user.target
