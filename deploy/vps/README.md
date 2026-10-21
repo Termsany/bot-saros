@@ -20,3 +20,16 @@ scp bot.py strategies_*.py root@SERVER:/opt/raqm-bot/ && ssh root@SERVER 'chown 
 
 Follow it: `journalctl -u raqm-bot -f`. Restarting keeps open trades (state.json) and never enters the same
 signal twice.
+
+## API (api.da3m.io) — replaces Render
+
+FastAPI backend in `/opt/raqm-api` (user `raqmapi`): a git checkout of this repo + venv, uvicorn on 127.0.0.1:8100
+behind nginx, secrets in `/opt/raqm-api/.env` (`api/env.example` lists them). Vercel's `NEXT_PUBLIC_API_URL` points here.
+
+| file | installed as |
+|---|---|
+| `api/raqm-api.service` | `/etc/systemd/system/raqm-api.service` |
+| `api/nginx-api.da3m.io.conf` | `/etc/nginx/sites-available/api.da3m.io` (+ certbot) |
+| `api/update.sh` + `api/raqm-api-update.{service,timer}` | pulls `main` every 5 minutes, restarts the API when `backend/` or a root `.py` changed |
+
+Logs: `journalctl -u raqm-api -f` · deploys: `journalctl -u raqm-api-update`.

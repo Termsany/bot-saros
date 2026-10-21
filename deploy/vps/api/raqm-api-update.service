@@ -1,0 +1,6 @@
+[Unit]
+Description=Pull main and restart the Raqm API when the backend changed
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh /opt/raqm-api/update.sh

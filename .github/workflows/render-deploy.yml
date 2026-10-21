@@ -8,12 +8,9 @@
 # The hook URL is a secret: anyone who has it can trigger deploys.
 name: Deploy backend to Render
 
+# The backend moved to the VPS (api.da3m.io, deploy/vps/api) — it pulls main itself every 5 minutes.
+# Kept as a manual fallback only.
 on:
-  push:
-    branches: [main]
-    paths:
-      - "backend/**"
-      - "*.py"  # backtest.py, bot.py, strategies_advanced.py — imported by the backend
   workflow_dispatch:  # manual run from the Actions tab
 
 concurrency:

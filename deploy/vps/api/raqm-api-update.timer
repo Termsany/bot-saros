@@ -1,0 +1,10 @@
+[Unit]
+Description=Deploy new Raqm API commits from GitHub every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Unit=raqm-api-update.service
+
+[Install]
+WantedBy=timers.target
