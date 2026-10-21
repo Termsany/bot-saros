@@ -243,3 +243,27 @@ after 2024 — nothing tested so far improves that.
   has narrowed as the market matured.
 
 The three paper bots stay as they are (+4,279, max DD 355, Sharpe 2.09 after 2024).
+
+### 11–13. 52-week-high momentum, Donchian breakout, ratio trend — not adopted
+
+`research/breakout_ratio_study.py` and `research/ratio_fairness.py`.
+
+- **52-week-high momentum** (George & Hwang 2004): long the 5 top-50 coins closest to their high, short the 5 furthest.
+  Weak: the in-sample pick (180-day high) made +427, Sharpe 0.28 / 0.42 — clearly worse than plain momentum.
+- **Donchian breakout** (Turtles; Hurst, Ooi & Pedersen 2017) on the top 10: all 6 long+short variants positive
+  (pick: 55/10, stop 40% — +789, DD 191, Sharpe 0.73 / 0.91), but **all of it from the long side**; the short side
+  lost or broke even in every variant. In practice a second long trend on the same coins.
+- **Ratio trend** on the 10 pairs among BTC, ETH, SOL, BNB, XRP (long the first / short the second while their ratio
+  is above its 50-day average): +2,472, DD 187, Sharpe 1.10 / 1.55 — and with the three bots Sharpe after 2024
+  2.10 → 2.52. **But the five coins were picked today.** The fairness check — every week the top K by volume at
+  that time — keeps an edge but much weaker:
+
+| ratio trend | PnL | max DD | Sharpe < 2024 | Sharpe 2024 → |
+|---|---|---|---|---|
+| 5 majors picked today (hindsight) | +2,472 | 187 | 1.10 | 1.55 |
+| top 5 by volume each week | +1,335 | 361 | 0.90 | 0.67 |
+| top 7 by volume each week (in-sample pick) | +3,196 | 795 | 1.31 | 0.77 |
+| three bots + top 7 | +7,485 | 863 | 1.65 | 1.61 (vs 2.10 now) |
+
+The weekly top 5 included short-lived volume spikes (ARPA, LINA in 2023, PEPE in 2024–25). Hindsight roughly
+doubled the apparent result — the reason every study here picks coins by what was known at the time.
