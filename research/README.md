@@ -165,3 +165,21 @@ The bot ranks Bybit's crypto perpetuals the same way (stocks, ETFs, commodities,
    (new coins rallied), most profit is 2025–2026, and stops on thin new coins can fill worse than the test assumes.
    Capping it at 10 open shorts cut the drawdown from 920 to 354. It runs as a separate paper bot on the VPS
    (`bot.py --strategy listing_short`, `deploy/vps/raqm-listing.service`, section on bot.da3m.io) before any decision.
+
+### 3. Short when funding is extreme — not adopted
+
+`research/funding_study.py` (Schmeling, Schrimpf & Todorov 2023, "Crypto Carry"): short a top-10 coin when its
+average funding over 1/3/7 days is above 30/60/100% a year, cover when it falls below a third of that or after
+10/30 days, optionally only if the price is below last week's. **35 of 36 variants lost money.** Very high funding
+comes in the middle of strong rallies (2021: up to −650 in one year), not at their end; the in-sample pick made
++44 on 38 trades (noise). Funding above 30% a year happens on 8.5% of top-10 coin-days.
+
+The useful result: the two strategies on paper complement each other —
+
+| | PnL | max DD | Sharpe 2024 → | 2022 |
+|---|---|---|---|---|
+| long trend, top 10 | +1,672 | 312 | 1.33 | −225 |
+| new-listing short, max 10 | +729 | 354 | 1.25 | +138 |
+| **both (what runs now)** | **+2,401** | **265** | **1.79** | **−88** |
+
+Together the drawdown is smaller than either alone: the short earns in falls, the long in rallies.
