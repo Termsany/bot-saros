@@ -1,7 +1,7 @@
 "use client"
 import { useEffect, useMemo, useState } from "react"
 import { Area, AreaChart, CartesianGrid, ComposedChart, Line, ReferenceLine, ResponsiveContainer, Scatter, Tooltip, XAxis, YAxis } from "recharts"
-import { STRATEGIES, TIERS, BACKTEST_DAYS, BOT_PAGE, backtestSpanDays, pfTone, sharpeTone, unlockTier, TREND_ID } from "@/lib/strategies"
+import { STRATEGIES, TIERS, BACKTEST_DAYS, BOT_PAGE, backtestSpanDays, minCapitalNote, pfTone, sharpeTone, unlockTier, TREND_ID } from "@/lib/strategies"
 import { getMyTier } from "@/lib/supabase"
 import { PAIRS } from "@/lib/pairs"
 import { AppShell } from "@/components/AppShell"
@@ -231,7 +231,7 @@ export default function BacktestPage(){
                     <div className="min-w-0">
                       <div className="flex items-center gap-1.5 truncate text-sm font-bold">{st.nameAr}{st.risk === "high" && <span className="rounded-full bg-loss/10 px-1.5 text-[10px] text-loss">HIGH RISK</span>}</div>
                       <div className="font-mono text-[11px] text-muted"><span className={`font-bold ${pfTone(st.pf)}`}>PF {st.pf.toFixed(2)}</span><span className="mx-1.5 text-faint">·</span>WR {st.winRate}%<span className="mx-1.5 text-faint">·</span>Sharpe <span className={sharpeTone(st.sharpeOut)}>{st.sharpeOut.toFixed(2)}</span></div>
-                      <div className="mt-0.5 text-[11px] text-faint">{st.perCoin ? "على العملة اللي تختارها" : "على كل العملات زي البوت"} · {st.sides}</div>
+                      <div className="mt-0.5 text-[11px] text-faint">{st.perCoin ? "على العملة اللي تختارها" : "على كل العملات زي البوت"} · {st.sides} · <span className="font-bold text-corona" title={minCapitalNote(st)}>أقل رأس مال ${st.minCapital.toLocaleString("en-US")}</span></div>
                     </div>
                     {locked
                       ? <span className="flex shrink-0 items-center gap-1 rounded-full bg-corona/10 px-2 py-0.5 text-[10px] font-bold text-corona"><Lock size={11}/> {unlockTier(i).name}</span>

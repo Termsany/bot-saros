@@ -1,6 +1,6 @@
 "use client"
 import { Lock } from "lucide-react"
-import { STRATEGIES, TIERS, pfTone, sharpeTone, unlockTier } from "@/lib/strategies"
+import { STRATEGIES, TIERS, minCapitalNote, pfTone, sharpeTone, unlockTier } from "@/lib/strategies"
 
 /** The four bot strategies with their tested numbers; locked ones show the plan that unlocks them. */
 export function StrategyCards({ tier }: { tier: string }){
@@ -22,6 +22,10 @@ export function StrategyCards({ tier }: { tier: string }){
                 : <span className="shrink-0 text-[11px] text-muted">{s.sides}</span>}
             </div>
             <p className="mt-1 text-xs leading-5 text-muted">{s.desc}</p>
+            <div className="mt-1.5 flex items-center justify-between gap-2 rounded-lg bg-surface2/60 px-2.5 py-1.5" title={minCapitalNote(s)}>
+              <span className="text-[11px] text-muted">أقل رأس مال</span>
+              <span className="font-mono text-sm font-bold text-corona" dir="ltr">${s.minCapital.toLocaleString("en-US")}</span>
+            </div>
             <div className="mt-1.5 font-mono text-[11px] text-muted tabular" dir="ltr" style={{ textAlign: "right" }}>
               <span className={`font-bold ${pfTone(s.pf)}`}>PF {s.pf.toFixed(2)}</span>
               <span className="mx-1.5 text-faint">·</span>WR {s.winRate}%

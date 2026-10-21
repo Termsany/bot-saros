@@ -1,7 +1,7 @@
 import { Pricing } from "@/components/Pricing"
 import { HeroPreview } from "@/components/HeroPreview"
 import { BRAND } from "@/lib/brand"
-import { BOT_PAGE, COMBINED, STATS_META, STRATEGIES, pfTone, sharpeTone, unlockTier } from "@/lib/strategies"
+import { BOT_PAGE, COMBINED, STATS_META, STRATEGIES, minCapitalNote, pfTone, sharpeTone, unlockTier } from "@/lib/strategies"
 import { Logo } from "@/components/Logo"
 import { ArrowUpRight, CandlestickChart, Check, Layers, LineChart, ShieldCheck, Zap } from "lucide-react"
 
@@ -120,6 +120,7 @@ export default function Page(){
                 <th className="px-4 py-3 text-center font-semibold">صافي الربح</th>
                 <th className="px-4 py-3 text-center font-semibold">أقصى تراجع</th>
                 <th className="px-4 py-3 text-center font-semibold">Sharpe ‎2024+</th>
+                <th className="px-4 py-3 text-center font-semibold">أقل رأس مال</th>
                 <th className="px-4 py-3 text-center font-semibold">متاح من</th>
               </tr>
             </thead>
@@ -143,6 +144,7 @@ export default function Page(){
                     <td className={`px-4 py-3.5 text-center font-mono font-bold ${s.pnl >= 0 ? "text-profit" : "text-loss"}`} dir="ltr">{s.pnl >= 0 ? "+" : ""}{s.pnl.toFixed(0)}$</td>
                     <td className="px-4 py-3.5 text-center font-mono text-loss/85" dir="ltr">−{s.maxDD.toFixed(0)}$</td>
                     <td className={`px-4 py-3.5 text-center font-mono font-bold ${sharpeTone(s.sharpeOut)}`}>{s.sharpeOut.toFixed(2)}</td>
+                    <td className="px-4 py-3.5 text-center font-mono font-bold text-corona" dir="ltr" title={minCapitalNote(s)}>${s.minCapital.toLocaleString("en-US")}</td>
                     <td className="px-4 py-3.5 text-center"><span className="rounded-full px-2.5 py-0.5 text-[11px] font-bold" style={{color: t.color, background: `${t.color}1A`}}>{t.name}</span></td>
                   </tr>
                 )
@@ -154,6 +156,7 @@ export default function Page(){
                 <td className="px-4 py-3.5 text-center font-mono font-bold text-profit" dir="ltr">+{COMBINED.core.pnl.toFixed(0)}$</td>
                 <td className="px-4 py-3.5 text-center font-mono text-loss/85" dir="ltr">−{COMBINED.core.maxDD.toFixed(0)}$</td>
                 <td className={`px-4 py-3.5 text-center font-mono font-bold ${sharpeTone(COMBINED.core.sharpeOut)}`}>{COMBINED.core.sharpeOut.toFixed(2)}</td>
+                <td className="px-4 py-3.5 text-center font-mono font-bold text-corona" dir="ltr">${STRATEGIES.slice(0, 3).reduce((a, s) => a + s.minCapital, 0).toLocaleString("en-US")}</td>
                 <td className="px-4 py-3.5"/>
               </tr>
             </tbody>
@@ -162,6 +165,7 @@ export default function Page(){
         <div className="mt-3 flex flex-wrap gap-4 text-xs text-faint">
           <span>Sharpe = الربح مقارنةً بتقلّبه (فوق 1 كويس)</span>
           <span>· أقصى تراجع = أكبر نزول من قمة الأرباح</span>
+          <span>· أقل رأس مال = هامش يكفي أقل صفقة تقبلها Binance (5$، وETH ‏20$، وBTC ‏50$) × أقصى صفقات مفتوحة + أكبر خسارة متتالية، على x2</span>
           <span>· نتايج سابقة على فلوس وهمية، مش ضمان لأي ربح</span>
         </div>
       </section>

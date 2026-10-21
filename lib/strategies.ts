@@ -3,7 +3,10 @@ import BOT_STATS from "./bot-stats.json"
 /** Measured by research/bots_stats.py on every Binance USDT-M perpetual since 2019 (delisted included), coins chosen
  *  by volume at the time, fees + real funding, $20 x2 per position — never edit these numbers by hand. */
 export type BotStats = { trades: number; winRate: number; pf: number; pnl: number; maxDD: number; sharpeIn: number; sharpeOut: number;
-  pnlOut: number; years: Record<string, number>; equity: [string, number][] }
+  pnlOut: number; years: Record<string, number>; equity: [string, number][]
+  /** smallest capital that runs it as tested (x2) on Binance: margin per trade large enough for every order to meet the
+   *  exchange minimum ($5, ETH $20, BTC $50) × most positions open at once + worst drawdown at that size */
+  minCapital: number; minMargin: number; maxOpen: number; testedCapital: number }
 /** `live` = the file the bot writes on the VPS (https://bot.da3m.io/<live>.json). `perCoin` = can be backtested on one coin. */
 export type Strategy = { id: string; name: string; nameAr: string; desc: string; method: string; tier: "free"|"starter"|"pro"|"elite"; icon: string
   risk: "normal" | "high"; live: string; perCoin: boolean; sides: string } & BotStats
@@ -49,3 +52,7 @@ export function backtestSpanDays(from: string, to: string){
   return Math.round((Date.parse(to) - Date.parse(from)) / 86400000) + 1
 }
 export const TREND_ID = "trend_daily"
+
+/** Plain-language note for the minimum capital. */
+export const minCapitalNote = (s: Strategy) =>
+  `هامش ${s.minMargin < 10 ? s.minMargin.toFixed(2) : Math.ceil(s.minMargin)}$ للصفقة × لحد ${s.maxOpen} ${s.live === "ratio" ? "رجل مفتوحة" : "صفقة مفتوحة"} + أكبر خسارة متتالية في الاختبار، على رافعة x2`

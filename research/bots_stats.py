@@ -38,6 +38,38 @@ def stats(trades, daily):
 LEVERAGES = (1, 2, 3, 5)
 
 
+def binance_min_notional():
+    """Smallest order value Binance USDT-M accepts per symbol (MIN_NOTIONAL: $5 for most, more for BTC/ETH)."""
+    import urllib.request
+    info = json.loads(urllib.request.urlopen("https://fapi.binance.com/fapi/v1/exchangeInfo", timeout=30).read())
+    out = {}
+    for x in info["symbols"]:
+        f = {y["filterType"]: y for y in x["filters"]}
+        if "MIN_NOTIONAL" in f: out[x["symbol"]] = float(f["MIN_NOTIONAL"]["notional"])
+    return out
+
+
+def min_capital(trades, max_dd, min_notional, legs_per_trade=1):
+    """Smallest capital that runs the bot as tested (x2): margin per trade large enough for every trade of the last
+    two years to meet the exchange minimum order, times the most positions open at once, plus the test's worst
+    drawdown scaled to that margin. Returns (margin per trade, capital, most positions open)."""
+    recent = [t for t in trades if pd.Timestamp(int(t["entry_ts"]), unit="ms") >= pd.Timestamp("2024-10-01")]
+    need = 0.0
+    for t in recent:
+        syms = t["pair"].split("/") if t.get("pair") else [t["symbol"]]
+        for sy in syms:
+            notional = AMOUNT * LEV if t.get("pair") else float(t["qty"]) * float(t["entry"])   # at $20 margin
+            if notional > 0: need = max(need, AMOUNT * min_notional.get(sy, 5.0) * 1.1 / notional)   # +10% for price moves / lot steps
+    ev = sorted([(int(t["entry_ts"]), legs_per_trade) for t in trades] + [(int(t["exit_ts"]), -legs_per_trade) for t in trades])
+    cur = mx = 0
+    for _, d in ev: cur += d; mx = max(mx, cur)
+    margin = max(need, 1.0)
+    capital = margin * mx + max_dd * margin / AMOUNT
+    return round(margin, 2), int(math.ceil(capital / 10) * 10), mx
+
+
+
+
 def trades_at(lev, data, fund, rk10, ever10, rk100, new):
     """The trend, momentum and new-listing trades re-simulated at leverage `lev`: the protective stop moves to
     0.8 / leverage below (above) entry so it closes before the margin is liquidated (40% at x2, 16% at x5)."""
@@ -76,8 +108,13 @@ def main():
         "ratio_trend": rf.dynamic_trades(data, fund, pm.rank_table(data, 120), 7, 50)[0],
     }
     out, dailies = {}, {}
+    mn = binance_min_notional()
     for k, tr in bots.items():
         d = ss.summary(tr, k)["_daily"]; dailies[k] = d; out[k] = stats(tr, d)
+        m, cap, mx = min_capital(tr, out[k]["maxDD"], mn, 2 if k == "ratio_trend" else 1)
+        tested = int(math.ceil((AMOUNT * mx + out[k]["maxDD"]) / 10) * 10)
+        out[k].update({"minMargin": m, "minCapital": cap, "maxOpen": mx, "testedCapital": tested})
+        print(f"  {k:<14} max open {mx:>3}  min margin/trade ${m:>6}  min capital ${cap:>6}  (as tested at $20: ${tested})")
     core = pd.DataFrame({k: dailies[k] for k in ("trend_daily", "momentum_ls", "listing_short")}).fillna(0).sum(axis=1)
     allf = pd.DataFrame(dailies).fillna(0).sum(axis=1)
     combo = {"core": stats([{"pnl": x} for x in core.values if x], core), "all": stats([{"pnl": x} for x in allf.values if x], allf)}

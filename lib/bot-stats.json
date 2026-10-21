@@ -358,7 +358,11 @@
      "2026-10",
      1675.26
     ]
-   ]
+   ],
+   "minMargin": 32.61,
+   "minCapital": 1170,
+   "maxOpen": 20,
+   "testedCapital": 720
   },
   "momentum_ls": {
    "trades": 3400,
@@ -707,7 +711,11 @@
      "2026-10",
      1880.6
     ]
-   ]
+   ],
+   "minMargin": 27.5,
+   "minCapital": 610,
+   "maxOpen": 10,
+   "testedCapital": 450
   },
   "listing_short": {
    "trades": 250,
@@ -1056,7 +1064,11 @@
      "2026-10",
      728.88
     ]
-   ]
+   ],
+   "minMargin": 2.75,
+   "minCapital": 80,
+   "maxOpen": 10,
+   "testedCapital": 560
   },
   "ratio_trend": {
    "trades": 3931,
@@ -1405,7 +1417,11 @@
      "2026-10",
      3196.11
     ]
-   ]
+   ],
+   "minMargin": 27.5,
+   "minCapital": 2250,
+   "maxOpen": 42,
+   "testedCapital": 1640
   }
  },
  "combined": {
