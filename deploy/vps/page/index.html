@@ -57,6 +57,10 @@
   .sig .on{background:rgba(34,211,160,.12);color:var(--profit)}
   .sig .off{background:var(--surface2);color:var(--faint)}
   .sig.out{opacity:.55}
+  td.up{animation:up 1s}
+  td.down{animation:down 1s}
+  @keyframes up{from{background:rgba(34,211,160,.22)}to{background:transparent}}
+  @keyframes down{from{background:rgba(255,84,112,.22)}to{background:transparent}}
   footer{margin-top:34px;color:var(--faint);font-size:12px;line-height:1.9;border-top:1px solid var(--line);padding-top:16px}
   footer a{color:var(--muted)}
   @media (max-width:760px){ .kpis{grid-template-columns:repeat(2,minmax(0,1fr))} h1{font-size:22px} .kpi .value{font-size:20px} }
@@ -85,7 +89,7 @@
 
   <div class="kpis">
     <div class="card kpi"><div class="label">الربح المحقق</div><div class="value mono" id="realized">—</div><div class="note" id="wl">—</div></div>
-    <div class="card kpi"><div class="label">ربح الصفقات المفتوحة</div><div class="value mono" id="unrealized">—</div><div class="note">بسعر آخر دورة</div></div>
+    <div class="card kpi"><div class="label">ربح الصفقات المفتوحة</div><div class="value mono" id="unrealized">—</div><div class="note">بالسعر اللحظي</div></div>
     <div class="card kpi"><div class="label">صفقات مفتوحة</div><div class="value mono" id="open">—</div><div class="note" id="marginUsed">—</div></div>
     <div class="card kpi"><div class="label">الإجمالي</div><div class="value mono" id="total">—</div><div class="note" id="since">—</div></div>
   </div>
@@ -114,63 +118,71 @@
   <footer>
     نتايج Paper حيّة من البوت، مش نصيحة استثمارية ومش ضمان لأي ربح. اختبار الاستراتيجية التاريخي في
     <a href="https://github.com/Termsany/bot-saros/blob/main/research/README.md" rel="noopener">research/README.md</a>.
-    الصفحة بتتحدث كل دقيقة.
+    الأسعار لحظية من Bybit، وبيانات البوت بتتحدث كل 15 ثانية.
   </footer>
 </div>
 
 <script>
+// Live page: bot data (status.json) every 15 s + prices streamed from Bybit's public WebSocket,
+// so open-trade prices and profit move second by second without reloading.
 const $ = id => document.getElementById(id)
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))
 const usd = (v, sign = true) => v == null ? "—" : `${sign && v > 0 ? "+" : ""}${v < 0 ? "−" : ""}$${Math.abs(v).toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2})}`
 const px = v => v == null ? "—" : Number(v).toLocaleString("en-US", {maximumSignificantDigits: 6})
 const tone = v => v > 0 ? "profit" : v < 0 ? "loss" : ""
 const ago = iso => {
-  const m = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60000))
-  return m < 1 ? "دلوقتي" : m < 60 ? `من ${m} دقيقة` : m < 1440 ? `من ${Math.round(m / 60)} ساعة` : `من ${Math.round(m / 1440)} يوم`
+  const s = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000))
+  return s < 60 ? `من ${s} ثانية` : s < 3600 ? `من ${Math.round(s / 60)} دقيقة` : s < 86400 ? `من ${Math.round(s / 3600)} ساعة` : `من ${Math.round(s / 86400)} يوم`
 }
 const day = iso => iso ? new Date(iso).toLocaleDateString("en-GB", {day: "2-digit", month: "short", timeZone: "UTC"}) : "—"
+const wsSym = sym => sym.replace("/", "").replace(":USDT", "")   // "BTC/USDT" -> "BTCUSDT"
 
-async function load(){
-  let d
-  try{ const r = await fetch(`status.json?t=${Date.now()}`, {cache: "no-store"}); if(!r.ok) throw 0; d = await r.json() }
-  catch{ $("updated").textContent = "مفيش بيانات لسه"; $("live").classList.add("stale"); return }
-  const ageMin = (Date.now() - Date.parse(d.updated)) / 60000
-  const stale = ageMin > Math.max(15, (d.poll_seconds || 300) / 60 * 3)
+let D = null                 // last status.json
+const live = {}              // BTCUSDT -> last price from the stream
+const prev = {}              // last rendered price, for the flash
+let ws = null, wsOk = false, subs = new Set(), dirty = false
+
+const priceOf = (sym, fallback) => live[wsSym(sym)] ?? fallback
+
+function render(){
+  if(!D) return
+  const d = D
+  const stale = (Date.now() - Date.parse(d.updated)) / 60000 > Math.max(15, (d.poll_seconds || 60) / 60 * 3)
   $("live").classList.toggle("stale", stale)
-  $("updated").textContent = stale ? `آخر تحديث ${ago(d.updated)} — البوت ممكن يكون واقف` : `مباشر · آخر دورة ${ago(d.updated)}`
+  $("updated").textContent = stale ? `آخر تحديث للبوت ${ago(d.updated)} — البوت ممكن يكون واقف`
+    : `${wsOk ? "أسعار لحظية" : "مباشر"} · آخر دورة للبوت ${ago(d.updated)}`
 
-  const s = d.stats
-  $("settings").innerHTML = [
-    `<span class="chip paper">${d.mode === "paper" ? "Paper — فلوس وهمية" : "LIVE"}</span>`,
-    `<span class="chip">رافعة <b class="mono">x${esc(d.leverage)}</b></span>`,
-    `<span class="chip">هامش <b class="mono">$${esc(d.margin)}</b> للصفقة</span>`,
-    d.universe_size ? `<span class="chip">أعلى <b class="mono">${esc(d.universe_size)}</b> عملة فوليوم</span>` : "",
-    `<span class="chip">فحص كل <b class="mono">${Math.round((d.poll_seconds || 300) / 60)}</b> دقايق</span>`,
-  ].join("")
-  const total = s.realized + s.unrealized
+  const pos = d.positions.map(p => {
+    const price = priceOf(p.symbol, p.price)
+    const pnl = (price - p.entry) * p.qty * (p.side === "short" ? -1 : 1)
+    return { ...p, price, pnl, pnl_pct: p.margin ? pnl / p.margin * 100 : 0 }
+  })
+  const s = d.stats, unreal = pos.reduce((a, p) => a + p.pnl, 0), total = s.realized + unreal
   $("realized").innerHTML = `<span class="${tone(s.realized)}">${usd(s.realized)}</span>`
   $("wl").textContent = `${s.closed} صفقة اتقفلت · ${s.wins} كسبانة / ${s.losses} خسرانة`
-  $("unrealized").innerHTML = `<span class="${tone(s.unrealized)}">${usd(s.unrealized)}</span>`
+  $("unrealized").innerHTML = `<span class="${tone(unreal)}">${usd(unreal)}</span>`
   $("open").textContent = s.open
-  const margin = d.positions.reduce((a, p) => a + p.margin, 0)
-  $("marginUsed").textContent = `هامش مستخدم $${margin.toFixed(0)}`
+  $("marginUsed").textContent = `هامش مستخدم $${pos.reduce((a, p) => a + p.margin, 0).toFixed(0)}`
   $("total").innerHTML = `<span class="${tone(total)}">${usd(total)}</span>`
   $("since").textContent = d.started ? `البوت شغال ${ago(d.started)}` : ""
 
-  $("openCount").textContent = d.positions.length ? `${d.positions.length} صفقة` : ""
-  $("positions").innerHTML = d.positions.length ? d.positions.map(p => `<tr>
+  $("openCount").textContent = pos.length ? `${pos.length} صفقة` : ""
+  $("positions").innerHTML = pos.length ? pos.map(p => {
+      const k = wsSym(p.symbol), flash = prev[k] == null || prev[k] === p.price ? "" : p.price > prev[k] ? "up" : "down"
+      prev[k] = p.price
+      return `<tr>
       <td class="coin">${esc(p.symbol.replace("/USDT", ""))}</td>
       <td class="num mono">${px(p.entry)}</td>
-      <td class="num mono">${px(p.price)}</td>
+      <td class="num mono ${flash}">${px(p.price)}</td>
       <td class="num mono" style="color:var(--faint)">${px(p.sl)}</td>
       <td class="num mono">$${Number(p.margin).toFixed(2)}</td>
       <td class="num mono ${tone(p.pnl)}">${usd(p.pnl)}</td>
-      <td class="num mono ${tone(p.pnl_pct)}">${p.pnl_pct > 0 ? "+" : ""}${Number(p.pnl_pct).toFixed(1)}%</td>
-      <td class="mono" style="color:var(--muted)">${day(p.opened)}</td></tr>`).join("")
+      <td class="num mono ${tone(p.pnl_pct)}">${p.pnl_pct > 0 ? "+" : ""}${p.pnl_pct.toFixed(1)}%</td>
+      <td class="mono" style="color:var(--muted)">${day(p.opened)}</td></tr>`}).join("")
     : `<tr><td colspan="8" class="empty">مفيش صفقات مفتوحة — البوت مستني ترند صاعد</td></tr>`
 
   $("signals").innerHTML = (d.signals || []).filter(x => x.in_list).map(x => `<div class="sig">
-      <span><b>${esc(x.symbol.replace("/USDT", ""))}</b> <span class="mono" style="color:var(--faint);font-size:11px">${px(x.price)}</span></span>
+      <span><b>${esc(x.symbol.replace("/USDT", ""))}</b> <span class="mono" style="color:var(--faint);font-size:11px">${px(priceOf(x.symbol, x.price))}</span></span>
       <span class="s ${x.on ? "on" : "off"}">${x.on ? "ترند صاعد" : "مستني"}</span></div>`).join("")
     || `<div class="empty">بيحمّل…</div>`
 
@@ -183,7 +195,53 @@ async function load(){
       <td style="color:var(--muted)">${esc(h.reason)}</td>
       <td class="mono" style="color:var(--muted)">${day(h.time)}</td></tr>`).join("")
 }
-load(); setInterval(load, 60000)
+
+function renderSettings(d){
+  $("settings").innerHTML = [
+    `<span class="chip paper">${d.mode === "paper" ? "Paper — فلوس وهمية" : "LIVE"}</span>`,
+    `<span class="chip">رافعة <b class="mono">x${esc(d.leverage)}</b></span>`,
+    `<span class="chip">هامش <b class="mono">$${esc(d.margin)}</b> للصفقة</span>`,
+    d.universe_size ? `<span class="chip">أعلى <b class="mono">${esc(d.universe_size)}</b> عملة فوليوم</span>` : "",
+    `<span class="chip">البوت بيفحص كل <b class="mono">${d.poll_seconds >= 60 ? Math.round(d.poll_seconds / 60) + " دقيقة" : d.poll_seconds + " ثانية"}</b></span>`,
+  ].join("")
+}
+
+async function load(){
+  try{
+    const r = await fetch(`status.json?t=${Date.now()}`, {cache: "no-store"}); if(!r.ok) throw 0
+    D = await r.json(); renderSettings(D); render(); subscribe()
+  }catch{ if(!D){ $("updated").textContent = "مفيش بيانات لسه"; $("live").classList.add("stale") } }
+}
+
+// ── Bybit public ticker stream (linear USDT perpetuals) ──
+function wanted(){
+  if(!D) return new Set()
+  return new Set([...D.positions.map(p => p.symbol), ...(D.signals || []).filter(x => x.in_list).map(x => x.symbol)].map(wsSym))
+}
+function subscribe(){
+  if(!ws || ws.readyState !== 1) return
+  const add = [...wanted()].filter(x => !subs.has(x))
+  for(let i = 0; i < add.length; i += 10){   // Bybit: up to 10 topics per request
+    ws.send(JSON.stringify({ op: "subscribe", args: add.slice(i, i + 10).map(x => `tickers.${x}`) }))
+  }
+  add.forEach(x => subs.add(x))
+}
+function connect(){
+  ws = new WebSocket("wss://stream.bybit.com/v5/public/linear")
+  let ping
+  ws.onopen = () => { wsOk = true; subs = new Set(); subscribe(); ping = setInterval(() => ws.readyState === 1 && ws.send(JSON.stringify({ op: "ping" })), 20000) }
+  ws.onmessage = e => {
+    const m = JSON.parse(e.data)
+    if(m.topic && m.data && m.data.lastPrice){ live[m.data.symbol] = +m.data.lastPrice; dirty = true }
+  }
+  ws.onclose = () => { wsOk = false; clearInterval(ping); setTimeout(connect, 3000) }   // reconnect
+  ws.onerror = () => ws.close()
+}
+
+load(); connect()
+setInterval(load, 15000)                                            // bot data
+setInterval(() => { if(dirty){ dirty = false; render() } }, 1000)   // prices: at most one redraw a second
+setInterval(() => { if(!dirty) render() }, 10000)                   // keep "x seconds ago" fresh
 </script>
 </body>
 </html>

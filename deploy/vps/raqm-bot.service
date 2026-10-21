@@ -10,7 +10,7 @@ WorkingDirectory=/opt/raqm-bot
 # TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID — never committed
 EnvironmentFile=-/opt/raqm-bot/.env
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/opt/raqm-bot/venv/bin/python bot.py --paper --strategy trend_daily --leverage 5 --amount 100 --universe 10 --poll 300 --notify --public /var/www/bot.da3m.io
+ExecStart=/opt/raqm-bot/venv/bin/python bot.py --paper --strategy trend_daily --leverage 5 --amount 100 --universe 10 --poll 60 --notify --public /var/www/bot.da3m.io
 Restart=always
 RestartSec=30
 NoNewPrivileges=true
