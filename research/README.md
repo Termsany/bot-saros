@@ -223,3 +223,23 @@ Sharpe 2.08 → 1.64, max DD 354 → 514.
 plus the fading hype of new listings. Every reversal or mean-reversion idea (pump fade, pump buy timing, pairs,
 extreme-funding short, bear-trend short) failed. The three paper bots together: +4,232, max DD 354, Sharpe 2.08
 after 2024 — nothing tested so far improves that.
+
+### 8–10. Risk-managed momentum, residual momentum, cross-sectional carry — not adopted
+
+`research/momentum_carry_study.py` (top-50 funding: Bybit 312 windows, Binance 52). Baseline = the momentum paper bot
+(2-week long/short): +1,877, max DD 242, Sharpe 0.68 before 2024 / 1.32 after.
+
+| | PnL | max DD | Sharpe < 2024 | Sharpe 2024 → |
+|---|---|---|---|---|
+| momentum now | +1,877 | 242 | 0.68 | 1.32 |
+| risk-managed (Barroso & Santa-Clara 2015), best: vol 26 w, max 1.5× | +1,699 | 252 | 0.77 | 1.29 |
+| residual (Blitz, Huij & Martens 2011), best: 2 w, beta 60 d | +1,728 | 214 | 0.56 | 1.19 |
+| carry (Schmeling et al. 2023): short highest / long lowest funding, 3 d | +1,018 | 353 | 1.00 | 0.23 |
+
+- **Risk-managed momentum:** about the same out-of-sample, smaller average size — no real gain here.
+- **Residual momentum:** smaller drawdown and a positive 2022, but weaker in both periods.
+- **Carry:** all 3 variants positive overall, but most of it is 2021 (+573) and it lost in 2025; with the three bots
+  it raised PnL (4,279 → 5,296) and lowered the out-of-sample Sharpe (2.09 → 1.88). The funding gap between coins
+  has narrowed as the market matured.
+
+The three paper bots stay as they are (+4,279, max DD 355, Sharpe 2.09 after 2024).
