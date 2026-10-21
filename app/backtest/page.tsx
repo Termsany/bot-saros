@@ -1,7 +1,7 @@
 "use client"
 import { useEffect, useMemo, useState } from "react"
 import { Area, AreaChart, CartesianGrid, ComposedChart, Line, ReferenceLine, ResponsiveContainer, Scatter, Tooltip, XAxis, YAxis } from "recharts"
-import { STRATEGIES, BACKTEST_DAYS, BOT_PAGE, backtestSpanDays, pfTone, sharpeTone, TREND_ID } from "@/lib/strategies"
+import { STRATEGIES, TIERS, BACKTEST_DAYS, BOT_PAGE, backtestSpanDays, pfTone, sharpeTone, unlockTier, TREND_ID } from "@/lib/strategies"
 import { getMyTier } from "@/lib/supabase"
 import { PAIRS } from "@/lib/pairs"
 import { AppShell } from "@/components/AppShell"
@@ -9,10 +9,12 @@ import { Kpi } from "@/components/Kpi"
 import { RaqmMark } from "@/components/Logo"
 import { apiBacktest, apiUserTier, chartUrl } from "@/lib/api"
 import { runBacktestClient } from "@/lib/backtest-client"
-import { Check, Play, TriangleAlert } from "lucide-react"
+import { runPortfolioBacktest, PORTFOLIO_LEVERAGES } from "@/lib/portfolio-backtest"
+import { Check, Lock, Play, TriangleAlert } from "lucide-react"
 
-type BTrade = { entry_ts:string; exit_ts:string; side:string; entry:number; exit:number; qty:number; pnl:number; reason:string }
+type BTrade = { entry_ts:string; exit_ts:string; side:string; entry:number; exit:number; qty:number; pnl:number; reason:string; symbol?:string }
 type BacktestData = {
+  portfolio?: boolean
   symbol: string
   timeframe: string
   stats: { total:number; wins:number; losses:number; win_rate:number; pnl:number; avg_win:number; avg_loss:number; profit_factor:number; max_dd:number }
@@ -22,7 +24,9 @@ type BacktestData = {
 
 const PROFIT = "#22D3A0", LOSS = "#FF5470", CORONA = "#F5B841", LINE = "#232838", FAINT = "#5D6378", INK = "#F2F3F7"
 const TIMEFRAMES = ["15m","1h","4h","1d"]
-const REASONS: Record<string,string> = { SL: "وقف خسارة", TP: "هدف", reverse: "إشارة عكسية", close: "نهاية المدة" }
+const REASONS: Record<string,string> = { SL: "وقف خسارة", TP: "هدف", reverse: "إشارة عكسية", close: "نهاية المدة", stop: "وقف حماية",
+  "signal off": "الترند وقف", week: "تبديل أسبوعي", time: "خلصت 90 يوم", "delisted/end": "اتشالت / نهاية البيانات", flip: "الترند اتقلب",
+  "left the list": "عملة خرجت من القائمة" }
 
 function fmt(n: number|null|undefined, d?: number){
   if(n===null || n===undefined || !isFinite(n)) return "—"
@@ -48,6 +52,9 @@ export default function BacktestPage(){
   const [leverage, setLeverage] = useState(2)
   // only the daily trend runs on one coin; the other three bots trade a whole portfolio (see the home page table)
   const [selected, setSelected] = useState<string[]>([TREND_ID])
+  const sel = STRATEGIES.find(x=> x.id===selected[0])
+  const portfolio = !!sel && !sel.perCoin     // trades many coins: results come from its full historical test
+  const [dataTo, setDataTo] = useState("")
   const trend = selected.includes(TREND_ID)   // daily candles only
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<BacktestData|null>(null)
@@ -75,14 +82,24 @@ export default function BacktestPage(){
   const span = from && to ? backtestSpanDays(from, to) : 0
   const overLimit = maxDays !== null && span > maxDays
 
+  const planCount = TIERS.find(t=> t.id===tier)?.count ?? 1
   function toggle(id:string){
-    if(!STRATEGIES.find(x=> x.id===id)?.perCoin) return
-    setSelected([id]); setTimeframe("1d"); setLeverage(2)    // tested at x2; the stop sits before liquidation
+    if(STRATEGIES.findIndex(x=> x.id===id) >= planCount) return   // locked by the plan (the server checks too)
+    setSelected([id]); setTimeframe("1d"); setLeverage(2)    // every bot was tested at x2
+    setResult(null); setError("")
   }
   async function run(){
     if(from > to){ setError("التاريخ معكوس — «من» لازم يكون قبل «إلى»"); return }
     if(overLimit){ setError(`المدة ${span} يوم — باقتك تسمح بـ ${maxDays} يوم كحد أقصى. رقّي باقتك لباك تست أطول`); return }
     setLoading(true); setError(""); setResult(null); setChartFile(""); setStdout("")
+    if(portfolio){
+      try{
+        const res = await runPortfolioBacktest({ strategy: selected[0], from, to, amount, leverage })
+        if(res.ok){ setResult(res.data as unknown as BacktestData); setRan({ from, to, strategies: selected }); setDataTo(res.dataTo) }
+        else setError(res.error)
+      } finally { setLoading(false) }
+      return
+    }
     try{
       // Try browser-direct first (Bybit/OKX — no Render, no ban)
       const client = await runBacktestClient({ symbol, timeframe: trend ? "1d" : timeframe, from, to, strategies: selected, amount, leverage })
@@ -139,9 +156,11 @@ export default function BacktestPage(){
           <div className="space-y-3">
             <h2 className="text-sm font-bold">السوق</h2>
             <Field label="العملة">
-              <select value={symbol} onChange={e=>setSymbol(e.target.value)} className={`${inputCls} font-display font-bold`} dir="ltr">
-                {PAIRS.map(p=> <option key={p} value={p}>{p}</option>)}
-              </select>
+              {portfolio
+                ? <div className={`${inputCls} text-muted`}>كل العملات — زي البوت بالظبط ({sel?.nameAr})</div>
+                : <select value={symbol} onChange={e=>setSymbol(e.target.value)} className={`${inputCls} font-display font-bold`} dir="ltr">
+                    {PAIRS.map(p=> <option key={p} value={p}>{p}</option>)}
+                  </select>}
             </Field>
             <div>
               <span className="mb-1.5 block text-xs font-semibold text-muted">الفريم</span>
@@ -189,10 +208,14 @@ export default function BacktestPage(){
             <h2 className="text-sm font-bold">الرافعة</h2>
             <div className="grid grid-cols-4 gap-0.5 rounded-[10px] bg-surface2 p-[3px]" dir="ltr">
               {[1, 2, 3, 5].map(x=>(
-                <button key={x} onClick={()=>setLeverage(x)} aria-pressed={leverage===x} className={`rounded-lg py-1.5 font-mono text-xs font-bold transition ${leverage===x ? "bg-corona text-void" : "text-muted hover:text-ink"}`}>x{x}</button>
+                <button key={x} onClick={()=>setLeverage(x)} aria-pressed={leverage===x} disabled={portfolio && !(PORTFOLIO_LEVERAGES[selected[0]] || [2]).includes(x)} className={`rounded-lg py-1.5 font-mono text-xs font-bold transition disabled:opacity-30 ${leverage===x ? "bg-corona text-void" : "text-muted hover:text-ink"}`}>x{x}</button>
               ))}
             </div>
-            <p className="text-xs text-faint">{trend
+            <p className="text-xs text-faint">{portfolio
+              ? (selected[0] === "ratio_trend"
+                ? <>ترند النسبة مالوش وقف (الصفقة لونج وشورت مع بعض)، فاتختبر على x2 بس. مبلغ الصفقة بيكبّر ويصغّر النتيجة بنفس النسبة.</>
+                : <>كل رافعة متحسوبة لوحدها: الوقف بيتحط قبل التصفية (نزول {(80/leverage).toFixed(0)}% يقفل الصفقة على x{leverage})، فالربح مش بيتضاعف بنفس نسبة الرافعة.</>)
+              : trend
               ? <>الترند اليومي اتختبر على x2. الصفقة بتفضل مفتوحة أسابيع، والوقف بيتحط قبل التصفية: نزول {(80/leverage).toFixed(0)}% يقفلها.</>
               : <>كل الأرقام المنشورة على x5. رافعة أعلى = ربح وخسارة أكبر بنفس النسبة.</>}</p>
           </div>
@@ -200,21 +223,24 @@ export default function BacktestPage(){
           <div className="space-y-3 border-t border-line pt-5">
             <h2 className="text-sm font-bold">الاستراتيجية</h2>
             <div className="space-y-1.5">
-              {STRATEGIES.map(st=>{
-                const on = selected.includes(st.id)
+              {STRATEGIES.map((st, i)=>{
+                const on = selected.includes(st.id), locked = i >= planCount
                 return (
-                  <button key={st.id} onClick={()=>toggle(st.id)} aria-pressed={on} disabled={!st.perCoin}
-                    className={`flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2 text-right transition disabled:cursor-default ${on ? "bg-surface2 ring-1 ring-corona/30" : "border border-line"} ${st.perCoin && !on ? "hover:bg-surface2/60" : ""}`}>
+                  <button key={st.id} onClick={()=>toggle(st.id)} aria-pressed={on} disabled={locked}
+                    className={`flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2 text-right transition disabled:cursor-not-allowed disabled:opacity-60 ${on ? "bg-surface2 ring-1 ring-corona/30" : "border border-line hover:bg-surface2/60"}`}>
                     <div className="min-w-0">
                       <div className="flex items-center gap-1.5 truncate text-sm font-bold">{st.nameAr}{st.risk === "high" && <span className="rounded-full bg-loss/10 px-1.5 text-[10px] text-loss">HIGH RISK</span>}</div>
                       <div className="font-mono text-[11px] text-muted"><span className={`font-bold ${pfTone(st.pf)}`}>PF {st.pf.toFixed(2)}</span><span className="mx-1.5 text-faint">·</span>WR {st.winRate}%<span className="mx-1.5 text-faint">·</span>Sharpe <span className={sharpeTone(st.sharpeOut)}>{st.sharpeOut.toFixed(2)}</span></div>
-                      {!st.perCoin && <div className="mt-0.5 text-[11px] text-faint">بتشتغل على محفظة عملات كاملة — مش على عملة واحدة. <a href={BOT_PAGE} target="_blank" rel="noopener" onClick={e=> e.stopPropagation()} className="text-corona hover:underline">شوفها شغالة</a></div>}
+                      <div className="mt-0.5 text-[11px] text-faint">{st.perCoin ? "على العملة اللي تختارها" : "على كل العملات زي البوت"} · {st.sides}</div>
                     </div>
-                    {st.perCoin && <span className={`grid h-5 w-5 shrink-0 place-items-center rounded-full border ${on ? "border-corona bg-corona text-void" : "border-faint"}`}>{on && <Check size={13} strokeWidth={3}/>}</span>}
+                    {locked
+                      ? <span className="flex shrink-0 items-center gap-1 rounded-full bg-corona/10 px-2 py-0.5 text-[10px] font-bold text-corona"><Lock size={11}/> {unlockTier(i).name}</span>
+                      : <span className={`grid h-5 w-5 shrink-0 place-items-center rounded-full border ${on ? "border-corona bg-corona text-void" : "border-faint"}`}>{on && <Check size={13} strokeWidth={3}/>}</span>}
                   </button>
                 )
               })}
             </div>
+            {portfolio && <p className="text-[11px] leading-5 text-faint">النتيجة = صفقات البوت في اختباره الكامل (كل عملات Binance من 2019، والعملات بتتختار بالفوليوم وقتها، شامل الرسوم والـ funding) اللي فتحت في المدة دي. صفقاته الحية على <a href={BOT_PAGE} target="_blank" rel="noopener" className="text-corona hover:underline">صفحة البوتات</a>.</p>}
           </div>
 
           <button onClick={run} disabled={loading || selected.length===0 || overLimit}
@@ -256,8 +282,9 @@ export default function BacktestPage(){
             <>
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <h2 className="font-display text-lg font-bold" dir="ltr" style={{textAlign:"right"}}>{result.symbol} · {result.timeframe}</h2>
+                  <h2 className="font-display text-lg font-bold" dir="ltr" style={{textAlign:"right"}}>{result.portfolio ? `${sel?.name || ""} · ALL COINS` : `${result.symbol} · ${result.timeframe}`}</h2>
                   <p className="font-mono text-xs text-muted" dir="ltr" style={{textAlign:"right"}}>{ran?.from} → {ran?.to} · {ranStrategies.map(x=> x.name).join(" + ")}</p>
+                  {result.portfolio && dataTo && ran?.to && ran.to > dataTo && <p className="text-[11px] text-corona">بيانات الاختبار لحد {dataTo} — اللي بعدها على صفحة البوتات مباشر</p>}
                 </div>
                 <span className={`rounded-full px-4 py-1.5 text-sm font-bold ${s.pnl>=0 ? "bg-profit/10 text-profit" : "bg-loss/10 text-loss"}`}>
                   {s.pnl>=0 ? "مكسب" : "خسارة"} <span className="font-mono" dir="ltr">{signed(s.pnl)} USDT</span>
@@ -265,7 +292,7 @@ export default function BacktestPage(){
               </div>
 
               <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
-                <Kpi label="المحصلة" value={signed(s.pnl)} chip={`${roi>=0?"+":""}${roi.toFixed(1)}%`} tone={s.pnl>=0?"profit":"loss"} sub={`USDT · هامش $${amount}`} spark={equity.map(e=> e.v)}/>
+                <Kpi label="المحصلة" value={signed(s.pnl)} chip={result.portfolio ? undefined : `${roi>=0?"+":""}${roi.toFixed(1)}%`} tone={s.pnl>=0?"profit":"loss"} sub={result.portfolio ? `USDT · $${amount} لكل صفقة` : `USDT · هامش $${amount}`} spark={equity.map(e=> e.v)}/>
                 <Kpi label="نسبة الفوز" value={s.total ? `${s.win_rate.toFixed(1)}%` : "—"} chip={`${s.wins}W · ${s.losses}L`} tone={!s.total ? "neutral" : s.win_rate>=50?"profit":"loss"} sub={`${s.total} صفقة`}/>
                 <Kpi label="Profit Factor" value={!s.profit_factor ? "—" : s.profit_factor >= 99 ? "∞" : fmt(s.profit_factor, 2)} chip={s.profit_factor ? (s.profit_factor>=1.5?"ممتاز":s.profit_factor>=1?"جيد":"ضعيف") : undefined} tone={!s.profit_factor ? "neutral" : s.profit_factor>=1?"profit":"loss"} sub={`متوسط ربح ${fmt(s.avg_win,2)} · خسارة ${fmt(s.avg_loss,2)}`}/>
                 <Kpi label="أقصى تراجع" value={s.max_dd ? `-${fmt(s.max_dd, 2)}` : "0.00"} tone={s.max_dd > amount*0.2 ? "loss" : "neutral"} sub="Max Drawdown · USDT"/>
@@ -352,16 +379,17 @@ export default function BacktestPage(){
                 <div className="max-h-[420px] overflow-auto">
                   <table className="w-full min-w-[640px] text-[13px]">
                     <thead className="sticky top-0 bg-surface2 text-[11px] text-muted">
-                      <tr>{["الاتجاه","الدخول","الخروج","السبب","النتيجة"].map(h=> <th key={h} className="px-5 py-2.5 text-right font-semibold">{h}</th>)}</tr>
+                      <tr>{[...(result.portfolio ? ["العملة"] : []), "الاتجاه","الدخول","الخروج","السبب","النتيجة"].map(h=> <th key={h} className="px-5 py-2.5 text-right font-semibold">{h}</th>)}</tr>
                     </thead>
                     <tbody>
                       {result.trades.length===0 ? (
-                        <tr><td colSpan={5} className="px-5 py-10 text-center text-sm text-faint">الاستراتيجية ما دخلتش أي صفقة في المدة دي — جرّب مدة أطول أو فريم أصغر</td></tr>
+                        <tr><td colSpan={result.portfolio ? 6 : 5} className="px-5 py-10 text-center text-sm text-faint">الاستراتيجية ما دخلتش أي صفقة في المدة دي — جرّب مدة أطول</td></tr>
                       ) : [...result.trades].reverse().map((t,i)=>(
                         <tr key={i} className="border-t border-line">
-                          <td className="px-5 py-3"><span className={`rounded-md px-1.5 py-0.5 font-mono text-[10px] font-bold ${t.side==="long" ? "bg-profit/10 text-profit" : "bg-loss/10 text-loss"}`}>{t.side==="long" ? "LONG" : "SHORT"}</span></td>
-                          <td className="px-5 py-3 font-mono tabular" dir="ltr" style={{textAlign:"right"}}>{fmt(t.entry)} <span className="text-[11px] text-faint">{shortTs(t.entry_ts)}</span></td>
-                          <td className="px-5 py-3 font-mono tabular" dir="ltr" style={{textAlign:"right"}}>{fmt(t.exit)} <span className="text-[11px] text-faint">{shortTs(t.exit_ts)}</span></td>
+                          {result.portfolio && <td className="px-5 py-3 font-bold" dir="ltr" style={{textAlign:"right"}}>{t.symbol}</td>}
+                          <td className="px-5 py-3"><span className={`rounded-md px-1.5 py-0.5 font-mono text-[10px] font-bold ${t.side==="long" ? "bg-profit/10 text-profit" : t.side==="pair" ? "bg-corona/10 text-corona" : "bg-loss/10 text-loss"}`}>{t.side==="long" ? "LONG" : t.side==="pair" ? "LONG/SHORT" : "SHORT"}</span></td>
+                          <td className="px-5 py-3 font-mono tabular" dir="ltr" style={{textAlign:"right"}}>{t.side==="pair" ? "" : fmt(t.entry)} <span className="text-[11px] text-faint">{shortTs(t.entry_ts)}</span></td>
+                          <td className="px-5 py-3 font-mono tabular" dir="ltr" style={{textAlign:"right"}}>{t.side==="pair" ? "" : fmt(t.exit)} <span className="text-[11px] text-faint">{shortTs(t.exit_ts)}</span></td>
                           <td className="px-5 py-3 text-muted">{REASONS[t.reason] || t.reason}</td>
                           <td className={`px-5 py-3 font-mono font-bold tabular ${t.pnl>=0 ? "text-profit" : "text-loss"}`} dir="ltr" style={{textAlign:"right"}}>{signed(t.pnl)}</td>
                         </tr>

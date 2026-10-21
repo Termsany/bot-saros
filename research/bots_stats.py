@@ -1,5 +1,6 @@
 """
-Numbers the site shows for the four paper bots (lib/bot-stats.json) — never edit that file by hand.
+Numbers the site shows for the four paper bots (lib/bot-stats.json) and every trade of their historical test
+(public/bot-trades.json, used by the backtest page for the portfolio bots) — never edit those files by hand.
 Same data and rules as the studies: every Binance USDT-M perpetual since 2019 (delisted included), coins chosen by
 volume at the time, real funding, fees 0.04%, $20 margin x2 per position (per leg). "Out-of-sample" = from 2024.
 
@@ -34,6 +35,26 @@ def stats(trades, daily):
             "equity": [[m.strftime("%Y-%m"), round(float(v), 2)] for m, v in monthly.items() if m.year >= 2020]}
 
 
+LEVERAGES = (1, 2, 3, 5)
+
+
+def trades_at(lev, data, fund, rk10, ever10, rk100, new):
+    """The trend, momentum and new-listing trades re-simulated at leverage `lev`: the protective stop moves to
+    0.8 / leverage below (above) entry so it closes before the margin is liquidated (40% at x2, 16% at x5)."""
+    ss.LEV = pm.LEV = lev                      # module constants the simulators read
+    out = {"trend_daily": [], "listing_short": []}
+    for s in ever10:
+        df = data[s]; top10 = list((rk10[s].reindex(pd.to_datetime(df.ts, unit="ms")) <= 10).fillna(False))
+        out["trend_daily"] += [dict(t, symbol=s) for t in st.run_trend_daily(list(df.open), list(df.high), list(df.low), list(df.close), list(df.ts),
+                                                                             [fund[s].get(int(t), 0.0) for t in df.ts], AMOUNT, lev, FEE, 0, top10)]
+    out["momentum_ls"] = [dict(t, symbol=s) for s, d, side in pm.momentum_positions(data, rk100, 2, True) if (t := pm.momentum_trade(data[s], fund[s], d, side))]
+    lst = []
+    for s in new: lst += [dict(t, symbol=s) for t in ss.run_listing_short(data[s], [fund[s].get(int(t), 0.0) for t in data[s].ts], 30, 90, min(0.4, 0.8 / lev))]
+    out["listing_short"] = pm.cap(lst, 10)
+    ss.LEV = pm.LEV = LEV
+    return out
+
+
 def main():
     data = pickle.loads((CACHE / "universe_daily.pkl").read_bytes())
     fund_raw = pickle.loads((CACHE / "universe_funding.pkl").read_bytes())
@@ -43,14 +64,14 @@ def main():
     long_tr = []
     for s in ever10:
         df = data[s]; top10 = list((rk10[s].reindex(pd.to_datetime(df.ts, unit="ms")) <= 10).fillna(False))
-        long_tr += st.run_trend_daily(list(df.open), list(df.high), list(df.low), list(df.close), list(df.ts),
-                                      [fund[s].get(int(t), 0.0) for t in df.ts], AMOUNT, LEV, FEE, 0, top10)
+        long_tr += [dict(t, symbol=s) for t in st.run_trend_daily(list(df.open), list(df.high), list(df.low), list(df.close), list(df.ts),
+                                      [fund[s].get(int(t), 0.0) for t in df.ts], AMOUNT, LEV, FEE, 0, top10)]
     new = [s for s, df in data.items() if pd.to_datetime(df.ts.iloc[0], unit="ms") >= pd.Timestamp("2021-01-01")]
     lst = []
-    for s in new: lst += ss.run_listing_short(data[s], [fund[s].get(int(t), 0.0) for t in data[s].ts], 30, 90, 0.4)
+    for s in new: lst += [dict(t, symbol=s) for t in ss.run_listing_short(data[s], [fund[s].get(int(t), 0.0) for t in data[s].ts], 30, 90, 0.4)]
     bots = {
         "trend_daily": long_tr,
-        "momentum_ls": [t for s, d, side in pm.momentum_positions(data, rk100, 2, True) if (t := pm.momentum_trade(data[s], fund[s], d, side))],
+        "momentum_ls": [dict(t, symbol=s) for s, d, side in pm.momentum_positions(data, rk100, 2, True) if (t := pm.momentum_trade(data[s], fund[s], d, side))],
         "listing_short": pm.cap(lst, 10),
         "ratio_trend": rf.dynamic_trades(data, fund, pm.rank_table(data, 120), 7, 50)[0],
     }
@@ -69,6 +90,25 @@ def main():
     path = ROOT / "lib" / "bot-stats.json"
     path.write_text(json.dumps({"meta": meta, "bots": out, "combined": combo}, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
     print(f"wrote {path}")
+    # every trade, compact, for the backtest page (pnl at $20 x2 — the page scales it with the margin)
+    sym = lambda t: (t.get("pair") or t.get("symbol") or "").replace("USDT", "")
+    trades = {k: [[int(t["entry_ts"]), int(t["exit_ts"]), sym(t), t["side"], round(float(t["entry"]), 8), round(float(t["exit"]), 8),
+                   round(float(t["pnl"]), 4), t.get("reason", "")] for t in sorted(tr, key=lambda t: t["entry_ts"])] for k, tr in bots.items()}
+    # per leverage (the page lets the user pick x1-x5); the ratio trend has no stop, so it is only simulated at x2
+    rows = lambda tr: [[int(t["entry_ts"]), int(t["exit_ts"]), sym(t), t["side"], round(float(t["entry"]), 8), round(float(t["exit"]), 8),
+                        round(float(t["pnl"]), 4), t.get("reason", "")] for t in sorted(tr, key=lambda t: t["entry_ts"])]
+    by_lev = {k: {} for k in bots}
+    for lev in LEVERAGES:
+        at = trades_at(lev, data, fund, rk10, ever10, rk100, new) if lev != LEV else {k: bots[k] for k in ("trend_daily", "momentum_ls", "listing_short")}
+        for k, tr in at.items(): by_lev[k][str(lev)] = rows(tr)
+        print(f"  x{lev}: " + "  ".join(f"{k} {sum(t['pnl'] for t in tr):+.0f}" for k, tr in at.items()))
+    by_lev["ratio_trend"][str(LEV)] = trades["ratio_trend"]
+    assert by_lev["momentum_ls"][str(LEV)] == trades["momentum_ls"]          # the x2 set is the one the site's numbers use
+    tpath = ROOT / "public" / "bot-trades.json"; tpath.parent.mkdir(exist_ok=True)
+    tpath.write_text(json.dumps({"meta": {**meta, "fields": ["entry_ts", "exit_ts", "symbol", "side", "entry", "exit", "pnl", "reason"],
+                                          "leverages": {k: sorted(map(int, v)) for k, v in by_lev.items()}},
+                                 "trades": by_lev}, separators=(",", ":")), encoding="utf-8")
+    print(f"wrote {tpath} ({tpath.stat().st_size // 1024} KB)")
     for k, v in out.items(): print(f"  {k:<14} trades {v['trades']:>5} WR {v['winRate']:>5}% PF {v['pf']:>5} pnl {v['pnl']:>9} DD {v['maxDD']:>7} sharpe {v['sharpeIn']}/{v['sharpeOut']}")
     for k, v in combo.items(): print(f"  combined {k:<5} pnl {v['pnl']:>9} DD {v['maxDD']:>7} sharpe {v['sharpeIn']}/{v['sharpeOut']}")
 
