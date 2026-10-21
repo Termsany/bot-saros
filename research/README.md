@@ -127,3 +127,23 @@ Same 8 coins, $20 margin, fees + funding (first 60% / last 40% as above):
 
 The protective stop hit 2 times in 630 trades. PF is inflated by a few huge trends — DOGE in 2021 alone is
 +2,247 of the +3,803 at ×2; without DOGE it is +1,557. Win rate is about 33%: many small losses, few big wins.
+
+### Which coins: top N by volume (October 2026)
+
+The fixed 8 coins were picked today — coins that survived and grew — so their numbers flatter the strategy.
+`research/universe_study.py` re-runs the daily trend (×2, $20) on **every** Binance USDT-M perpetual since 2019,
+delisted ones included (133 of them), allowing new entries each day only for the top N by 30-day average USDT
+volume among coins with ≥150 days of history. Funding: the daily median of the 8 coins' real funding.
+
+| coins | trades | PnL | max DD | Sharpe before 2024 | Sharpe 2024 → | most open at once |
+|---|---|---|---|---|---|---|
+| fixed 8 (hindsight) | 630 | +3,727 | 128 | 0.71 | 1.29 | 8 |
+| top 5 | 466 | +515 | 156 | 0.50 | 0.92 | 10 |
+| **top 10** | 911 | +1,427 | 343 | 0.86 | **1.07** | 20 |
+| top 15 | 1,379 | +1,753 | 526 | 1.00 | 0.79 | 27 |
+| top 20 | 1,822 | +1,924 | 550 | 1.05 | 0.79 | 38 |
+| top 30 | 2,673 | +4,058 | 768 | 0.80 | 0.55 | 47 |
+
+The edge without hindsight is smaller but still there. Top 10 is what the VPS bot runs (`deploy/vps/`):
+best out-of-sample Sharpe and far smaller drawdowns than 15+; 2022 and 2023 were losing years for every variant.
+The bot ranks Bybit's crypto perpetuals the same way (stocks, ETFs, commodities, forex and stablecoins excluded).

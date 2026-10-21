@@ -31,9 +31,11 @@ def size_factor(c, i):
     return min(1.0, VOL_TARGET / v) if v > 0 else 1.0
 
 
-def run_trend_daily(o, h, l, c, ts, funding=None, amount=20, leverage=2, fee=0.0004, start_ts=0):
+def run_trend_daily(o, h, l, c, ts, funding=None, amount=20, leverage=2, fee=0.0004, start_ts=0, allowed=None):
     """Backtest on daily candle arrays (oldest first); entries only on candles at or after start_ts.
     funding[i] = funding rate paid over candle i (sum of its payments), or None.
+    allowed[i] = False blocks a new entry decided at candle i (the bot only buys coins in its volume top list);
+    exits are never blocked. Python-only option — the browser backtest runs one coin, always allowed.
     Returns trades: {entry_ts, exit_ts, side, entry, exit, qty, pnl, reason, kind}."""
     n = len(c); trades = []; pos = None; pending = None
     for i in range(n):
@@ -51,7 +53,7 @@ def run_trend_daily(o, h, l, c, ts, funding=None, amount=20, leverage=2, fee=0.0
         # decision at candle i's close
         if i + 1 < n and i >= VOL_DAYS:
             on = trend_on(c, i)
-            if pos is None and on and ts[i] >= start_ts:
+            if pos is None and on and ts[i] >= start_ts and (allowed is None or allowed[i]):
                 pending, pend_size = "buy", size_factor(c, i)
             elif pos is not None and not on:
                 pending = "sell"

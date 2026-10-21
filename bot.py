@@ -69,6 +69,86 @@ def get_exchange(auth=False):
         kwargs["apiKey"]=ak; kwargs["secret"]=sc
     return ccxt.bybit(kwargs), None
 
+STABLES = {"USDC", "FDUSD", "TUSD", "USDP", "BUSD", "DAI", "USDE", "USD1", "PAXG", "XAUT"}  # stablecoins, gold
+_universe = {"key": None, "symbols": []}
+
+def volume_universe(ex, n):
+    """Top n USDT perpetuals by average USDT volume over the last 30 closed daily candles, among coins with
+    at least 150 daily candles (the trend needs 120 days) — research/universe_study.py. Refreshed once a day."""
+    key = (datetime.now(timezone.utc).date().isoformat(), n)
+    if _universe["key"] == key: return _universe["symbols"]
+    ex.load_markets()
+    tickers = ex.fetch_tickers(params={"category": "linear"})
+    cands = []
+    for sym, t in tickers.items():
+        m = ex.markets.get(sym) or {}
+        info = m.get("info") or {}
+        crypto = info.get("symbolType", "") in ("", "innovation")   # Bybit also lists stocks, ETFs, commodities, forex as USDT perps
+        if m.get("swap") and m.get("linear") and m.get("quote") == "USDT" and m.get("settle") == "USDT" and m.get("base") not in STABLES                 and crypto and m.get("active", True) and not info.get("isPreListing"):
+            cands.append((float(t.get("quoteVolume") or 0), sym))
+    ranked = []
+    for _, sym in sorted(cands, reverse=True)[:n * 3]:   # 24h volume narrows the list, the 30-day average ranks it
+        try:
+            k = ex.fetch_ohlcv(sym, "1d", limit=200)[:-1]
+            if len(k) >= 150: ranked.append((sum(r[4] * r[5] for r in k[-30:]) / 30, sym))
+        except Exception as e: log(f"volume {sym}: {e}")
+    syms = [s for _, s in sorted(ranked, reverse=True)[:n]]
+    if syms: _universe.update(key=key, symbols=syms)
+    log(f"🔝 أعلى {n} عملة فوليوم (متوسط 30 يوم): {', '.join(s.split('/')[0] for s in syms)}")
+    return syms or _universe["symbols"]
+
+def cycle_symbols(ex, state):
+    """(symbols to analyse, symbols allowed to open new trades). With universe_size, new trades only in the
+    volume top list; open positions keep being managed after a coin drops out of it."""
+    n = int(CONFIG.get("universe_size") or 0)
+    if not n: return list(CONFIG["symbols"]), None
+    allowed = set(volume_universe(ex, n))
+    return sorted(allowed | set(state["positions"])), allowed
+
+def notify(text):
+    """Telegram message from the standalone bot (python bot.py --notify); the backend loop sends its own."""
+    tok, chat = os.getenv("TELEGRAM_BOT_TOKEN", ""), os.getenv("TELEGRAM_CHAT_ID", "")
+    if not (CONFIG.get("notify") and tok and chat): return
+    try:
+        import urllib.request
+        body = json.dumps({"chat_id": chat, "text": text, "disable_web_page_preview": True}).encode()
+        urllib.request.urlopen(urllib.request.Request(f"https://api.telegram.org/bot{tok}/sendMessage", data=body,
+                               headers={"Content-Type": "application/json"}), timeout=10)
+    except Exception as e: print(f"telegram: {e}")
+
+def write_public_status(state, analyses, symbols_allowed):
+    """Read-only snapshot for the bot's public page (deploy/vps/page): trades and results only — no keys, no config secrets."""
+    out_dir = CONFIG.get("public_dir")
+    if not out_dir: return
+    lev = int(CONFIG.get("leverage", 2)); now = datetime.now(timezone.utc)
+    positions = []
+    for sym, pos in state["positions"].items():
+        price = (analyses.get(sym) or {}).get("price") or pos["entry"]
+        pnl = (price - pos["entry"]) * pos["qty"] * (1 if pos.get("side", "long") == "long" else -1)
+        margin = pos["entry"] * pos["qty"] / max(1, int(pos.get("leverage", lev)))
+        positions.append({"symbol": sym.split(":")[0], "side": pos.get("side", "long"), "entry": pos["entry"], "price": price,
+                          "qty": pos["qty"], "margin": round(margin, 2), "sl": pos.get("sl"), "pnl": round(pnl, 4),
+                          "pnl_pct": round(pnl / margin * 100, 2) if margin else 0, "opened": pos.get("time")})
+    history = [{"symbol": h["symbol"].split(":")[0], "entry": h.get("entry"), "exit": h.get("exit"), "pnl": round(float(h.get("pnl", 0)), 4),
+                "reason": h.get("reason", ""), "time": h.get("time")} for h in state.get("history", [])[-200:]]
+    signals = [{"symbol": sym.split(":")[0], "price": a.get("price"), "on": bool((a.get("trend") or {}).get("on")),
+                "in_list": bool(a.get("in_universe", True)), "size": round((a.get("trend") or {}).get("size", 0) * 100)}
+               for sym, a in sorted(analyses.items())]
+    st = state.get("stats", {})
+    unreal = sum(x["pnl"] for x in positions)
+    data = {"updated": now.isoformat(), "mode": "paper" if CONFIG["paper_trading"] else "live",
+            "strategy": ",".join(CONFIG.get("enabled_strategies") or []), "leverage": lev, "margin": CONFIG.get("trade_amount_usdt"),
+            "universe_size": CONFIG.get("universe_size"), "universe": [x.split("/")[0] for x in sorted(symbols_allowed or [])],
+            "poll_seconds": CONFIG.get("poll_seconds"), "started": CONFIG.get("started_at"),
+            "stats": {"closed": st.get("trades", 0), "wins": st.get("wins", 0), "losses": st.get("losses", 0),
+                      "realized": round(float(st.get("pnl", 0)), 4), "unrealized": round(unreal, 4), "open": len(positions)},
+            "positions": sorted(positions, key=lambda x: x["symbol"]), "history": history[::-1], "signals": signals}
+    try:
+        d = Path(out_dir); d.mkdir(parents=True, exist_ok=True)
+        tmp = d / "status.json.tmp"; tmp.write_text(json.dumps(data, ensure_ascii=False, default=str), encoding="utf-8")
+        tmp.replace(d / "status.json")   # atomic: the page never reads half a file
+    except Exception as e: log(f"public status: {e}")
+
 def trend_mode():
     """Daily trend runs alone on daily candles, long only, exits when the trend turns (strategies_trend.py)."""
     return "trend_daily" in (CONFIG.get("enabled_strategies") or [])
@@ -495,6 +575,7 @@ def check_sl_tp(state, prices, ex=None):
             if CONFIG["paper_trading"]:
                 pnl=(price-entry)*qty if pos.get("side","long")=="long" else (entry-price)*qty; pnl_pct=(pnl/(entry*qty)*100) if entry*qty else 0
                 log(f"🔒 اغلاق {symbol} {reason} @ {price:.4f} PnL {pnl:+.4f} ({pnl_pct:+.2f}%)")
+                notify(f"🔒 قفل {symbol} — {reason}\nدخول {entry:.6g} → خروج {price:.6g}\nPnL {pnl:+.2f}$ (Paper)")
                 state["history"].append({"symbol":symbol,"side":pos.get("side","long"),"entry":entry,"exit":price,"qty":qty,"pnl":pnl,"pnl_pct":pnl_pct,"reason":reason,"time":datetime.now(timezone.utc).isoformat(),"type":"paper"})
             else:
                 close_side="close_long" if pos.get("side","long")=="long" else "close_short"; _lev=int(CONFIG.get("leverage",5)) if CONFIG.get("market","future")=="future" else 1; res=place_order(ex or get_exchange(auth=True)[0],symbol,close_side,qty*price/_lev,price); pnl=(res["price"]-entry)*res["qty"] if pos.get("side","long")=="long" else (entry-res["price"])*res["qty"]
@@ -546,10 +627,12 @@ def try_enter_trend(symbol, analysis, state, ex):
         if not CONFIG["paper_trading"]: log(f"⏸️ {symbol} الترند اليومي شغال Paper بس"); return
         pnl=(price-pos["entry"])*pos["qty"]
         log(f"📉 اغلاق {symbol} — الترند وقف @ {price:.6g} PnL {pnl:+.4f}")
+        notify(f"📉 قفل {symbol} — الترند وقف\nدخول {pos['entry']:.6g} → خروج {price:.6g}\nPnL {pnl:+.2f}$ (Paper)")
         state["history"].append({"symbol":symbol,"side":"long","entry":pos["entry"],"exit":price,"qty":pos["qty"],"pnl":pnl,"pnl_pct":pnl/(pos["entry"]*pos["qty"])*100,"reason":"الترند وقف","time":datetime.now(timezone.utc).isoformat(),"type":"paper"})
         state["stats"]["trades"]+=1; state["stats"]["pnl"]+=float(pnl); state["stats"]["wins" if pnl>0 else "losses"]+=1
         state["positions"].pop(symbol,None); state["last_trade"][symbol]=datetime.now(timezone.utc).isoformat(); save_state(state)
         return
+    if not analysis.get("in_universe", True): return   # not in the volume top list today: no new trade
     seen=state.setdefault("trend_seen",{})
     if not sig["on"] or seen.get(symbol)==sig["ts"]: return   # one entry per closed daily candle, like the backtest
     seen[symbol]=sig["ts"]; save_state(state)
@@ -564,6 +647,7 @@ def try_enter_trend(symbol, analysis, state, ex):
             "time":datetime.now(timezone.utc).isoformat(),"sl":sl,"tp":None,"breakeven":False,"trend":True}
         state["last_trade"][symbol]=datetime.now(timezone.utc).isoformat(); save_state(state)
         log(f"✅ 🟢 لونج وهمي {symbol} ترند يومي x{lev} @ {res['price']:.6g} حجم {sig['size']*100:.0f}% وقف حماية {sl:.6g}")
+        notify(f"🟢 لونج {symbol} — ترند يومي x{lev} (Paper)\nدخول {res['price']:.6g} · حجم {sig['size']*100:.0f}% من ${position_size(price, ex)*lev:.0f}\nوقف حماية {sl:.6g} · الخروج لما الترند يقف")
     except Exception as e: log(f"فشل long {symbol}: {e}")
 
 def try_enter(symbol, analysis, state, ex):
@@ -669,18 +753,21 @@ def run_once():
     ex,err=get_exchange(auth=not CONFIG["paper_trading"])
     if err: ex=ccxt.bybit({"enableRateLimit":True}); CONFIG["paper_trading"]=True
     prices={}; analyses={}
-    for sym in CONFIG["symbols"]:
+    try: symbols, allowed = cycle_symbols(ex, state)
+    except Exception as e: log(f"قائمة العملات: {e}"); symbols, allowed = sorted(set(_universe["symbols"]) | set(state["positions"])), set(_universe["symbols"])
+    for sym in symbols:
         try:
             df=fetch_ohlcv(sym, CONFIG["timeframe"], limit=candles_needed(), ex=ex)
-            a=analyze(sym, df); analyses[sym]=a; prices[sym]=a["price"]
+            a=analyze(sym, df); a["in_universe"]=allowed is None or sym in allowed; analyses[sym]=a; prices[sym]=a["price"]
             bd=" | ".join(f"{k} {v[0]:+.2f}" for k,v in a["breakdown"].items())
             # اختصر SHIB/PEPE لعرض أوضح
-            log(f"{sym:10s} @ {a['price']:.6g} سكور {a['total']:+.3f} {a['decision']:8s} | {bd} | SL {a['sl']:.4g} TP {a['tp']:.4g}")
+            log(f"{sym:10s} @ {a['price']:.6g} سكور {a['total']:+.3f} {a['decision']:8s} | {bd} | SL {a['sl']:.4g} TP {a['tp']:.4g}" if a.get('tp') else f"{sym:10s} @ {a['price']:.6g} {a['decision']:8s} | {bd} | وقف حماية {a['sl']:.4g}")
         except Exception as e: log(f"{sym} فشل: {e}")
     if prices: check_sl_tp(state, prices, ex)
     for sym,a in analyses.items():
         try: try_enter(sym,a,state,ex)
         except Exception as e: log(f"دخول {sym}: {e}")
+    write_public_status(state, analyses, allowed if allowed is not None else symbols)
     if state["positions"]: log(f"📊 مفتوحة: {list(state['positions'].keys())} | PnL {state['stats']['pnl']:+.4f} | {state['stats']['wins']}W/{state['stats']['losses']}L")
     else: log(f"📊 لا صفقات مفتوحة | PnL {state['stats']['pnl']:+.4f} | {state['stats']['wins']}W/{state['stats']['losses']}L")
     # حدث ملف الداشبورد
@@ -691,8 +778,14 @@ def run_once():
 
 def run_loop():
     mode="Paper وهمي" if CONFIG["paper_trading"] else "LIVE حقيقي"
-    log(f"=== بوت 20 زوج FUTURES لونج/شورت — {mode} ===")
-    log(f"الازواج {len(CONFIG['symbols'])} فريم {CONFIG['timeframe']} كل {CONFIG['poll_seconds']}s | حجم {CONFIG['trade_amount_usdt']} USDT | SL {CONFIG['stop_loss_pct']*100:.0f}% TP {CONFIG['take_profit_pct']*100:.0f}%")
+    CONFIG["started_at"]=datetime.now(timezone.utc).isoformat()
+    if trend_mode():
+        coins=f"أعلى {CONFIG['universe_size']} عملة فوليوم" if CONFIG.get("universe_size") else f"{len(CONFIG['symbols'])} عملة"
+        log(f"=== ترند يومي — لونج بس — {mode} — {coins} | هامش {CONFIG['trade_amount_usdt']} USDT x{CONFIG.get('leverage',2)} | كل {CONFIG['poll_seconds']}s ===")
+        notify(f"▶️ بوت رقم اشتغل — ترند يومي ({mode})\n{coins} · هامش ${CONFIG['trade_amount_usdt']:.0f} x{CONFIG.get('leverage',2)}")
+    else:
+        log(f"=== بوت 20 زوج FUTURES لونج/شورت — {mode} ===")
+        log(f"الازواج {len(CONFIG['symbols'])} فريم {CONFIG['timeframe']} كل {CONFIG['poll_seconds']}s | حجم {CONFIG['trade_amount_usdt']} USDT | SL {CONFIG['stop_loss_pct']*100:.0f}% TP {CONFIG['take_profit_pct']*100:.0f}%")
     n=0
     while True:
         n+=1; log(f"\n——— دورة #{n} ———")
@@ -751,7 +844,24 @@ if __name__=="__main__":
     p.add_argument("--dashboard", action="store_true", help="شغل الداشبورد + البوت معًا")
     p.add_argument("--serve-only", action="store_true", help="داشبورد فقط بدون لوب")
     p.add_argument("--port", type=int, default=None, help="بورت الداشبورد")
+    p.add_argument("--strategy", default=None, help="مثلا trend_daily — استراتيجية واحدة (أو أكتر بفاصلة)")
+    p.add_argument("--leverage", type=int, default=None, choices=[1, 2, 3, 4, 5], help="الرافعة")
+    p.add_argument("--universe", type=int, default=0, help="اشتغل على أعلى N عملة فوليوم بدل قائمة symbols")
+    p.add_argument("--amount", type=float, default=None, help="هامش الصفقة USDT")
+    p.add_argument("--poll", type=int, default=None, help="ثواني بين كل دورة")
+    p.add_argument("--notify", action="store_true", help="رسايل تليجرام للدخول والخروج (TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID)")
+    p.add_argument("--public", default=None, help="مجلد يتكتب فيه status.json لصفحة البوت العامة (صفقات ونتايج بس)")
     args=p.parse_args()
+    if args.strategy: CONFIG["enabled_strategies"]=[s.strip() for s in args.strategy.split(",") if s.strip()]
+    if args.leverage: CONFIG["leverage"]=args.leverage
+    elif trend_mode(): CONFIG["leverage"]=2
+    if args.amount: CONFIG["trade_amount_usdt"]=args.amount
+    if args.poll: CONFIG["poll_seconds"]=args.poll
+    if args.universe:
+        CONFIG["universe_size"]=args.universe
+        CONFIG["max_open_positions"]=max(int(CONFIG["max_open_positions"]), args.universe)
+    CONFIG["notify"]=args.notify
+    if args.public: CONFIG["public_dir"]=args.public
     if args.paper: CONFIG["paper_trading"]=True
     if args.live: CONFIG["paper_trading"]=False
     if args.port: CONFIG["dashboard_port"]=args.port
