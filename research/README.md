@@ -267,3 +267,21 @@ The three paper bots stay as they are (+4,279, max DD 355, Sharpe 2.09 after 202
 
 The weekly top 5 included short-lived volume spikes (ARPA, LINA in 2023, PEPE in 2024–25). Hindsight roughly
 doubled the apparent result — the reason every study here picks coins by what was known at the time.
+
+### 14. Betting against beta and 15. strategy momentum across the bots — not adopted
+
+`research/bab_allocation_study.py`.
+
+**Betting against beta** (Frazzini & Pedersen 2014): weekly, long the 5 lowest-beta top-50 coins and short the 5
+highest (beta vs BTC, shrunk towards 1). All 4 variants made money; the pick (60-day beta, beta-balanced) +2,678,
+DD 693, Sharpe 0.62 / 0.81 — but the long side made +2,818 and the short side −141: beta-balancing makes it net long
+(2022: −206). With the three bots: Sharpe after 2024 2.09 → 1.63, DD 355 → 582.
+
+**Strategy momentum across the paper bots** (Ehsani & Linnainmaa 2022): monthly weights from each bot's past 3/6/12
+months (turn off losers, or 1.5×/0.5× the best/worst two). On the three core bots nothing beat equal weights after
+2024 (2.09): e.g. turn off losers 12 months 1.91 with DD 269, tilt 3 months 1.80. The bots' good and bad spells are
+too short — a bot is often cut just before it recovers. With the HIGH RISK ratio bot as a fourth, the best rotation
+(tilt, 3 months: 1.73) beats the four at equal weights (1.61) but not the three alone.
+
+**After 15 ideas:** the three core paper bots at equal weights (+4,285, max DD 355, Sharpe 2.09 after 2024) remain
+the best combination tested; everything outside trend-following and relative strength failed on daily candles.
