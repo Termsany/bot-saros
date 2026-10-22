@@ -123,23 +123,51 @@ async def get_tier(user: dict) -> str:
         return "elite"
     hit = _tier_cache.get(user["id"])
     if hit and hit[0] > _time.monotonic():
-        return hit[1]
+        # Bounded cache may still cover an expired subscription — re-check expiry on hit
+        exp = hit[2] if len(hit) > 2 else None
+        if exp and exp != "indefinite":
+            try:
+                if datetime.fromisoformat(exp.replace("Z", "+00:00")) <= datetime.now(timezone.utc):
+                    _tier_cache.pop(user["id"], None)
+                else:
+                    return hit[1]
+            except Exception:
+                return hit[1]
+        else:
+            return hit[1]
     tier = "free"
+    rows: list = []
     url, key = os.getenv("SUPABASE_URL", "").rstrip("/"), os.getenv("SUPABASE_SERVICE_KEY", "")
     if url and key:
         try:
             import httpx
             async with httpx.AsyncClient(timeout=8) as client:
-                r = await client.get(f"{url}/rest/v1/profiles", params={"id": f"eq.{user['id']}", "select": "tier"},
+                r = await client.get(f"{url}/rest/v1/profiles", params={"id": f"eq.{user['id']}", "select": "tier,tier_expires_at"},
                                      headers={"apikey": key, "Authorization": f"Bearer {key}"})
             rows = r.json() if r.status_code == 200 else []
             if rows and rows[0].get("tier") in TIER_STRATEGY_COUNT:
-                tier = rows[0]["tier"]
+                expiry = rows[0].get("tier_expires_at")
+                if not expiry or datetime.fromisoformat(expiry.replace("Z", "+00:00")) > datetime.now(timezone.utc):
+                    tier = rows[0]["tier"]
         except Exception as e:
             print(f"get_tier error: {e}")
             return "free"  # don't cache failures
     if len(_tier_cache) > 5000: _tier_cache.clear()
-    _tier_cache[user["id"]] = (_time.monotonic() + 60, tier)
+    expiry_iso = None
+    if tier != "free":
+        try:
+            expiry_iso = rows[0].get("tier_expires_at") if rows else None
+        except Exception:
+            expiry_iso = None
+    expiry_flag = expiry_iso if expiry_iso else ("indefinite" if tier != "free" else None)
+    ttl = 60
+    if expiry_flag and expiry_flag != "indefinite":
+        try:
+            exp_dt = datetime.fromisoformat(expiry_flag.replace("Z", "+00:00"))
+            ttl = max(1, min(60, int((exp_dt - datetime.now(timezone.utc)).total_seconds())))
+        except Exception:
+            ttl = 60
+    _tier_cache[user["id"]] = (_time.monotonic() + ttl, tier, expiry_flag)
     return tier
 
 def _cleanup_backtest_files(max_age_s: int = 3600):

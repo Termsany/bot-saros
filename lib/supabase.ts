@@ -30,6 +30,7 @@ export async function getMyTier(): Promise<string>{
   if (!supabase) return "free"
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return "free"
-  const { data } = await supabase.from("profiles").select("tier").eq("id", user.id).maybeSingle()
+  const { data } = await supabase.from("profiles").select("tier,tier_expires_at").eq("id", user.id).maybeSingle()
+  if(data?.tier_expires_at && Date.parse(data.tier_expires_at) <= Date.now()) return "free"
   return data?.tier || "free"
 }

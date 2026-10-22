@@ -6,6 +6,7 @@ create table if not exists profiles (
   paper_balance numeric default 1000,
   paper_pnl numeric default 0,
   stripe_customer_id text,
+  tier_expires_at timestamptz,
   created_at timestamptz default now()
 );
 create table if not exists trades (

@@ -45,21 +45,12 @@ export async function POST(req: NextRequest){
     }
     return null
   }
-  async function setTier(userId: string, tier: string, customer?: string){
-    const { data: existing } = await admin.from("profiles").select("id").eq("id", userId).maybeSingle()
-    if(existing){
-      const patch: any = { tier }
-      if(customer) patch.stripe_customer_id = customer
-      const { error } = await admin.from("profiles").update(patch).eq("id", userId)
-      if(error) throw new Error(error.message)
-    } else {
-      // No profile yet (Stripe paid but Supabase has no row) — create it
-      const { data: userData } = await admin.auth.admin.getUserById(userId)
-      const row: any = { id: userId, tier, email: userData?.user?.email || null }
-      if(customer) row.stripe_customer_id = customer
-      const { error } = await admin.from("profiles").insert(row)
-      if(error) throw new Error(error.message)
-    }
+  async function applyStripeEntitlement(userId: string, tier: string, customer: string | undefined, eventCreated: number){
+    const { data, error } = await admin.rpc("apply_stripe_entitlement", {
+      p_user: userId, p_tier: tier, p_customer: customer || null, p_event_created: eventCreated || 0,
+    })
+    if(error) throw new Error(error.message)
+    return data
   }
 
   try{
@@ -73,7 +64,7 @@ export async function POST(req: NextRequest){
       }
       const tier = s.metadata?.tier
       const userId = await findUserId({ userId: s.client_reference_id || s.metadata?.user_id, email: s.customer_details?.email || s.customer_email })
-      if(userId && PAID_TIERS.includes(tier)) await setTier(userId, tier, typeof s.customer === "string" ? s.customer : undefined)
+      if(userId && PAID_TIERS.includes(tier)) await applyStripeEntitlement(userId, tier, typeof s.customer === "string" ? s.customer : undefined, event.created || 0)
       else console.warn("checkout.session.completed: no user/tier", s.id)
     }
 
@@ -94,10 +85,10 @@ export async function POST(req: NextRequest){
             .map((o:any)=> priceToTier[o.items?.data?.[0]?.price?.id] || o.metadata?.tier)
             .filter((t:any)=> PAID_TIERS.includes(t))
             .sort((a:any,b:any)=> rank(b)-rank(a))[0]
-          await setTier(userId, best || "free", customer)
+          await applyStripeEntitlement(userId, best || "free", customer, event.created || 0)
         } else if(ACTIVE.includes(sub.status)){
           const tier = priceToTier[sub.items?.data?.[0]?.price?.id] || sub.metadata?.tier
-          if(PAID_TIERS.includes(tier)) await setTier(userId, tier, customer)
+          if(PAID_TIERS.includes(tier)) await applyStripeEntitlement(userId, tier, customer, event.created || 0)
         }
       } else console.warn(`${event.type}: no user for customer`, customer)
     }

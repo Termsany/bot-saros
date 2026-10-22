@@ -3,6 +3,7 @@ import { Logo } from "@/components/Logo"
 import { useState } from "react"
 import { STRATEGIES, TIERS } from "@/lib/strategies"
 import { authHeaders } from "@/lib/supabase"
+import { ManualPaymentsAdmin } from "@/components/ManualPaymentsAdmin"
 
 export default function AdminPage(){
   const [tiers, setTiers] = useState(TIERS)
@@ -83,6 +84,8 @@ export default function AdminPage(){
           </div>
           <div className="text-[11px] text-muted mt-2">ملاحظة: التعديل هنا للمعاينة فقط. للنشر انسخ الكود والصقه في <code>lib/strategies.ts</code> ثم <code>npm run build</code></div>
         </div>
+
+        <ManualPaymentsAdmin />
 
         <div className="mt-6 grid md:grid-cols-2 gap-4">
           <div className="rounded-2xl border border-line bg-surface p-4">

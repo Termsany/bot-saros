@@ -11,17 +11,9 @@ export function Pricing(){
   async function checkout(tier: string){
     if(tier==="free"){ location.href="/dashboard"; return }
     setLoading(tier); setErr("")
-    // checkout is tied to the signed-in account (guest checkout couldn't be matched to a user)
-    const headers = await authHeaders({ "Content-Type":"application/json" })
+    const headers = await authHeaders()
     if(!headers.Authorization){ location.href = "/auth"; return }
-    const res = await fetch("/api/stripe/checkout", {
-      method:"POST", headers,
-      body: JSON.stringify({ tier })
-    })
-    const j = await res.json()
-    if(res.status===401){ location.href = j.login || "/auth"; return }
-    if(j.url) location.href = j.url
-    else { setErr(j.error || "خطأ في الدفع"); setLoading(null) }
+    location.href = `/pay?tier=${encodeURIComponent(tier)}`
   }
 
   return (

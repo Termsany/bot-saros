@@ -10,6 +10,7 @@ alter table profiles add column if not exists tier text default 'free';
 alter table profiles add column if not exists paper_balance numeric default 1000;
 alter table profiles add column if not exists paper_pnl numeric default 0;
 alter table profiles add column if not exists stripe_customer_id text;
+alter table profiles add column if not exists tier_expires_at timestamptz;
 alter table profiles add column if not exists created_at timestamptz default now();
 update profiles set tier = 'free' where tier is null;
 
