@@ -5,7 +5,7 @@ Paper Trading (وهمي) — يعرض الصفقات بـ entry/SL/TP
 python bot.py --paper   (وهمي كل 60s)  |  python bot.py --once  (مرة واحدة)
 python bot.py --dashboard  (يشغّل البوت + داشبورد http://localhost:8765)
 """
-import ccxt, pandas as pd, numpy as np, time, json, os, threading, http.server, socketserver, webbrowser
+import ccxt, pandas as pd, numpy as np, time, json, os, uuid, threading, http.server, socketserver, webbrowser
 from datetime import datetime, timezone
 from pathlib import Path
 import strategies_advanced as adv
@@ -823,48 +823,59 @@ def cooldown_ok(state,symbol):
     except: return True
 
 def ensure_futures_setup(ex, symbol):
-    """يضبط الرافعة ونوع الهامش للفيوتشر — يتجاهل الخطأ لو سبوت"""
+    """يضبط الرافعة ونوع الهامش للفيوتشر — يفشل بوضوح لو الإعداد ما اتأكدش (P0-02)."""
     if CONFIG.get("market")!="future": return
     lev = int(CONFIG.get("leverage", 5))
     mtype = CONFIG.get("margin_type", "ISOLATED")
     try: ex.set_leverage(lev, symbol)
-    except: pass
+    except Exception as e: raise RuntimeError(f"set_leverage({lev},{symbol}) فشل: {e}") from e
     try: ex.set_margin_mode(mtype, symbol)
-    except: pass
+    except Exception as e: raise RuntimeError(f"set_margin_mode({mtype},{symbol}) فشل: {e}") from e
     try: ex.set_position_mode(False)  # one-way mode
-    except: pass
+    except Exception as e: raise RuntimeError(f"set_position_mode(one-way,{symbol}) فشل: {e}") from e
+    # verify via read-back where supported
+    try:
+        if hasattr(ex, "fetch_position_mode"):
+            mode = ex.fetch_position_mode(symbol)
+            # ccxt may return bool or dict
+            is_hedge = mode.get("hedgeMode", mode) if isinstance(mode, dict) else bool(mode)
+            if is_hedge:
+                raise RuntimeError("المنصة لسه في Hedge Mode بعد set_position_mode(False) — عدّلها يدوياً من إعدادات الفيوتشر")
+    except RuntimeError: raise
+    except Exception: pass
 
-def place_order(ex,symbol,side,amount_usdt,price):
-    """side = long/short/close_long/close_short — يحسب الكمية من USDT * leverage"""
+def place_order(ex,symbol,side,amount_usdt,price, client_order_id=None):
+    """side = long/short/close_long/close_short — يحسب الكمية من USDT * leverage.
+    client_order_id: stable id for idempotent retry (P0-05). If None, generated; returned in result.
+    """
     is_future = CONFIG.get("market","future")=="future"
     lev = int(CONFIG.get("leverage",5)) if is_future else 1
-    # notional = amount_usdt * leverage في الفيوتشر، لكن الهامش = amount_usdt
     notional = amount_usdt * lev if is_future else amount_usdt
     qty = notional / price
     try: qty=float(ex.amount_to_precision(symbol, qty))
     except: qty=round(qty,6)
     if CONFIG["paper_trading"]:
-        return {"id":"paper-"+str(int(time.time()*1000)),"qty":qty,"price":price,"cost":qty*price,"notional":notional,"leverage":lev}
+        cid = client_order_id or f"raqm-{uuid.uuid4().hex[:12]}"[:36]
+        return {"id":"paper-"+str(int(time.time()*1000)),"qty":qty,"price":price,"cost":qty*price,"notional":notional,"leverage":lev,"clientOrderId": cid}
     ensure_futures_setup(ex, symbol)
-    # ccxt unified: create_order with side buy/sell يفتح لونج/شورت حسب positionSide
-    # للفيوتشر نستخدم create_order مع params
+    cid = client_order_id or f"raqm-{uuid.uuid4().hex[:12]}"[:36]
     if is_future:
-        if side in ("long","close_short"):  # شراء = لونج أو إغلاق شورت
-            params = {"positionSide": "LONG" if side=="long" else "SHORT"}
-            # للونج: buy, لإغلاق الشورت: buy أيضا لكن reduceOnly
+        if side in ("long","close_short"):
+            params = {"positionSide": "LONG" if side=="long" else "SHORT", "clientOrderId": cid}
+            if cid.startswith("raqm-"): params["orderLinkId"] = cid
             if side=="close_short": params["reduceOnly"] = True
             order = ex.create_order(symbol, "market", "buy", qty, None, params)
-        else:  # short / close_long
-            params = {"positionSide": "SHORT" if side=="short" else "LONG"}
+        else:
+            params = {"positionSide": "SHORT" if side=="short" else "LONG", "clientOrderId": cid}
+            if cid.startswith("raqm-"): params["orderLinkId"] = cid
             if side=="close_long": params["reduceOnly"] = True
             order = ex.create_order(symbol, "market", "sell", qty, None, params)
-        # fallback لو المنصة one-way mode (بدون positionSide)
-        # ccxt سيعيد المحاولة بدون params تلقائيا لو فشل — نعالجها
     else:
+        # spot path not used for idempotent futures but keep
         if side in ("long","close_short"): order=ex.create_market_buy_order(symbol,qty)
         else: order=ex.create_market_sell_order(symbol,qty)
     fq=float(order.get("filled",qty) or qty); ap=float(order.get("average",price) or price)
-    return {"id":str(order.get("id","")),"qty":fq,"price":ap,"cost":fq*ap,"notional":notional,"leverage":lev,"raw":order}
+    return {"id":str(order.get("id","")),"qty":fq,"price":ap,"cost":fq*ap,"notional":notional,"leverage":lev,"raw":order,"clientOrderId": cid}
 
 def check_sl_tp(state, prices, ex=None):
     closed=[]
@@ -1001,6 +1012,10 @@ def try_enter_trend(symbol, analysis, state, ex):
 
 def try_enter(symbol, analysis, state, ex):
     """فيوتشر: لونج لو سكور > buy_threshold، شورت لو سكور < sell_threshold"""
+    # P0-05: if a previous order is pending for this symbol, don't double-enter
+    if state.get("pending_orders", {}).get(symbol):
+        log(f"⏸️ {symbol} طلب معلق — تخطي الدخول حتى التأكد")
+        return
     if trend_mode(): return try_enter_trend(symbol, analysis, state, ex)
     if wave_mode(): return try_enter_wave(symbol, analysis, state, ex)
     total=analysis["total"]; price=analysis["price"]
@@ -1085,9 +1100,46 @@ def try_enter(symbol, analysis, state, ex):
             except Exception as e: log(f"فحص الرصيد: {e}")
         try:
             order_side="long" if side=="long" else "short"
-            res=place_order(ex,symbol,order_side,amount,price)
-            sl, tp = dynamic_sl_tp(price, side, _f_df if '_f_df' in locals() else fetch_ohlcv(symbol, CONFIG["timeframe"], limit=60, ex=ex))
-            state["positions"][symbol]={"side":side,"entry":res["price"],"qty":res["qty"],"cost":res["cost"],"notional":res.get("notional",amount*CONFIG.get("leverage",5)),"leverage":res.get("leverage",CONFIG.get("leverage",5)),"time":datetime.now(timezone.utc).isoformat(),"sl":sl,"tp":tp,"breakeven":False}
+            _f_df2 = _f_df if '_f_df' in locals() else fetch_ohlcv(symbol, CONFIG["timeframe"], limit=60, ex=ex)
+            cid = f"raqm-{uuid.uuid4().hex[:12]}"[:36]
+            # pending flag for idempotent recovery (P0-05)
+            state.setdefault("pending_orders", {})[symbol] = cid
+            try: save_state(state)
+            except: pass
+            res=place_order(ex,symbol,order_side,amount,price, client_order_id=cid)
+            sl, tp = dynamic_sl_tp(price, side, _f_df2)
+            pos = {"side":side,"entry":res["price"],"qty":res["qty"],"cost":res["cost"],"notional":res.get("notional",amount*CONFIG.get("leverage",5)),"leverage":res.get("leverage",CONFIG.get("leverage",5)),"time":datetime.now(timezone.utc).isoformat(),"sl":sl,"tp":tp,"breakeven":False, "clientOrderId": cid}
+            # Atomic OCO protection (P0-01): do not persist as open until SL/TP verified; on partial failure flatten
+            if not CONFIG["paper_trading"]:
+                try:
+                    from backend.app.oco import place_oco_orders
+                    pos_id = cid
+                    oco = place_oco_orders(ex, symbol, side, res["qty"], sl, tp, paper=False, pos_id=pos_id)
+                    if oco.get("sl_error") or oco.get("tp_error"):
+                        # partial or full OCO failure -> emergency flatten the entry just placed
+                        log(f"⚠️ OCO فشل {symbol} {side} — SL err={oco.get('sl_error')} TP err={oco.get('tp_error')} — إغلاق طارئ")
+                        try:
+                            close_side = "close_long" if side=="long" else "close_short"
+                            place_order(ex, symbol, close_side, res["qty"]*res["price"]/max(1,int(CONFIG.get("leverage",5))), res["price"])
+                            log(f"🔒 إغلاق طارئ {symbol} بعد فشل OCO")
+                        except Exception as ee: log(f"فشل إغلاق طارئ {symbol}: {ee}")
+                        state.get("pending_orders", {}).pop(symbol, None)
+                        try: save_state(state)
+                        except: pass
+                        return
+                    pos["oco_ids"] = {"sl": oco.get("sl_id"), "tp": oco.get("tp_id"), "pos_id": pos_id}
+                except Exception as e:
+                    log(f"⚠️ OCO استثناء {symbol}: {e} — إغلاق طارئ")
+                    try:
+                        close_side = "close_long" if side=="long" else "close_short"
+                        place_order(ex, symbol, close_side, res["qty"]*res["price"]/max(1,int(CONFIG.get("leverage",5))), res["price"])
+                    except Exception: pass
+                    state.get("pending_orders", {}).pop(symbol, None)
+                    try: save_state(state)
+                    except: pass
+                    return
+            state["positions"][symbol]=pos
+            state.get("pending_orders", {}).pop(symbol, None)
             state["last_trade"][symbol]=datetime.now(timezone.utc).isoformat(); save_state(state)
             mode="وهمي" if CONFIG["paper_trading"] else "حقيقي"
             lev_txt=f" x{res.get('leverage',CONFIG.get('leverage',5))}" if CONFIG.get("market")=="future" else ""

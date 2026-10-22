@@ -28,3 +28,4 @@ backtest_*.png
 
 # strategy research cache (market data + signals)
 research/.cache/
+trades.log

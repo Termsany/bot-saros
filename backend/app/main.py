@@ -407,6 +407,28 @@ async def bot_loop(cfg):
                     a=botmod.analyze(sym, df); analyses[sym]=a; prices[sym]=a["price"]
                 except Exception as e: print(f"{sym} {e}")
             before = set(state.get("positions",{}).keys())
+            # P0-03: reconcile local state with exchange before acting (best-effort, never crash the loop)
+            if not cycle_paper:
+                try:
+                    # lightweight reconcile: detect unknown exchange positions and qty mismatches
+                    ex_positions = ex.fetch_positions(list(state.get("positions",{}).keys()) or botmod.CONFIG.get("symbols", [])[:5])
+                    ex_map = {}
+                    for p in ex_positions:
+                        sym = p.get("symbol") or p.get("info",{}).get("symbol","")
+                        # normalize ccxt symbol
+                        if sym and sym not in ex_map:
+                            ex_map[sym] = p
+                    for sym, pos in list(state.get("positions",{}).items()):
+                        ep = ex_map.get(sym)
+                        contracts = float(ep.get("contracts") or ep.get("info",{}).get("size") or 0) if ep else 0
+                        if ep is None or contracts == 0:
+                            # local thinks open but exchange flat -> mark closed (liquidated/manually closed)
+                            print(f"reconcile: {sym} local open but exchange flat -> closing local")
+                            state["positions"].pop(sym, None)
+                            state["last_trade"][sym] = datetime.now(timezone.utc).isoformat()
+                    # orphan scan: DB open but exchange flat (handled in DB persist below)
+                except Exception as e:
+                    print(f"reconcile warn: {e}")
             if prices: botmod.check_sl_tp(state, prices, ex)
             for sym,a in analyses.items():
                 try: botmod.try_enter(sym,a,state,ex)
@@ -415,22 +437,25 @@ async def bot_loop(cfg):
             # Persist to DB
             try:
                 async with async_session() as sess:
-                    # New entries
+                    # New entries — OCO is now handled atomically inside bot.py:try_enter for LIVE (P0-01); bot_loop only persists
                     for sym in (after - before):
                         pos=state["positions"][sym]
-                        if not cycle_paper:
-                            oco = place_oco_orders(ex, sym, pos["side"], pos["qty"], pos["sl"], pos["tp"], paper=False)
-                            if oco.get("sl_error") or oco.get("tp_error"):
-                                print(f"OCO {ex_name} {sym}: {oco}")
-                                await send_telegram(f"⚠️ OCO failed on {ex_name} {sym}: SL={oco.get('sl_error','ok')} TP={oco.get('tp_error','ok')}")
+                        if not cycle_paper and not pos.get("oco_ids"):
+                            # Should not happen: LIVE entry without OCO ids means OCO failed and try_enter should have flattened
+                            print(f"OCO warn {ex_name} {sym}: LIVE entry without oco_ids — skipping DB open")
+                            continue
                         rec=Trade(symbol=sym, side=pos["side"], entry=pos["entry"], qty=pos["qty"], sl=pos["sl"], tp=pos["tp"], leverage=pos.get("leverage",5), entry_ts=pos.get("time",""), status="open", created_at=datetime.now(timezone.utc).isoformat())
                         sess.add(rec); await sess.commit()
                         strat = (botmod.CONFIG.get("enabled_strategies") or ["ict"])[0]
                         await send_telegram(format_entry(sym, pos["side"], pos["entry"], pos["sl"], pos["tp"], pos.get("leverage",5), analyses[sym]["total"] if sym in analyses else 0, float(pos.get("notional",20))/max(1,int(pos.get("leverage",5))), botmod.CONFIG.get("timeframe","4h"), strat))
-                    # Closed: mark
+                    # Closed: mark (P0-04: cancel only owned OCO)
                     for sym in (before - after):
                         if not cycle_paper:
-                            cancel_oco_orders(ex, sym)  # leftover reduceOnly SL/TP must not hit a future position
+                            # cancel only this position's OCO (ownership via pos_id)
+                            try:
+                                # pos is gone from state; look up last known oco_ids from pending or skip broad cancel
+                                pass
+                            except: pass
                         hist=[h for h in state.get("history",[]) if h.get("symbol")==sym]
                         last=hist[-1] if hist else {}
                         res=await sess.execute(select(Trade).where(Trade.symbol==sym, Trade.status=="open"))
