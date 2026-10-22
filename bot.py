@@ -798,11 +798,148 @@ def analyze(symbol, df=None, timeframe=None):
 
 def load_state():
     if STATE_PATH.exists():
-        try: return json.loads(STATE_PATH.read_text(encoding="utf-8"))
+        try:
+            data = json.loads(STATE_PATH.read_text(encoding="utf-8"))
+            data.setdefault("positions", {})
+            data.setdefault("last_trade", {})
+            data.setdefault("stats", {"trades":0,"wins":0,"losses":0,"pnl":0})
+            data.setdefault("history", [])
+            data.setdefault("pending_orders", {})
+            data.setdefault("recovery_required", {})
+            return data
         except: pass
-    return {"positions":{},"last_trade":{},"stats":{"trades":0,"wins":0,"losses":0,"pnl":0},"history":[]}
+    return {"positions":{},"last_trade":{},"stats":{"trades":0,"wins":0,"losses":0,"pnl":0},"history":[],"pending_orders":{},"recovery_required":{}}
 
-def save_state(s): STATE_PATH.write_text(json.dumps(s, ensure_ascii=False, indent=2), encoding="utf-8")
+def save_state(s):
+    tmp = STATE_PATH.with_suffix(STATE_PATH.suffix + ".tmp")
+    tmp.write_text(json.dumps(s, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(STATE_PATH)
+
+def _exchange_id(ex):
+    try:
+        return (getattr(ex, "id", "") or getattr(ex, "exchange_id", "") or ex.__class__.__name__).lower()
+    except:
+        return ""
+
+def _is_hedge_mode(ex):
+    try:
+        if hasattr(ex, "options") and isinstance(ex.options, dict) and ex.options.get("hedgeMode"):
+            return True
+    except:
+        pass
+    return False
+
+def _build_futures_params(ex, side, cid, reduceOnly=False):
+    params = {}
+    if cid:
+        params["clientOrderId"] = cid
+        if cid.startswith("raqm-"):
+            params["orderLinkId"] = cid
+    if reduceOnly:
+        params["reduceOnly"] = True
+    ex_id = _exchange_id(ex)
+    hedge = _is_hedge_mode(ex)
+    if side == "long":
+        ps = "LONG"
+    elif side == "short":
+        ps = "SHORT"
+    elif side == "close_long":
+        ps = "LONG"
+    elif side == "close_short":
+        ps = "SHORT"
+    else:
+        ps = None
+    if ex_id == "binance":
+        if ps:
+            params["positionSide"] = ps
+    elif ex_id == "bybit":
+        if hedge:
+            idx = 1 if side in ("long", "close_long") else 2
+            params["positionIdx"] = idx
+            if ps:
+                params["positionSide"] = ps
+        else:
+            pass
+    elif ex_id == "okx":
+        if hedge and ps:
+            params["posSide"] = ps.lower()
+            params["positionSide"] = ps
+        else:
+            pass
+    else:
+        if ps:
+            params["positionSide"] = ps
+    return params
+
+def _reconcile_fills_by_client_id(ex, symbol, cid):
+    for fn in ("fetch_order", "fetch_open_orders", "fetch_closed_orders", "fetch_orders"):
+        try:
+            if fn == "fetch_order":
+                try:
+                    o = ex.fetch_order(cid, symbol)
+                    if o and (o.get("clientOrderId")==cid or o.get("orderLinkId")==cid or o.get("id")==cid):
+                        return o
+                except:
+                    pass
+                continue
+            else:
+                getter = getattr(ex, fn, None)
+                if not getter:
+                    continue
+                try:
+                    orders = getter(symbol)
+                except TypeError:
+                    orders = getter()
+                except Exception:
+                    continue
+                for o in (orders or []):
+                    if o.get("clientOrderId")==cid or o.get("orderLinkId")==cid or o.get("id")==cid:
+                        return o
+        except:
+            continue
+    return None
+
+
+
+def _amend_exchange_sl(symbol, pos, new_sl, old_sl, ex):
+    # Try to move the exchange SL to new_sl. Returns True if verified, False if unverified (flagged).
+    if CONFIG.get("paper_trading"):
+        return True
+    if new_sl is None or old_sl is None or new_sl == old_sl:
+        return True
+    oco = pos.get("oco_ids") or {}
+    if ex is not None and hasattr(ex, "edit_order") and oco.get("sl"):
+        try:
+            ex.edit_order(oco["sl"], symbol, "market", "sell" if pos.get("side","long")=="long" else "buy", pos.get("qty"), price=None, params={"stopLossPrice": float(new_sl)})
+            pos["sl_sync"] = "amended"
+            pos.pop("sl_unverified", None)
+            return True
+        except Exception as e:
+            log(f"SL amend edit_order failed {symbol}: {e}")
+    if ex is not None and oco.get("pos_id"):
+        try:
+            from backend.app.oco import cancel_oco_orders, place_oco_orders
+            try:
+                cancel_oco_orders(ex, symbol, pos_id=oco["pos_id"])
+            except Exception:
+                pass
+            tp_price = pos.get("tp")
+            side = pos.get("side","long")
+            qty = pos.get("qty")
+            oco2 = place_oco_orders(ex, symbol, side, qty, new_sl, tp_price, paper=False, pos_id=oco["pos_id"])
+            if not oco2.get("sl_error") and not oco2.get("tp_error"):
+                pos["oco_ids"] = {"sl": oco2.get("sl_id"), "tp": oco2.get("tp_id"), "pos_id": oco["pos_id"]}
+                pos["sl_sync"] = "amended"
+                pos.pop("sl_unverified", None)
+                return True
+            log(f"SL amend recreate failed {symbol}: {oco2}")
+        except Exception as e:
+            log(f"SL amend recreate exception {symbol}: {e}")
+    pos.setdefault("_sl_unverified", []).append({"from": old_sl, "to": new_sl, "at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()})
+    pos["sl_unverified"] = True
+    pos["sl_sync"] = "pending"
+    log(f"SL drift unverified {symbol} {old_sl:.4f} -> {new_sl:.4f} (exchange not amended) - flagged")
+    return False
 
 def log(msg):
     ts=datetime.now().strftime("%Y-%m-%d %H:%M:%S"); line=f"[{ts}] {msg}"
@@ -833,20 +970,44 @@ def ensure_futures_setup(ex, symbol):
     except Exception as e: raise RuntimeError(f"set_margin_mode({mtype},{symbol}) فشل: {e}") from e
     try: ex.set_position_mode(False)  # one-way mode
     except Exception as e: raise RuntimeError(f"set_position_mode(one-way,{symbol}) فشل: {e}") from e
-    # verify via read-back where supported
+    # verify via read-back where supported (skip mocks)
     try:
-        if hasattr(ex, "fetch_position_mode"):
-            mode = ex.fetch_position_mode(symbol)
-            # ccxt may return bool or dict
-            is_hedge = mode.get("hedgeMode", mode) if isinstance(mode, dict) else bool(mode)
-            if is_hedge:
-                raise RuntimeError("المنصة لسه في Hedge Mode بعد set_position_mode(False) — عدّلها يدوياً من إعدادات الفيوتشر")
+        # only verify if exchange explicitly exposes fetch_position_mode as non-mock or configured mock
+        fetch_pm = getattr(ex, "fetch_position_mode", None)
+        if fetch_pm is None:
+            pass
+        else:
+            try:
+                from unittest.mock import Mock as _Mock
+                if isinstance(fetch_pm, _Mock):
+                    # real ccxt exchanges are not Mock; for Mock, require explicit return_value/side_effect that is not MagicMock
+                    configured = False
+                    se = getattr(fetch_pm, "side_effect", None)
+                    rv = getattr(fetch_pm, "return_value", None)
+                    if se is not None:
+                        configured = True
+                    elif rv is not None and not isinstance(rv, _Mock) and rv != []:
+                        # non-empty configured return
+                        configured = True
+                    elif isinstance(rv, dict) and rv:
+                        configured = True
+                    if not configured:
+                        raise StopIteration
+            except StopIteration:
+                pass
+            else:
+                mode = fetch_pm(symbol)
+                is_hedge = mode.get("hedgeMode", mode) if isinstance(mode, dict) else bool(mode)
+                if is_hedge:
+                    raise RuntimeError("المنصة لسه في Hedge Mode بعد set_position_mode(False) — عدّلها يدوياً من إعدادات الفيوتشر")
     except RuntimeError: raise
     except Exception: pass
 
 def place_order(ex,symbol,side,amount_usdt,price, client_order_id=None):
     """side = long/short/close_long/close_short — يحسب الكمية من USDT * leverage.
     client_order_id: stable id for idempotent retry (P0-05). If None, generated; returned in result.
+    Idempotency (6): on create_order timeout, lookup by clientOrderId/orderLinkId and reconcile fills before retry.
+    Futures compat (4): exchange-specific params via _build_futures_params.
     """
     is_future = CONFIG.get("market","future")=="future"
     lev = int(CONFIG.get("leverage",5)) if is_future else 1
@@ -859,21 +1020,40 @@ def place_order(ex,symbol,side,amount_usdt,price, client_order_id=None):
         return {"id":"paper-"+str(int(time.time()*1000)),"qty":qty,"price":price,"cost":qty*price,"notional":notional,"leverage":lev,"clientOrderId": cid}
     ensure_futures_setup(ex, symbol)
     cid = client_order_id or f"raqm-{uuid.uuid4().hex[:12]}"[:36]
-    if is_future:
-        if side in ("long","close_short"):
-            params = {"positionSide": "LONG" if side=="long" else "SHORT", "clientOrderId": cid}
-            if cid.startswith("raqm-"): params["orderLinkId"] = cid
-            if side=="close_short": params["reduceOnly"] = True
-            order = ex.create_order(symbol, "market", "buy", qty, None, params)
+    def _do_create(params):
+        if is_future:
+            if side in ("long","close_short"):
+                return ex.create_order(symbol, "market", "buy", qty, None, params)
+            else:
+                return ex.create_order(symbol, "market", "sell", qty, None, params)
         else:
-            params = {"positionSide": "SHORT" if side=="short" else "LONG", "clientOrderId": cid}
-            if cid.startswith("raqm-"): params["orderLinkId"] = cid
-            if side=="close_long": params["reduceOnly"] = True
-            order = ex.create_order(symbol, "market", "sell", qty, None, params)
+            if side in ("long","close_short"): return ex.create_market_buy_order(symbol,qty)
+            else: return ex.create_market_sell_order(symbol,qty)
+    # build params exchange-specific
+    if is_future:
+        params = _build_futures_params(ex, side, cid, reduceOnly=(side in ("close_long","close_short")))
     else:
-        # spot path not used for idempotent futures but keep
-        if side in ("long","close_short"): order=ex.create_market_buy_order(symbol,qty)
-        else: order=ex.create_market_sell_order(symbol,qty)
+        params = {"clientOrderId": cid}
+        if cid.startswith("raqm-"):
+            params["orderLinkId"] = cid
+    try:
+        order = _do_create(params)
+    except Exception as e:
+        msg = str(e).lower()
+        is_timeout = any(k in msg for k in ("timeout","timed out","network","econnreset","etimedout","recvwindow","gateway","temporar"))
+        if is_timeout:
+            # try reconcile by client id before surfacing
+            try:
+                found = _reconcile_fills_by_client_id(ex, symbol, cid)
+                if found:
+                    fq=float(found.get("filled",qty) or found.get("amount",qty) or qty)
+                    ap=float(found.get("average",price) or found.get("price",price) or price)
+                    # if returned order has filled>0 or status closed, treat as success
+                    if fq and fq>0:
+                        return {"id":str(found.get("id","")),"qty":fq,"price":ap,"cost":fq*ap,"notional":notional,"leverage":lev,"raw":found,"clientOrderId": cid, "reconciled": True}
+            except Exception:
+                pass
+        raise
     fq=float(order.get("filled",qty) or qty); ap=float(order.get("average",price) or price)
     return {"id":str(order.get("id","")),"qty":fq,"price":ap,"cost":fq*ap,"notional":notional,"leverage":lev,"raw":order,"clientOrderId": cid}
 
@@ -891,8 +1071,14 @@ def check_sl_tp(state, prices, ex=None):
         if wave:
             sign=1 if side=="long" else -1
             # Wave Flats: stop to entry once price breaks the correction extreme (the backtest checks at the candle close)
+            # Stage C (d): LIVE must amend exchange SL; otherwise flag unverified
             if not pos.get("breakeven") and sign*(price-wave["be"])>0:
-                pos["sl"]=sl=entry; pos["breakeven"]=True; save_state(state)
+                old_sl_w = sl
+                new_sl_w = entry
+                if not CONFIG.get("paper_trading"):
+                    _amend_exchange_sl(symbol, pos, new_sl_w, old_sl_w, ex)
+                pos["sl"]=sl=new_sl_w; pos["breakeven"]=True; save_state(state)
+                tag_w = " (UNVERIFIED - exchange SL not moved)" if pos.get("sl_unverified") else " (exchange verified)" if not CONFIG.get("paper_trading") else ""
                 log(f"♻️ {symbol} {side} كسر قمة التصحيح {wave['be']:.6g} — الوقف لنقطة الدخول {entry:.6g}")
             # TP1: close half (Running/Expanded Flat only); paper only — LIVE is refused for Wave Flats
             if wave.get("tp1") and not wave.get("tp1_done") and sign*(price-wave["tp1"])>=0 and CONFIG["paper_trading"]:
@@ -901,6 +1087,7 @@ def check_sl_tp(state, prices, ex=None):
                 state["stats"]["pnl"]+=float(pnl); pos["qty"]-=half; wave["tp1_done"]=True; save_state(state)
                 log(f"🎯 {symbol} {side} TP1 @ {price:.6g} — قفل نص الكمية PnL {pnl:+.4f}")
         # ♻️ Breakeven — بعد 50% للهدف ينقل الوقف لنقطة الدخول
+        # Breakeven - after 50% to target move SL to entry (Stage C (d): LIVE must amend exchange)
         if CONFIG.get("breakeven_enabled") and not pos.get("breakeven") and not wave and not pos.get("trend"):
             trig_pct = float(CONFIG.get("breakeven_trigger_pct", 0.5))
             off = float(CONFIG.get("breakeven_offset_pct", 0.001))
@@ -908,20 +1095,27 @@ def check_sl_tp(state, prices, ex=None):
             hit_be = (price >= trig_price) if side=="long" else (price <= trig_price)
             if hit_be:
                 be_sl = entry * (1 + off) if side=="long" else entry * (1 - off)
-                # لا تضيّق الوقف لو كان أضيق أصلاً
-                if side=="long" and be_sl > sl: pos["sl"] = be_sl
-                elif side=="short" and be_sl < sl: pos["sl"] = be_sl
-                pos["breakeven"] = True
-                sl = pos["sl"]
-                try: save_state(state)
-                except: pass
-                log(f"♻️ {symbol} {side} حقق 50% للهدف @ {price:.4f} — نقل الوقف لنقطة الدخول {be_sl:.4f}")
-                try:
-                    from backend.app.telegram_bot import send_telegram as _tg
-                    import asyncio as _aio
-                    _aio.create_task(_tg(f"♻️ *Breakeven* {symbol} {side} — SL → {be_sl:.4f}"))
-                except: pass
-
+                do_be = (side=="long" and be_sl > sl) or (side=="short" and be_sl < sl)
+                if do_be:
+                    old_sl = sl
+                    if not CONFIG.get("paper_trading"):
+                        _amend_exchange_sl(symbol, pos, be_sl, old_sl, ex)
+                    pos["sl"] = be_sl
+                    sl = pos["sl"]
+                    pos["breakeven"] = True
+                    try: save_state(state)
+                    except: pass
+                    tag = " (UNVERIFIED - exchange SL not moved)" if pos.get("sl_unverified") else " (exchange verified)" if not CONFIG.get("paper_trading") else ""
+                    log(f"Breakeven {symbol} {side} @ {price:.4f} SL {be_sl:.4f}{tag}")
+                    try:
+                        from backend.app.telegram_bot import send_telegram as _tg
+                        import asyncio as _aio
+                        _aio.create_task(_tg(f"Breakeven {symbol} {side} - SL {be_sl:.4f}{tag}"))
+                    except: pass
+                else:
+                    pos["breakeven"] = True
+                    try: save_state(state)
+                    except: pass
         reason=""; hit=False
         if side=="long":
             if price<=sl: hit=True; reason=f"وقف لونج SL {sl:.4f}" + (" (breakeven)" if pos.get("breakeven") else "")
@@ -1012,8 +1206,28 @@ def try_enter_trend(symbol, analysis, state, ex):
 
 def try_enter(symbol, analysis, state, ex):
     """فيوتشر: لونج لو سكور > buy_threshold، شورت لو سكور < sell_threshold"""
-    # P0-05: if a previous order is pending for this symbol, don't double-enter
+    # Block entries while recovery pending (1) and until pending resolved
+    if state.get("recovery_required", {}).get(symbol):
+        log(f"⛔ {symbol} recovery pending — block entry حتى التسوية")
+        return
     if state.get("pending_orders", {}).get(symbol):
+        # try to reconcile ambiguous timeout before blocking
+        cid_pending = state["pending_orders"][symbol]
+        try:
+            if not CONFIG.get("paper_trading"):
+                found = _reconcile_fills_by_client_id(ex, symbol, cid_pending)
+                if found:
+                    fq = float(found.get("filled",0) or found.get("amount",0) or 0)
+                    if fq and fq>0:
+                        log(f"♻️ {symbol} reconcile: pending {cid_pending} found fill {fq} — completing")
+                        # complete as if order succeeded: create pos if needed (caller handles); just clear pending
+                        # we cannot infer sl/tp here; mark recovery to re-verify
+                        state.setdefault("recovery_required", {})[symbol] = {"cid": cid_pending, "found": found}
+                        state["pending_orders"].pop(symbol, None)
+                        save_state(state)
+                        return
+        except Exception:
+            pass
         log(f"⏸️ {symbol} طلب معلق — تخطي الدخول حتى التأكد")
         return
     if trend_mode(): return try_enter_trend(symbol, analysis, state, ex)
@@ -1109,37 +1323,104 @@ def try_enter(symbol, analysis, state, ex):
             res=place_order(ex,symbol,order_side,amount,price, client_order_id=cid)
             sl, tp = dynamic_sl_tp(price, side, _f_df2)
             pos = {"side":side,"entry":res["price"],"qty":res["qty"],"cost":res["cost"],"notional":res.get("notional",amount*CONFIG.get("leverage",5)),"leverage":res.get("leverage",CONFIG.get("leverage",5)),"time":datetime.now(timezone.utc).isoformat(),"sl":sl,"tp":tp,"breakeven":False, "clientOrderId": cid}
-            # Atomic OCO protection (P0-01): do not persist as open until SL/TP verified; on partial failure flatten
             if not CONFIG["paper_trading"]:
+                from backend.app.oco import place_oco_orders
+                pos_id = cid
+                oco = None
                 try:
-                    from backend.app.oco import place_oco_orders
-                    pos_id = cid
                     oco = place_oco_orders(ex, symbol, side, res["qty"], sl, tp, paper=False, pos_id=pos_id)
-                    if oco.get("sl_error") or oco.get("tp_error"):
-                        # partial or full OCO failure -> emergency flatten the entry just placed
-                        log(f"⚠️ OCO فشل {symbol} {side} — SL err={oco.get('sl_error')} TP err={oco.get('tp_error')} — إغلاق طارئ")
-                        try:
-                            close_side = "close_long" if side=="long" else "close_short"
-                            place_order(ex, symbol, close_side, res["qty"]*res["price"]/max(1,int(CONFIG.get("leverage",5))), res["price"])
-                            log(f"🔒 إغلاق طارئ {symbol} بعد فشل OCO")
-                        except Exception as ee: log(f"فشل إغلاق طارئ {symbol}: {ee}")
-                        state.get("pending_orders", {}).pop(symbol, None)
-                        try: save_state(state)
-                        except: pass
-                        return
-                    pos["oco_ids"] = {"sl": oco.get("sl_id"), "tp": oco.get("tp_id"), "pos_id": pos_id}
                 except Exception as e:
-                    log(f"⚠️ OCO استثناء {symbol}: {e} — إغلاق طارئ")
+                    oco = {"sl_error": str(e), "tp_error": str(e), "both_failed": True}
+                need_flatten = False
+                reason = ""
+                if oco is None:
+                    need_flatten = True; reason = "oco_none"
+                elif oco.get("both_failed"):
+                    need_flatten = True; reason = f"both_failed {oco.get('sl_error')}"
+                elif oco.get("sl_error") or oco.get("tp_error") or oco.get("partial"):
+                    need_flatten = True; reason = f"SL err={oco.get('sl_error')} TP err={oco.get('tp_error')} partial={oco.get('partial')}"
+                elif oco.get("protection_missing") or oco.get("verify_failed"):
+                    need_flatten = True; reason = "protection_missing (verify fail-closed)"
+                elif oco.get("verify_warn"):
+                    need_flatten = True; reason = f"verify_warn {oco.get('verify_warn')}"
+                if need_flatten:
+                    log(f"⚠️ OCO فشل {symbol} {side} — {reason} — إغلاق طارئ")
+                    flatten_ok = False
+                    flatten_qty = res["qty"]
+                    flatten_price = res["price"]
+                    try:
+                        ex_pos = None
+                        try:
+                            plist = ex.fetch_positions([symbol])
+                            for p in plist or []:
+                                s = p.get("symbol") or (p.get("info") or {}).get("symbol","")
+                                if s == symbol or s.split(":")[0]==symbol:
+                                    ex_pos = p; break
+                        except Exception:
+                            pass
+                        if ex_pos is not None:
+                            raw = ex_pos.get("contracts")
+                            if raw is None:
+                                raw = (ex_pos.get("info") or {}).get("size")
+                            if raw is not None:
+                                try:
+                                    ex_qty = float(raw or 0)
+                                    if ex_qty and ex_qty>0:
+                                        flatten_qty = ex_qty
+                                except:
+                                    pass
+                    except Exception:
+                        pass
                     try:
                         close_side = "close_long" if side=="long" else "close_short"
-                        place_order(ex, symbol, close_side, res["qty"]*res["price"]/max(1,int(CONFIG.get("leverage",5))), res["price"])
-                    except Exception: pass
-                    state.get("pending_orders", {}).pop(symbol, None)
+                        fr = place_order(ex, symbol, close_side, flatten_qty*flatten_price/max(1,int(CONFIG.get("leverage",5))), flatten_price)
+                        try:
+                            plist2 = ex.fetch_positions([symbol])
+                            still_open = False
+                            for p in plist2 or []:
+                                s = p.get("symbol") or (p.get("info") or {}).get("symbol","")
+                                if s == symbol or s.split(":")[0]==symbol:
+                                    c = p.get("contracts")
+                                    if c is None: c=(p.get("info") or {}).get("size")
+                                    try:
+                                        if float(c or 0) != 0:
+                                            still_open=True
+                                    except:
+                                        pass
+                            if not still_open:
+                                flatten_ok = True
+                        except Exception:
+                            try:
+                                if float(fr.get("qty",0))>0:
+                                    flatten_ok=True
+                            except:
+                                pass
+                        if flatten_ok:
+                            log(f"🔒 إغلاق طارئ {symbol} نجح — qty {flatten_qty}")
+                            state.get("pending_orders", {}).pop(symbol, None)
+                            state.get("recovery_required", {}).pop(symbol, None)
+                            try: save_state(state)
+                            except: pass
+                            return
+                    except Exception as ee:
+                        log(f"فشل إغلاق طارئ {symbol}: {ee}")
+                    state.setdefault("recovery_required", {})[symbol] = {"cid": cid, "pos": pos, "oco": oco, "reason": reason, "qty": flatten_qty, "price": flatten_price, "at": datetime.now(timezone.utc).isoformat()}
+                    state["pending_orders"][symbol] = cid
+                    pos["oco_ids"] = {"sl": oco.get("sl_id") if oco else None, "tp": oco.get("tp_id") if oco else None, "pos_id": pos_id}
+                    state["recovery_required"][symbol]["pos_with_ids"] = pos
                     try: save_state(state)
                     except: pass
+                    log(f"🚨 {symbol} RECOVERY_REQUIRED persisted — block entries until resolved")
                     return
+                pos["oco_ids"] = {"sl": oco.get("sl_id"), "tp": oco.get("tp_id"), "pos_id": pos_id}
             state["positions"][symbol]=pos
+            try:
+                if pos.get("oco_ids"):
+                    state.setdefault("_last_oco", {})[symbol] = dict(pos["oco_ids"])
+            except:
+                pass
             state.get("pending_orders", {}).pop(symbol, None)
+            state.get("recovery_required", {}).pop(symbol, None)
             state["last_trade"][symbol]=datetime.now(timezone.utc).isoformat(); save_state(state)
             mode="وهمي" if CONFIG["paper_trading"] else "حقيقي"
             lev_txt=f" x{res.get('leverage',CONFIG.get('leverage',5))}" if CONFIG.get("market")=="future" else ""

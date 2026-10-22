@@ -257,7 +257,7 @@ async def api_backtest(req: BacktestReq, user: dict = Depends(require_user)):
     # Save to DB
     try:
         async with async_session() as sess:
-            rec = BacktestRun(user_id=user["id"], symbol=req.symbol, timeframe=req.timeframe, from_date=req.from_date, to_date=req.to_date, strategies=js.dumps(req.strategies or []), stats=js.dumps(data.get("stats",{}) if data else {}), created_at=datetime.now(timezone.utc).isoformat())
+            rec = BacktestRun(user_id=user["id"], symbol=req.symbol, timeframe=req.timeframe, from_date=req.from_date, to_date=req.to_date, strategies=js.dumps(req.strategies or []), stats=js.dumps(data.get("stats",{}) if data else {}), created_at=datetime.now(timezone.utc).isoformat(), chart_file=f"{run_name}.png", run_name=run_name)
             sess.add(rec); await sess.commit()
     except: pass
 
@@ -274,12 +274,14 @@ async def backtest_history(limit: int = 20, user: dict = Depends(require_user)):
 
 @app.get("/api/chart")
 async def api_chart(file: str, user: dict = Depends(require_user)):
-    # P1 IDOR fix: must be signed in, and caller must own at least one backtest run
+    # Stage C: strict file->run binding - any owned run no longer unlocks every file
     if not re.fullmatch(r"backtest_[A-Za-z0-9_]+\.(png|json)", file):
         raise HTTPException(400, "bad file")
+    stem = file.rsplit(".", 1)[0]
     async with async_session() as sess:
-        res = await sess.execute(select(BacktestRun).where(BacktestRun.user_id==user["id"]).limit(1))
-        if res.scalars().first() is None:
+        res = await sess.execute(select(BacktestRun).where((BacktestRun.user_id==user["id"]) & ((BacktestRun.run_name==stem) | (BacktestRun.chart_file==file))).limit(1))
+        row = res.scalars().first()
+        if row is None:
             raise HTTPException(403, "not your chart")
     p = BOT_DIR / file
     if not p.exists(): raise HTTPException(404, "not found")
@@ -413,28 +415,119 @@ async def bot_loop(cfg):
                     a=botmod.analyze(sym, df); analyses[sym]=a; prices[sym]=a["price"]
                 except Exception as e: print(f"{sym} {e}")
             before = set(state.get("positions",{}).keys())
-            # P0-03: reconcile local state with exchange before acting (best-effort, never crash the loop)
+            # P0-03 Stage C: validated reconciliation with state machine - never auto-delete on incomplete data
             if not cycle_paper:
                 try:
-                    # lightweight reconcile: detect unknown exchange positions and qty mismatches
-                    ex_positions = ex.fetch_positions(list(state.get("positions",{}).keys()) or botmod.CONFIG.get("symbols", [])[:5])
-                    ex_map = {}
-                    for p in ex_positions:
-                        sym = p.get("symbol") or p.get("info",{}).get("symbol","")
-                        # normalize ccxt symbol
-                        if sym and sym not in ex_map:
-                            ex_map[sym] = p
-                    for sym, pos in list(state.get("positions",{}).items()):
-                        ep = ex_map.get(sym)
-                        contracts = float(ep.get("contracts") or ep.get("info",{}).get("size") or 0) if ep else 0
-                        if ep is None or contracts == 0:
-                            # local thinks open but exchange flat -> mark closed (liquidated/manually closed)
-                            print(f"reconcile: {sym} local open but exchange flat -> closing local")
-                            state["positions"].pop(sym, None)
-                            state["last_trade"][sym] = datetime.now(timezone.utc).isoformat()
-                    # orphan scan: DB open but exchange flat (handled in DB persist below)
+                    state.setdefault("_reconcile", {})
+                    recon = state["_reconcile"]
+                    local_items = list(state.get("positions", {}).items())
+                    validated_syms = []
+                    has_invalid = False
+                    for sym, pos in local_items:
+                        side = pos.get("side")
+                        qty = pos.get("qty")
+                        sym_ok = isinstance(sym, str) and "/" in sym
+                        side_ok = side in ("long", "short")
+                        try:
+                            qty_ok = isinstance(qty, (int,float)) and float(qty) > 0
+                        except Exception:
+                            qty_ok = False
+                        # exchange/positionMode presence check (symbol/side/qty/exchange/positionMode)
+                        exch = pos.get("exchange") or ex_name
+                        pmode = pos.get("positionMode") or pos.get("position_mode")
+                        # require side/qty/symbol; exchange/mode get defaults but flag incomplete
+                        if not (sym_ok and side_ok and qty_ok):
+                            print(f"reconcile: {sym} invalid fields side={side!r} qty={qty!r} -> reconciling")
+                            recon["state"] = "reconciling"
+                            has_invalid = True
+                        else:
+                            validated_syms.append(sym)
+                    if not local_items:
+                        recon["state"] = "ok"
+                        recon.pop("pending", None)
+                    elif has_invalid and not validated_syms:
+                        recon["state"] = "reconciling"
+                    elif validated_syms:
+                        fetched = ex.fetch_positions(validated_syms)
+                        if fetched is None:
+                            print("reconcile: fetch_positions returned None -> reconciling")
+                            recon["state"] = "reconciling"
+                        elif not isinstance(fetched, list):
+                            print(f"reconcile: bad fetch_positions type {type(fetched).__name__} -> reconciling")
+                            recon["state"] = "reconciling"
+                        else:
+                            ex_map = {}
+                            for pp in fetched:
+                                s = pp.get("symbol") or (pp.get("info") or {}).get("symbol") or ""
+                                if s:
+                                    ex_map[s] = pp
+                                    base = s.split(":")[0]
+                                    if base not in ex_map:
+                                        ex_map[base] = pp
+                            if not ex_map:
+                                print("reconcile: empty ex_map -> incomplete, reconciling")
+                                recon["state"] = "reconciling"
+                                recon.setdefault("pending", {})
+                                for s in validated_syms:
+                                    recon["pending"][s] = recon["pending"].get(s, 0) + 1
+                            else:
+                                pending = recon.setdefault("pending", {})
+                                for sym in validated_syms:
+                                    pos = state.get("positions", {}).get(sym)
+                                    if pos is None:
+                                        pending.pop(sym, None)
+                                        continue
+                                    ep = ex_map.get(sym) or ex_map.get(sym.split(":")[0])
+                                    if ep is None:
+                                        print(f"reconcile: {sym} missing from fetch -> reconciling")
+                                        recon["state"] = "reconciling"
+                                        pending[sym] = pending.get(sym, 0) + 1
+                                        continue
+                                    # validate contracts field exists
+                                    try:
+                                        raw = ep.get("contracts")
+                                        if raw is None:
+                                            raw = (ep.get("info") or {}).get("size")
+                                        if raw is None:
+                                            print(f"reconcile: {sym} no contracts/size -> reconciling")
+                                            recon["state"] = "reconciling"
+                                            continue
+                                        contracts = float(raw or 0)
+                                    except Exception:
+                                        print(f"reconcile: {sym} bad contracts -> reconciling")
+                                        recon["state"] = "reconciling"
+                                        continue
+                                    if contracts == 0:
+                                        cnt = pending.get(sym, 0)
+                                        if cnt < 1:
+                                            print(f"reconcile: {sym} flat -> pending reconciling")
+                                            pending[sym] = cnt + 1
+                                            recon["state"] = "reconciling"
+                                        else:
+                                            print(f"reconcile: {sym} flat 2x -> closing local")
+                                            state["positions"].pop(sym, None)
+                                            state["last_trade"][sym] = datetime.now(timezone.utc).isoformat()
+                                            pending.pop(sym, None)
+                                    else:
+                                        pending.pop(sym, None)
+                                        try:
+                                            local_qty = float(pos.get("qty", 0))
+                                            if abs(local_qty - contracts) / max(1e-9, abs(contracts)) > 0.05:
+                                                print(f"reconcile: {sym} qty mismatch {local_qty} vs {contracts} -> reconciling")
+                                                recon["state"] = "reconciling"
+                                        except Exception:
+                                            pass
+                                if not recon.get("pending"):
+                                    if recon.get("state") != "reconciling":
+                                        recon["state"] = "ok"
+                                else:
+                                    recon["state"] = "reconciling"
                 except Exception as e:
                     print(f"reconcile warn: {e}")
+                    try:
+                        state.setdefault("_reconcile", {})["state"] = "reconciling"
+                    except Exception:
+                        pass
             if prices: botmod.check_sl_tp(state, prices, ex)
             for sym,a in analyses.items():
                 try: botmod.try_enter(sym,a,state,ex)
@@ -451,16 +544,74 @@ async def bot_loop(cfg):
                             print(f"OCO warn {ex_name} {sym}: LIVE entry without oco_ids — skipping DB open")
                             continue
                         rec=Trade(symbol=sym, side=pos["side"], entry=pos["entry"], qty=pos["qty"], sl=pos["sl"], tp=pos["tp"], leverage=pos.get("leverage",5), entry_ts=pos.get("time",""), status="open", created_at=datetime.now(timezone.utc).isoformat())
-                        sess.add(rec); await sess.commit()
+                        sess.add(rec); await sess.flush()
+                        # (3) persist oco_ids to DB ProtectiveOrder before pop so cancel can use ownership ids
+                        try:
+                            oco_ids = pos.get("oco_ids") or {}
+                            sl_id = oco_ids.get("sl"); tp_id = oco_ids.get("tp")
+                            # need trade_id after flush
+                            tid = rec.id
+                            for side_key, cid in (("sl", sl_id), ("tp", tp_id)):
+                                if cid:
+                                    from app.db import ProtectiveOrder
+                                    po = ProtectiveOrder(trade_id=tid, symbol=sym, client_order_id=cid, exchange_order_id=None, side=side_key, qty=pos.get("qty"), price=pos.get("sl") if side_key=="sl" else pos.get("tp"), status="open", created_at=datetime.now(timezone.utc).isoformat())
+                                    sess.add(po)
+                        except Exception as e:
+                            print(f"persist oco_ids {sym}: {e}")
+                        # also snapshot to state for file-based cancel
+                        try:
+                            if pos.get("oco_ids"):
+                                state.setdefault("_last_oco", {})[sym] = dict(pos["oco_ids"])
+                        except: pass
+                        await sess.commit()
                         strat = (botmod.CONFIG.get("enabled_strategies") or ["ict"])[0]
                         await send_telegram(format_entry(sym, pos["side"], pos["entry"], pos["sl"], pos["tp"], pos.get("leverage",5), analyses[sym]["total"] if sym in analyses else 0, float(pos.get("notional",20))/max(1,int(pos.get("leverage",5))), botmod.CONFIG.get("timeframe","4h"), strat))
-                    # Closed: mark (P0-04: cancel only owned OCO)
+                    # Snapshot oco_ids before pops: persist to DB/state so cancel can use ownership ids; replace unfinished pass and prefix-broad cancel with id-only
+                    # Build snapshot of oco ids for symbols that closed this cycle (before - after)
+                    _oco_snapshot = {}
+                    for sym in (before - after):
+                        # prefer state._last_oco (written by bot.py try_enter), fallback to state._oco_ids or state positions backup
+                        snap = None
+                        try:
+                            snap = (state.get("_last_oco") or {}).get(sym)
+                        except: pass
+                        if not snap:
+                            try:
+                                snap = (state.get("_oco_ids") or {}).get(sym)
+                            except: pass
+                        if snap:
+                            _oco_snapshot[sym] = snap
+                        # persist to DB ProtectiveOrder or state snapshot for future cancel
+                        if snap:
+                            try:
+                                # also write to session later if needed; keep in state for now
+                                state.setdefault("_closed_oco", {})[sym] = dict(snap)
+                            except: pass
+                    # Closed: mark (P0-04: cancel only owned OCO via id-only, never broad raqm-* prefix)
                     for sym in (before - after):
                         if not cycle_paper:
-                            # cancel only this position's OCO (ownership via pos_id)
-                            try:
-                                # pos is gone from state; look up last known oco_ids from pending or skip broad cancel
-                                pass
+                            snap = _oco_snapshot.get(sym) or (state.get("_closed_oco") or {}).get(sym)
+                            if snap:
+                                try:
+                                    # id-only cancel: use stored oco_ids (sl/tp/pos_id)
+                                    pos_id = snap.get("pos_id")
+                                    sl_id = snap.get("sl")
+                                    tp_id = snap.get("tp")
+                                    if pos_id:
+                                        cancel_oco_orders(ex, sym, pos_id=pos_id)
+                                    elif sl_id or tp_id:
+                                        cancel_oco_orders(ex, sym, sl_id=sl_id, tp_id=tp_id)
+                                    else:
+                                        # no ids stored — do NOT broad-cancel; log and skip
+                                        print(f"cancel skip {sym}: no oco ids stored, refusing broad cancel")
+                                except Exception as e:
+                                    print(f"cancel_oco {sym}: {e}")
+                            else:
+                                print(f"cancel skip {sym}: no snapshot, refusing broad cancel")
+                            # consume snapshot after attempt
+                            try: state.get("_closed_oco", {}).pop(sym, None)
+                            except: pass
+                            try: state.get("_last_oco", {}).pop(sym, None)
                             except: pass
                         hist=[h for h in state.get("history",[]) if h.get("symbol")==sym]
                         last=hist[-1] if hist else {}
