@@ -17,12 +17,22 @@ def get_fernet():
     env_key = os.getenv("VAULT_MASTER_KEY", "").strip()
     if env_key:
         return Fernet(env_key.encode())
+    # P1-03a: fail closed in production (Render/Vercel/VPS) where VAULT_MASTER_KEY must be set.
+    # Local dev fallback only: generate a dev-only key and warn.
+    if os.getenv("RENDER") or os.getenv("VERCEL") or os.getenv("RAILWAY_ENVIRONMENT"):
+        raise RuntimeError("VAULT_MASTER_KEY not set — refusing to generate ephemeral key in production")
     if MASTER_KEY_PATH.exists():
         key = MASTER_KEY_PATH.read_bytes().strip()
     else:
         key = Fernet.generate_key()
         MASTER_KEY_PATH.write_bytes(key)
         try: MASTER_KEY_PATH.chmod(0o600)
+        except: pass
+        # Verify chmod actually took
+        try:
+            import stat as _stat
+            if (MASTER_KEY_PATH.stat().st_mode & 0o777) & 0o077:
+                print("WARN vault: .master.key is group/world-readable — fix permissions")
         except: pass
     return Fernet(key)
 

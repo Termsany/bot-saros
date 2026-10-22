@@ -176,8 +176,11 @@ class ApiAuthTests(unittest.TestCase):
         self.assertIsNone(_get_exchange_for_cycle(paper=False))
 
     def test_chart_path_traversal_blocked(self):
+        # traversal must be 400 even with auth; unauthenticated without traversal is 401
         for f in ["backtest_/../backend/vault.json", "backtest_..%2f..%2fx.json", "backtest_a.png/../../x.png", "x.png"]:
-            self.assertEqual(self.c.get("/api/chart", params={"file": f}).status_code, 400, f)
+            self.assertEqual(self.c.get("/api/chart", params={"file": f}, headers=self.h("user-token")).status_code, 400, f)
+        # unauthenticated cannot list charts at all (IDOR fix: require_user)
+        self.assertEqual(self.c.get("/api/chart", params={"file": "backtest_BTCUSDT_1d_abc1234567.png"}).status_code, 401)
 
     def test_docs_hidden_by_default(self):
         self.assertEqual(self.c.get("/docs").status_code, 404)

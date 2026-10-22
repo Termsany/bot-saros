@@ -53,6 +53,35 @@ class UserSetting(Base):
     started_at = Column(String)   # reset whenever capital or strategy changes — the portfolio counts from here
     updated_at = Column(String)
 
+class BotInstance(Base):
+    """Persistent bot supervisor: survives restarts, prevents duplicate instances (P1-06)."""
+    __tablename__ = "bot_instances"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    instance_id = Column(String, unique=True, index=True)
+    strategy = Column(String)
+    symbols = Column(Text)  # json list
+    timeframe = Column(String)
+    paper = Column(Integer, default=1)
+    leverage = Column(Integer, default=5)
+    status = Column(String, default="starting")  # starting/running/stopping/stopped/error
+    heartbeat_at = Column(String)
+    created_at = Column(String)
+    updated_at = Column(String)
+
+class ProtectiveOrder(Base):
+    """Ownership of exchange SL/TP orders (P0-04 persistence)."""
+    __tablename__ = "protective_orders"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    trade_id = Column(Integer, index=True)
+    symbol = Column(String, index=True)
+    client_order_id = Column(String, index=True)
+    exchange_order_id = Column(String)
+    side = Column(String)  # sl/tp
+    qty = Column(Float)
+    price = Column(Float)
+    status = Column(String, default="open")  # open/cancelled/filled/error
+    created_at = Column(String)
+
 engine = create_async_engine(DATABASE_URL, echo=False)
 async_session = async_sessionmaker(engine, expire_on_commit=False)
 

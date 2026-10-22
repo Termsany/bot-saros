@@ -79,6 +79,8 @@ def live_trading_allowed() -> bool:
 TIMEFRAMES = {"1m", "5m", "15m", "30m", "1h", "2h", "4h", "1d"}
 SYMBOL_RE = re.compile(r"^[A-Z0-9]{2,15}/[A-Z]{3,5}$")
 _backtest_slots = asyncio.Semaphore(int(os.getenv("MAX_CONCURRENT_BACKTESTS", "2")))
+_backtest_slots_llm = asyncio.Semaphore(int(os.getenv("MAX_CONCURRENT_LLM", "1")))
+_evolve_lock = asyncio.Lock()  # P1-05: only one optimizer/evolve at a time
 
 # Per-user rate limit for expensive endpoints (signup is open, Render free has 0.1 CPU)
 import time as _time
@@ -271,10 +273,14 @@ async def backtest_history(limit: int = 20, user: dict = Depends(require_user)):
         return [{"id":r.id,"symbol":r.symbol,"timeframe":r.timeframe,"from":r.from_date,"to":r.to_date,"strategies":r.strategies,"stats":r.stats,"at":r.created_at} for r in rows]
 
 @app.get("/api/chart")
-async def api_chart(file: str):
-    # strict name check — "backtest_/../backend/vault.json" used to pass startswith/endswith
+async def api_chart(file: str, user: dict = Depends(require_user)):
+    # P1 IDOR fix: must be signed in, and caller must own at least one backtest run
     if not re.fullmatch(r"backtest_[A-Za-z0-9_]+\.(png|json)", file):
         raise HTTPException(400, "bad file")
+    async with async_session() as sess:
+        res = await sess.execute(select(BacktestRun).where(BacktestRun.user_id==user["id"]).limit(1))
+        if res.scalars().first() is None:
+            raise HTTPException(403, "not your chart")
     p = BOT_DIR / file
     if not p.exists(): raise HTTPException(404, "not found")
     ct = "image/png" if file.endswith(".png") else "application/json"
