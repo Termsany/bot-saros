@@ -10,7 +10,7 @@ WorkingDirectory=/opt/raqm-bot
 EnvironmentFile=-/opt/raqm-bot/.env
 Environment=PYTHONUNBUFFERED=1
 # own state file (state_momentum.json / state_momentum.log); page data -> momentum.json
-ExecStart=/opt/raqm-bot/venv/bin/python bot.py --paper --strategy momentum_ls --amount 20 --leverage 2 --poll 60 --notify --public /var/www/bot.da3m.io --state state_momentum.json
+ExecStart=/opt/raqm-bot/venv/bin/python bot.py --paper --strategy momentum_ls --amount 100 --leverage 2 --poll 60 --notify --public /var/www/bot.da3m.io --state state_momentum.json
 Restart=always
 RestartSec=30
 NoNewPrivileges=true

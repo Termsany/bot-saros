@@ -10,7 +10,7 @@ WorkingDirectory=/opt/raqm-bot
 EnvironmentFile=-/opt/raqm-bot/.env
 Environment=PYTHONUNBUFFERED=1
 # own state file (state_ratio.json / state_ratio.log); page data -> ratio.json
-ExecStart=/opt/raqm-bot/venv/bin/python bot.py --paper --strategy ratio_trend --amount 20 --leverage 2 --poll 60 --notify --public /var/www/bot.da3m.io --state state_ratio.json
+ExecStart=/opt/raqm-bot/venv/bin/python bot.py --paper --strategy ratio_trend --amount 100 --leverage 2 --poll 60 --notify --public /var/www/bot.da3m.io --state state_ratio.json
 Restart=always
 RestartSec=30
 NoNewPrivileges=true

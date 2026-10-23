@@ -10,7 +10,7 @@ WorkingDirectory=/opt/raqm-bot
 EnvironmentFile=-/opt/raqm-bot/.env
 Environment=PYTHONUNBUFFERED=1
 # own state file (state_listing.json / state_listing.log) next to the trend bot; page data -> listing.json
-ExecStart=/opt/raqm-bot/venv/bin/python bot.py --paper --strategy listing_short --amount 20 --leverage 2 --poll 60 --notify --public /var/www/bot.da3m.io --state state_listing.json
+ExecStart=/opt/raqm-bot/venv/bin/python bot.py --paper --strategy listing_short --amount 100 --leverage 2 --poll 60 --notify --public /var/www/bot.da3m.io --state state_listing.json
 Restart=always
 RestartSec=30
 NoNewPrivileges=true
