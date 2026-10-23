@@ -20,8 +20,9 @@ def _oco_id(pos_id, leg):
     return f"{OCO_PREFIX}-{pid[-12:]}-{leg}"[:36]
 
 def _position_idx_for_side(ex, side: str):
+    """positionIdx / orderLinkId are Bybit fields — other exchanges reject unknown parameters."""
     try:
-        if hasattr(ex, "options") and ex.options.get("hedgeMode"):
+        if str(getattr(ex, "id", "")).lower() == "bybit" and hasattr(ex, "options") and ex.options.get("hedgeMode"):
             return 1 if side == "long" else 2
     except: pass
     return None
@@ -108,20 +109,26 @@ def place_oco_orders(ex, symbol, side, qty, sl_price, tp_price, paper: bool = Tr
 
 
 def cancel_oco_orders(ex, symbol, pos_id: str = None, sl_id: str = None, tp_id: str = None):
+    """Cancels only our own protective orders (by their ids) — plain and conditional (trigger) open orders both,
+    since Binance/Bybit keep stop/take-profit orders apart. Never a broad cancel: manual orders stay."""
+    ids = {x for x in (sl_id, tp_id) if x}
     if pos_id:
-        ids = {_oco_id(pos_id, "sl"), _oco_id(pos_id, "tp")}
-    elif sl_id or tp_id:
-        ids = {x for x in (sl_id, tp_id) if x}
-    else:
+        ids |= {_oco_id(pos_id, "sl"), _oco_id(pos_id, "tp")}
+    if not ids:
         return
-    try:
-        open_orders = ex.fetch_open_orders(symbol)
-        for o in open_orders:
-            cid = o.get("clientOrderId") or o.get("orderLinkId") or o.get("id") or ""
-            if cid in ids or o.get("id") in ids:
-                try: ex.cancel_order(o["id"], symbol)
+    seen = set()
+    for params in ({}, {"trigger": True}, {"stop": True}):
+        try:
+            opens = ex.fetch_open_orders(symbol, None, None, params) if params else ex.fetch_open_orders(symbol)
+        except Exception:
+            continue
+        for o in opens if isinstance(opens, list) else []:
+            if not isinstance(o, dict) or o.get("id") in seen:
+                continue
+            if _order_cid(o) in ids or o.get("id") in ids:
+                seen.add(o.get("id"))
+                try: ex.cancel_order(o["id"], symbol, params) if params else ex.cancel_order(o["id"], symbol)
                 except Exception: pass
-    except Exception: pass
 
 
 def place_order_idempotent(ex, symbol, side, qty, params=None, client_order_id: str = None):

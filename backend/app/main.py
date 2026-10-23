@@ -57,11 +57,30 @@ async def check_supabase_service_key():
     except Exception as e:
         print(f"SUPABASE_SERVICE_KEY check: could not reach Supabase ({type(e).__name__})")
 
+async def _resume_bot_after_restart():
+    """A restart (deploy, crash, reboot) used to drop the trading loop silently, leaving open positions without the
+    bot's exits / breakeven / reconciliation. If it was running, start it again and say so on Telegram."""
+    global bot_task
+    try:
+        cfg_path = BOT_DIR / "api_bot_config.json"
+        if not cfg_path.exists(): return
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        if not cfg.get("running"): return
+        from app.telegram_bot import send_telegram
+        if not cfg.get("paper", True) and not live_trading_allowed():
+            await send_telegram("⚠️ API restarted: the LIVE bot was running but ALLOW_LIVE_TRADING is off — not resumed. Check open positions on the exchange.")
+            return
+        bot_task = asyncio.create_task(bot_loop(cfg))
+        await send_telegram(f"♻️ API restarted — bot loop resumed ({'paper' if cfg.get('paper', True) else 'LIVE'})")
+    except Exception as e:
+        print(f"bot resume failed: {e}")
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
     print("DB ready")
     asyncio.create_task(check_supabase_service_key())  # don't delay startup on a slow Supabase
+    asyncio.create_task(_resume_bot_after_restart())
     yield
 
 # API docs list every endpoint — off in production unless ENABLE_API_DOCS=true
@@ -71,6 +90,15 @@ app = FastAPI(title="Raqm API", version="2.0.0", lifespan=lifespan,
 
 ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "https://bot-saros.vercel.app,http://localhost:3000").split(",") if o.strip()]
 app.add_middleware(CORSMiddleware, allow_origins=ALLOWED_ORIGINS, allow_methods=["GET", "POST"], allow_headers=["Authorization", "Content-Type"])
+
+def llm_lab_allowed() -> bool:
+    """Running LLM-written code is opt-in (ENABLE_LLM_LAB=true) and never on a server that can trade real money:
+    the sandbox is an AST blocklist + child process as the same OS user, which can read .env and vault.json."""
+    return os.getenv("ENABLE_LLM_LAB", "").strip().lower() == "true" and not live_trading_allowed()
+
+def _require_llm_lab():
+    if not llm_lab_allowed():
+        raise HTTPException(403, "LLM lab is off on this server (ENABLE_LLM_LAB, never together with ALLOW_LIVE_TRADING)")
 
 def live_trading_allowed() -> bool:
     """Global kill switch: real orders only if ALLOW_LIVE_TRADING=true on the server."""
@@ -348,7 +376,7 @@ async def bot_start(req: BotStartReq, bg: BackgroundTasks, user: dict = Depends(
     if req.strategies == ["trend_daily"]: req.timeframe = "1d"
     # Save config for bot loop
     lev = req.leverage or (2 if req.strategies == ["trend_daily"] else 5)
-    cfg = {"symbols": req.symbols, "strategies": req.strategies, "timeframe": req.timeframe, "paper": req.paper, "leverage": lev}
+    cfg = {"symbols": req.symbols, "strategies": req.strategies, "timeframe": req.timeframe, "paper": req.paper, "leverage": lev, "running": True}
     (BOT_DIR / "api_bot_config.json").write_text(json.dumps(cfg, ensure_ascii=False), encoding="utf-8")
     bot_task = asyncio.create_task(bot_loop(cfg))
     return {"ok": True, "msg": "started", "config": cfg}
@@ -357,6 +385,12 @@ async def bot_start(req: BotStartReq, bg: BackgroundTasks, user: dict = Depends(
 async def bot_stop(user: dict = Depends(require_admin)):
     global bot_task
     if bot_task: bot_task.cancel()
+    try:   # stopped on purpose: don't resume after the next restart
+        cfg_path = BOT_DIR / "api_bot_config.json"
+        if cfg_path.exists():
+            cfg = json.loads(cfg_path.read_text(encoding="utf-8")); cfg["running"] = False
+            cfg_path.write_text(json.dumps(cfg, ensure_ascii=False), encoding="utf-8")
+    except Exception as e: print(f"bot stop config {e}")
     return {"ok": True}
 
 
@@ -407,6 +441,9 @@ async def bot_loop(cfg):
                 continue
             ex_name, ex, cycle_paper = picked
             botmod.CONFIG["paper_trading"] = cycle_paper
+            # real positions get their own file: a paper cycle must never "close" them in a shared record
+            botmod.STATE_PATH = BOT_DIR / ("state.json" if cycle_paper else "state_live.json")
+            botmod.LOG_PATH = BOT_DIR / ("trades.log" if cycle_paper else "trades_live.log")
             state = botmod.load_state()
             prices={}; analyses={}
             for sym in botmod.CONFIG["symbols"]:
@@ -779,7 +816,7 @@ async def evolve(user: dict = Depends(require_admin_or_cron)):
             msg = f"\U0001f916 *Self-Evolution*\n\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\nBTC 4h updated\nTop weights: `{str(weights)[:120] if weights else '?'}`\nPruning: `{pruning if pruning else 'none'}`"
             await send_telegram(msg)
         except: pass
-        return {"ok": proc.returncode==0, "weights": weights, "pruning": pruning, "stdout": out[-3000:], "stderr": stderr.decode(errors="ignore")[-800:]}
+        return {"ok": proc.returncode==0, "weights": weights, "pruning": pruning, "stdout": _scrub(out[-3000:]), "stderr": _scrub(stderr.decode(errors="ignore")[-800:])}
     except asyncio.TimeoutError:
         return {"ok": False, "error": "evolve timeout"}
     except Exception as e:
@@ -789,6 +826,7 @@ async def evolve(user: dict = Depends(require_admin_or_cron)):
 @app.post("/api/llm/generate")
 async def llm_generate(prompt: str = "RSI + volume divergence on 4h", symbol: str = "BTC/USDT", timeframe: str = "4h", user: dict = Depends(require_admin)):
     """LLM يخترع استراتيجية + باك تست فوري (الكود بيتشغل في sandbox — شوف llm_sandbox.py)"""
+    _require_llm_lab()
     if not SYMBOL_RE.match(symbol) or timeframe not in TIMEFRAMES: raise HTTPException(400, "bad symbol/timeframe")
     prompt = prompt[:500]
     from app.llm_generator import generate_strategy, save_strategy, backtest_llm
@@ -796,6 +834,9 @@ async def llm_generate(prompt: str = "RSI + volume divergence on 4h", symbol: st
     if not gen.get("ok"):
         return gen
     code = gen["code"]
+    from app.llm_sandbox import validate_code, UnsafeCode
+    try: validate_code(code)
+    except UnsafeCode as e: return {"ok": False, "error": f"unsafe code refused: {e}", "code": code}
     # Save
     try:
         fp = save_strategy(code)
@@ -822,8 +863,10 @@ async def llm_list(user: dict = Depends(require_admin)):
 
 
 @app.post("/api/llm/evolve")
-async def llm_evolve(prompt: str = "innovative crypto futures strategy combining momentum and mean reversion", n: int = 3, user: dict = Depends(require_admin_or_cron)):
-    """يولد n استراتيجيات، يباك تست كل واحدة، ويضيف الفائزة (WR>=60%) تلقائياً"""
+async def llm_evolve(prompt: str = "innovative crypto futures strategy combining momentum and mean reversion", n: int = 3, user: dict = Depends(require_admin)):
+    """يولد n استراتيجيات، يباك تست كل واحدة، ويضيف الفائزة (WR>=60%) تلقائياً — admin only: the cron secret must not
+    choose what code gets generated and run"""
+    _require_llm_lab()
     prompt = prompt[:500]
     from app.llm_generator import generate_strategy, save_strategy, backtest_llm, auto_promote_if_winner
     results = []
@@ -833,6 +876,10 @@ async def llm_evolve(prompt: str = "innovative crypto futures strategy combining
             results.append({"i": i+1, "ok": False, "error": gen.get("error")})
             continue
         code = gen["code"]
+        from app.llm_sandbox import validate_code, UnsafeCode
+        try: validate_code(code)
+        except UnsafeCode as e:
+            results.append({"i": i+1, "ok": False, "error": f"unsafe code refused: {e}"}); continue
         # Save
         try:
             fp = save_strategy(code)

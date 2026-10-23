@@ -18,6 +18,10 @@ async def send_telegram(text: str, parse_mode: str = "Markdown", disable_preview
                 "parse_mode": parse_mode,
                 "disable_web_page_preview": disable_preview,
             })
+            if r.status_code == 400 and parse_mode:
+                # exchange error text in an alert (unbalanced _ * `) breaks Markdown: the alert must still arrive
+                r = await client.post(f"https://api.telegram.org/bot{token}/sendMessage", json={
+                    "chat_id": chat, "text": text, "disable_web_page_preview": disable_preview})
             if r.status_code != 200:
                 print(f"telegram {r.status_code} {r.text[:300]}")
                 return False

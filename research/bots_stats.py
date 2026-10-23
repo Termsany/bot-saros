@@ -1,6 +1,6 @@
 """
 Numbers the site shows for the four paper bots (lib/bot-stats.json) and every trade of their historical test
-(public/bot-trades.json, used by the backtest page for the portfolio bots) — never edit those files by hand.
+(data/bot-trades.json, served per plan by app/api/bot-trades for the backtest page) — never edit those files by hand.
 Same data and rules as the studies: every Binance USDT-M perpetual since 2019 (delisted included), coins chosen by
 volume at the time, real funding, fees 0.04%, $20 margin x2 per position (per leg). "Out-of-sample" = from 2024.
 
@@ -192,7 +192,7 @@ def main():
         print(f"  x{lev}: " + "  ".join(f"{k} {sum(t['pnl'] for t in tr):+.0f}" for k, tr in at.items()))
     by_lev["ratio_trend"][str(LEV)] = trades["ratio_trend"]
     assert by_lev["momentum_ls"][str(LEV)] == trades["momentum_ls"]          # the x2 set is the one the site's numbers use
-    tpath = ROOT / "public" / "bot-trades.json"; tpath.parent.mkdir(exist_ok=True)
+    tpath = ROOT / "data" / "bot-trades.json"; tpath.parent.mkdir(exist_ok=True)
     tpath.write_text(json.dumps({"meta": {**meta, "fields": ["entry_ts", "exit_ts", "symbol", "side", "entry", "exit", "pnl", "reason"],
                                           "leverages": {k: sorted(map(int, v)) for k, v in by_lev.items()}},
                                  "trades": by_lev}, separators=(",", ":")), encoding="utf-8")

@@ -2,12 +2,16 @@
 Child process for llm_sandbox.run_backtest_sandboxed — do not import from the API.
 argv: <work_dir> <repo_root>. Prints one line: __RESULT__{json}
 """
-import sys, json, importlib.util
+import os, sys, json, importlib.util
 from pathlib import Path
+
+# a per-run random tag from the parent, read and removed before the strategy code runs:
+# printed lines from that code can't pass for the result
+_TAG = os.environ.pop("RAQM_RESULT_TAG", "")
 
 
 def emit(obj):
-    print("__RESULT__" + json.dumps(obj, default=str, ensure_ascii=False))
+    print(f"__RESULT_{_TAG}__" + json.dumps(obj, default=str, ensure_ascii=False))
 
 
 def main():

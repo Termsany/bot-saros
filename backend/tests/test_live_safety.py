@@ -118,3 +118,78 @@ class VaultTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CloseLivePositionTests(unittest.TestCase):
+    def setUp(self):
+        self._cfg = dict(botmod.CONFIG); botmod.CONFIG.update({"paper_trading": False, "market": "future", "leverage": 5})
+        self.td = tempfile.TemporaryDirectory(); botmod.LOG_PATH = Path(self.td.name) / "t.log"
+    def tearDown(self):
+        botmod.CONFIG.clear(); botmod.CONFIG.update(self._cfg); self.td.cleanup()
+
+    def _ex(self):
+        ex = mock.Mock(); ex.id = "binance"; ex.options = {}
+        ex.amount_to_precision.side_effect = lambda s, q: str(q)
+        ex.create_order.side_effect = lambda sym, typ, side, qty, price, params: {"id": "c1", "filled": qty, "average": 100.0}
+        ex.fetch_open_orders.return_value = []
+        return ex
+
+    def test_closes_the_exact_size_and_cancels_own_orders(self):
+        ex = self._ex()
+        pos = {"side": "long", "qty": 0.37, "oco_ids": {"pos_id": "raqm-aaaabbbbcccc"}}
+        sl = oco_mod._oco_id("raqm-aaaabbbbcccc", "sl")
+        ex.fetch_open_orders.return_value = [{"id": "9", "clientOrderId": sl}, {"id": "8", "clientOrderId": "manual"}]
+        res = botmod.close_live_position(ex, "SOL/USDT", pos, 100.0)
+        args = ex.create_order.call_args[0]
+        self.assertEqual(args[2], "sell"); self.assertAlmostEqual(float(args[3]), 0.37)   # not 0.37 x leverage
+        self.assertTrue(args[5].get("reduceOnly"))
+        ex.set_leverage.assert_not_called()
+        self.assertEqual([c[0][0] for c in ex.cancel_order.call_args_list], ["9"])        # our stop only, never "manual"
+        self.assertFalse(res["by_exchange"])
+
+    def test_already_flat_on_the_exchange_counts_as_closed(self):
+        ex = self._ex()
+        ex.create_order.side_effect = Exception('binance {"code":-2022,"msg":"ReduceOnly Order is rejected."}')
+        ex.fetch_positions.return_value = [{"symbol": "SOL/USDT:USDT", "contracts": 0}]
+        res = botmod.close_live_position(ex, "SOL/USDT", {"side": "short", "qty": 1.0}, 90.0)
+        self.assertTrue(res["by_exchange"])
+
+    def test_still_open_after_a_failed_close_raises(self):
+        ex = self._ex()
+        ex.create_order.side_effect = Exception("network down")
+        ex.fetch_positions.return_value = [{"symbol": "SOL/USDT:USDT", "contracts": 1.0}]
+        with self.assertRaises(Exception):
+            botmod.close_live_position(ex, "SOL/USDT", {"side": "long", "qty": 1.0}, 90.0)
+
+
+class LiveExchangeTests(unittest.TestCase):
+    def test_binance_keys_go_to_binance(self):
+        with mock.patch.dict(os.environ, {"BINANCE_API_KEY": "k", "BINANCE_SECRET": "s"}):
+            ex, err = botmod.get_exchange(auth=True)
+        self.assertIsNone(err); self.assertTrue(ex.id.startswith("binance"))
+
+    def test_paper_data_needs_no_keys(self):
+        ex, err = botmod.get_exchange(auth=False)
+        self.assertIsNone(err); self.assertFalse(ex.apiKey)
+
+
+class LlmLabGateTests(unittest.TestCase):
+    def test_off_by_default_and_never_with_live(self):
+        from backend.app import main as m
+        with mock.patch.dict(os.environ, {"ENABLE_LLM_LAB": "", "ALLOW_LIVE_TRADING": ""}):
+            self.assertFalse(m.llm_lab_allowed())
+        with mock.patch.dict(os.environ, {"ENABLE_LLM_LAB": "true", "ALLOW_LIVE_TRADING": "true"}):
+            self.assertFalse(m.llm_lab_allowed())
+        with mock.patch.dict(os.environ, {"ENABLE_LLM_LAB": "true", "ALLOW_LIVE_TRADING": ""}):
+            self.assertTrue(m.llm_lab_allowed())
+
+    def test_name_dispatch_is_refused(self):
+        from backend.app.llm_sandbox import validate_code, UnsafeCode
+        head = "import pandas as pd\ndef llm_signal(df):\n"
+        for body in ('    df.agg("to_csv", "/tmp/x")\n    return 0, {}',
+                     '    df.agg("_"+"_class_"+"_")\n    return 0, {}',
+                     '    m = "to" + "_pickle"\n    df.apply(m)\n    return 0, {}',
+                     '    print("__RESULT__{}")\n    return 0, {}'):
+            with self.assertRaises(UnsafeCode):
+                validate_code(head + body)
+        validate_code(head + '    ma = df["close"].rolling(20).mean()\n    return float((df["close"] > ma).iloc[-1]), {}')

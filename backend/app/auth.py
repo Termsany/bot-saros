@@ -46,11 +46,14 @@ async def _verify_token(token: str) -> dict:
         raise HTTPException(401, "invalid or expired session")
     j = r.json()
     user = {"id": j.get("id"), "email": (j.get("email") or "").lower(),
-            "email_confirmed": bool(j.get("email_confirmed_at") or j.get("confirmed_at"))}
+            # email_confirmed_at only: confirmed_at is also set by a confirmed *phone*, which proves nothing about the email
+            "email_confirmed": bool(j.get("email_confirmed_at"))}
     if not user["id"]:
         raise HTTPException(401, "invalid session")
-    if len(_CACHE) > 1000:
-        _CACHE.clear()
+    if len(_CACHE) > 1000:   # drop expired entries first — a flood of junk tokens must not empty everyone's cache
+        now = time.time()
+        for k in [k for k, (exp, _) in _CACHE.items() if exp < now]: _CACHE.pop(k, None)
+        while len(_CACHE) > 1000: _CACHE.pop(next(iter(_CACHE)))
     _CACHE[h] = (time.time() + _CACHE_TTL_S, user)
     return user
 
@@ -76,6 +79,10 @@ async def require_admin(authorization: str = Header(default="")) -> dict:
     # or "Confirm email" is off in Supabase) and get admin — i.e. control of the LIVE trading keys.
     if not user.get("email_confirmed"):
         raise HTTPException(403, "admin email not confirmed")
+    # ADMIN_USER_IDS (Supabase user ids) pins admin to the account itself, not just an email address
+    ids = {x.strip() for x in os.getenv("ADMIN_USER_IDS", "").split(",") if x.strip()}
+    if ids and user["id"] not in ids:
+        raise HTTPException(403, "admin only")
     return user
 
 

@@ -29,3 +29,11 @@ backtest_*.png
 # strategy research cache (market data + signals)
 research/.cache/
 trades.log
+
+# exchange keys live in a plain .env next to bot.py; bot state and logs hold positions
+.env
+*.env
+!*.env.example
+!.env.example
+state*.json
+*.log

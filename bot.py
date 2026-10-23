@@ -5,7 +5,7 @@ Paper Trading (وهمي) — يعرض الصفقات بـ entry/SL/TP
 python bot.py --paper   (وهمي كل 60s)  |  python bot.py --once  (مرة واحدة)
 python bot.py --dashboard  (يشغّل البوت + داشبورد http://localhost:8765)
 """
-import ccxt, pandas as pd, numpy as np, time, json, os, uuid, threading, http.server, socketserver, webbrowser
+import ccxt, pandas as pd, numpy as np, time, json, os, re, uuid, threading, http.server, socketserver, webbrowser
 from datetime import datetime, timezone
 from pathlib import Path
 import strategies_advanced as adv
@@ -67,7 +67,8 @@ def get_exchange(auth=False):
         ak = os.getenv("BINANCE_API_KEY","").strip(); sc = os.getenv("BINANCE_SECRET","").strip()
         if not ak or not sc: return None, "ضع مفاتيح Binance في .env"
         kwargs["apiKey"]=ak; kwargs["secret"]=sc
-    return ccxt.bybit(kwargs), None
+        return (ccxt.binanceusdm(kwargs) if mtype == "future" else ccxt.binance(kwargs)), None
+    return ccxt.bybit(kwargs), None   # public market data only (paper)
 
 STABLES = {"USDC", "FDUSD", "TUSD", "USDP", "BUSD", "DAI", "USDE", "USD1", "PAXG", "XAUT"}  # stablecoins, gold
 _universe = {"key": None, "symbols": []}
@@ -831,14 +832,16 @@ def _is_hedge_mode(ex):
 
 def _build_futures_params(ex, side, cid, reduceOnly=False):
     params = {}
-    if cid:
-        params["clientOrderId"] = cid
-        if cid.startswith("raqm-"):
-            params["orderLinkId"] = cid
-    if reduceOnly:
-        params["reduceOnly"] = True
     ex_id = _exchange_id(ex)
     hedge = _is_hedge_mode(ex)
+    if cid:
+        params["clientOrderId"] = cid
+        if ex_id == "bybit":
+            params["orderLinkId"] = cid
+    # one-way mode (what ensure_futures_setup sets): Binance rejects positionSide LONG/SHORT (-4061) and
+    # positionSide together with reduceOnly (-1106) — the position side is implied
+    if reduceOnly and not (ex_id.startswith("binance") and hedge):
+        params["reduceOnly"] = True
     if side == "long":
         ps = "LONG"
     elif side == "short":
@@ -849,8 +852,8 @@ def _build_futures_params(ex, side, cid, reduceOnly=False):
         ps = "SHORT"
     else:
         ps = None
-    if ex_id == "binance":
-        if ps:
+    if ex_id.startswith("binance"):
+        if ps and hedge:
             params["positionSide"] = ps
     elif ex_id == "bybit":
         if hedge:
@@ -901,6 +904,8 @@ def _reconcile_fills_by_client_id(ex, symbol, cid):
 
 
 
+_SL_AMEND_FAILED = set()   # symbols whose exchange stop couldn't be moved this cycle (check_sl_tp turns them into reviews)
+
 def _amend_exchange_sl(symbol, pos, new_sl, old_sl, ex):
     # Try to move the exchange SL to new_sl. Returns True if verified, False if unverified (flagged).
     if CONFIG.get("paper_trading"):
@@ -935,6 +940,7 @@ def _amend_exchange_sl(symbol, pos, new_sl, old_sl, ex):
             log(f"SL amend recreate failed {symbol}: {oco2}")
         except Exception as e:
             log(f"SL amend recreate exception {symbol}: {e}")
+    _SL_AMEND_FAILED.add(symbol)
     pos.setdefault("_sl_unverified", []).append({"from": old_sl, "to": new_sl, "at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()})
     pos["sl_unverified"] = True
     pos["sl_sync"] = "pending"
@@ -1007,7 +1013,7 @@ def ensure_futures_setup(ex, symbol):
     except RuntimeError: raise
     except Exception: pass
 
-def place_order(ex,symbol,side,amount_usdt,price, client_order_id=None):
+def place_order(ex,symbol,side,amount_usdt,price, client_order_id=None, close_qty=None):
     """side = long/short/close_long/close_short — يحسب الكمية من USDT * leverage.
     client_order_id: stable id for idempotent retry (P0-05). If None, generated; returned in result.
     Idempotency (6): on create_order timeout, lookup by clientOrderId/orderLinkId and reconcile fills before retry.
@@ -1016,13 +1022,15 @@ def place_order(ex,symbol,side,amount_usdt,price, client_order_id=None):
     is_future = CONFIG.get("market","future")=="future"
     lev = int(CONFIG.get("leverage",5)) if is_future else 1
     notional = amount_usdt * lev if is_future else amount_usdt
-    qty = notional / price
+    # a close sends the position's own quantity — recomputing it from USDT applied the leverage a second time (5x size)
+    qty = float(close_qty) if close_qty is not None else notional / price
     try: qty=float(ex.amount_to_precision(symbol, qty))
     except: qty=round(qty,6)
     if CONFIG["paper_trading"]:
         cid = client_order_id or f"raqm-{uuid.uuid4().hex[:12]}"[:36]
         return {"id":"paper-"+str(int(time.time()*1000)),"qty":qty,"price":price,"cost":qty*price,"notional":notional,"leverage":lev,"clientOrderId": cid}
-    ensure_futures_setup(ex, symbol)
+    if not side.startswith("close"):
+        ensure_futures_setup(ex, symbol)   # a close must never wait on (or fail because of) account settings
     cid = client_order_id or f"raqm-{uuid.uuid4().hex[:12]}"[:36]
     def _do_create(params):
         if is_future:
@@ -1060,6 +1068,41 @@ def place_order(ex,symbol,side,amount_usdt,price, client_order_id=None):
         raise
     fq=float(order.get("filled",qty) or qty); ap=float(order.get("average",price) or price)
     return {"id":str(order.get("id","")),"qty":fq,"price":ap,"cost":fq*ap,"notional":notional,"leverage":lev,"raw":order,"clientOrderId": cid}
+
+def _exchange_position_qty(ex, symbol):
+    """Open size on the exchange (0 = flat), or None if it can't be read."""
+    try:
+        for p in ex.fetch_positions([symbol]) or []:
+            s_ = p.get("symbol") or (p.get("info") or {}).get("symbol", "")
+            if s_ == symbol or s_.split(":")[0] == symbol:
+                c = p.get("contracts") if p.get("contracts") is not None else (p.get("info") or {}).get("size")
+                return abs(float(c or 0))
+        return 0.0
+    except Exception:
+        return None
+
+def close_live_position(ex, symbol, pos, price):
+    """Close a real position with its exact size (reduceOnly), then cancel only its own stop/target orders.
+    If the exchange is already flat (its stop or target filled), that is the close — no order is sent.
+    Returns {"price", "qty", "by_exchange"}; raises if it can't close."""
+    side = pos.get("side", "long")
+    try:
+        res = place_order(ex, symbol, "close_long" if side == "long" else "close_short", 0, price, close_qty=pos["qty"])
+        out = {"price": res["price"], "qty": res["qty"], "by_exchange": False}
+    except Exception as e:
+        if _exchange_position_qty(ex, symbol) != 0.0:
+            raise
+        log(f"{symbol}: المنصة قفلت الصفقة بالفعل (وقف/هدف) — {e}")
+        out = {"price": price, "qty": pos["qty"], "by_exchange": True}
+    ids = pos.get("oco_ids") or {}
+    if ids.get("pos_id") or ids.get("sl") or ids.get("tp"):
+        try:
+            from backend.app.oco import cancel_oco_orders
+            cancel_oco_orders(ex, symbol, pos_id=ids.get("pos_id"), sl_id=ids.get("sl"), tp_id=ids.get("tp"))
+        except Exception as e:
+            log(f"{symbol}: إلغاء أوامر الحماية القديمة فشل: {e}")
+            notify(f"⚠️ {symbol}: الصفقة اتقفلت بس أوامر الوقف/الهدف القديمة ممكن تكون لسه على المنصة — راجعها")
+    return out
 
 def check_sl_tp(state, prices, ex=None):
     closed=[]
@@ -1132,9 +1175,11 @@ def check_sl_tp(state, prices, ex=None):
                 notify(f"🔒 قفل {symbol} — {reason}\nدخول {entry:.6g} → خروج {price:.6g}\nPnL {pnl:+.2f}$ (Paper)")
                 state["history"].append({"symbol":symbol,"side":pos.get("side","long"),"entry":entry,"exit":price,"qty":qty,"pnl":pnl,"pnl_pct":pnl_pct,"reason":reason,"time":datetime.now(timezone.utc).isoformat(),"type":"paper","opened":pos.get("time"),"rank":pos.get("rank")})
             else:
-                close_side="close_long" if pos.get("side","long")=="long" else "close_short"; _lev=int(CONFIG.get("leverage",5)) if CONFIG.get("market","future")=="future" else 1; res=place_order(ex or get_exchange(auth=True)[0],symbol,close_side,qty*price/_lev,price); pnl=(res["price"]-entry)*res["qty"] if pos.get("side","long")=="long" else (entry-res["price"])*res["qty"]
-                log(f"🔒 بيع حقيقي {symbol} @ {res['price']:.4f} PnL {pnl:+.4f}")
-                state["history"].append({"symbol":symbol,"entry":entry,"exit":res["price"],"qty":res["qty"],"pnl":pnl,"pnl_pct":(res["price"]/entry-1)*100,"reason":reason,"time":datetime.now(timezone.utc).isoformat(),"type":"live"})
+                res=close_live_position(ex or get_exchange(auth=True)[0], symbol, pos, price)
+                pnl=(res["price"]-entry)*res["qty"] if pos.get("side","long")=="long" else (entry-res["price"])*res["qty"]
+                log(f"🔒 اغلاق حقيقي {symbol} @ {res['price']:.4f} PnL {pnl:+.4f}")
+                notify(f"🔒 قفل {symbol} — {reason}\nدخول {entry:.6g} → خروج {res['price']:.6g}\nPnL {pnl:+.2f}$ (حقيقي)")
+                state["history"].append({"symbol":symbol,"side":pos.get("side","long"),"entry":entry,"exit":res["price"],"qty":res["qty"],"pnl":pnl,"pnl_pct":(res["price"]/entry-1)*100,"reason":reason,"time":datetime.now(timezone.utc).isoformat(),"type":"live"})
             state["stats"]["trades"]+=1; state["stats"]["pnl"]+=float(pnl)
             if pnl>0: state["stats"]["wins"]+=1
             else: state["stats"]["losses"]+=1
@@ -1142,7 +1187,16 @@ def check_sl_tp(state, prices, ex=None):
         except Exception as e: log(f"فشل اغلاق {symbol}: {e}")
     for s in closed:
         state["positions"].pop(s,None); state["last_trade"][s]=datetime.now(timezone.utc).isoformat()
-    if closed: save_state(state)
+    flagged = False
+    for s in list(_SL_AMEND_FAILED):
+        _SL_AMEND_FAILED.discard(s)
+        if s in state["positions"]:
+            flagged = True
+            # the fallback cancels the old stop before placing the new one: if that failed there may be no stop at all
+            state.setdefault("recovery_required", {})[s] = {"reason": "exchange stop not moved / maybe missing", "at": datetime.now(timezone.utc).isoformat()}
+            log(f"🚨 {s}: تحريك الوقف على المنصة فشل — ممكن الصفقة تكون من غير وقف. الدخول متوقف لحد ما تتراجع")
+            notify(f"🚨 {s}: تحريك الوقف على المنصة فشل — ممكن الصفقة تكون من غير وقف. راجعها يدويا، البوت وقف أي دخول جديد.")
+    if closed or flagged: save_state(state)
     return closed
 
 def try_enter_wave(symbol, analysis, state, ex):
@@ -1222,7 +1276,8 @@ def try_enter(symbol, analysis, state, ex):
                         log(f"♻️ {symbol} reconcile: pending {cid_pending} found fill {fq} — completing")
                         # complete as if order succeeded: create pos if needed (caller handles); just clear pending
                         # we cannot infer sl/tp here; mark recovery to re-verify
-                        state.setdefault("recovery_required", {})[symbol] = {"cid": cid_pending, "found": found}
+                        state.setdefault("recovery_required", {})[symbol] = {"cid": cid_pending, "found": found, "reason": "entry filled after a timeout — no stop placed"}
+                        notify(f"🚨 {symbol}: أمر دخول اتنفذ بعد timeout ومن غير وقف على المنصة. راجعه يدويا — البوت وقف أي دخول جديد.")
                         state["pending_orders"].pop(symbol, None)
                         save_state(state)
                         return
@@ -1251,8 +1306,7 @@ def try_enter(symbol, analysis, state, ex):
                     log(f"📉 اغلاق عكسي {side} {symbol} سكور {total:+.3f} @ {price:.4f} PnL {pnl:+.4f} ({pct:+.2f}%)")
                     state["history"].append({"symbol":symbol,"side":side,"entry":entry,"exit":price,"qty":qty,"pnl":pnl,"pnl_pct":pct,"reason":"اشارة عكسية قوية","time":datetime.now(timezone.utc).isoformat(),"type":"paper"})
                 else:
-                    close_side="close_long" if side=="long" else "close_short"
-                    res=place_order(ex,symbol,close_side,qty*price,price)
+                    res=close_live_position(ex, symbol, pos, price)
                     pnl=(res["price"]-entry)*res["qty"] if side=="long" else (entry-res["price"])*res["qty"]
                     pct=(pnl/(entry*res["qty"])*100) if entry*res["qty"] else 0
                     log(f"📉 اغلاق حقيقي {side} {symbol} @ {res['price']:.4f} PnL {pnl:+.4f}")
@@ -1311,7 +1365,8 @@ def try_enter(symbol, analysis, state, ex):
                     try: usdt=float(bal["free"].get("USDT",0))
                     except: pass
                 if usdt < amount: log(f"رصيد غير كافي {usdt:.2f} < {amount:.2f}"); return
-            except Exception as e: log(f"فحص الرصيد: {e}")
+            except Exception as e:
+                log(f"فحص الرصيد فشل — مفيش دخول: {e}"); return
         try:
             order_side="long" if side=="long" else "short"
             _f_df2 = _f_df if '_f_df' in locals() else fetch_ohlcv(symbol, CONFIG["timeframe"], limit=60, ex=ex)
@@ -1350,7 +1405,7 @@ def try_enter(symbol, analysis, state, ex):
                     flatten_ok = False
                     try:
                         close_side = "close_long" if side == "long" else "close_short"
-                        fr = place_order(ex, symbol, close_side, flatten_qty*flatten_price/max(1, int(CONFIG.get("leverage", 5))), flatten_price)
+                        fr = place_order(ex, symbol, close_side, 0, flatten_price, close_qty=flatten_qty)
                         try:
                             still_open = False
                             for p in ex.fetch_positions([symbol]) or []:
@@ -1428,7 +1483,10 @@ def run_once():
     if trend_mode(): CONFIG["timeframe"]="1d"
     state=load_state()
     ex,err=get_exchange(auth=not CONFIG["paper_trading"])
-    if err: ex=ccxt.bybit({"enableRateLimit":True}); CONFIG["paper_trading"]=True
+    if err:
+        # switching to paper here would "close" real positions only in state.json and leave them open on the exchange
+        log(f"⛔ LIVE من غير مفاتيح: {err} — البوت وقف"); notify(f"⛔ البوت الحقيقي وقف: {err}")
+        raise SystemExit(2)
     prices={}; analyses={}
     try: symbols, allowed = cycle_symbols(ex, state)
     except Exception as e: log(f"قائمة العملات: {e}"); symbols, allowed = sorted(set(_universe["symbols"]) | set(state["positions"])), set(_universe["symbols"])
@@ -1503,6 +1561,8 @@ class DashHandler(http.server.SimpleHTTPRequestHandler):
             qs=parse_qs(urlparse(self.path).query)
             sym=(qs.get("symbol",["BTC/USDT"])[0]).replace("/","")
             interval=qs.get("interval",["1h"])[0]; limit=qs.get("limit",["200"])[0]
+            if not (re.fullmatch(r"[A-Z0-9]{2,20}", sym) and re.fullmatch(r"\d{1,2}[mhdw]", interval) and re.fullmatch(r"\d{1,4}", limit)):
+                self.send_response(400); self.end_headers(); return
             url=f"https://api.binance.com/api/v3/klines?symbol={sym}&interval={interval}&limit={limit}"
             try:
                 with urllib.request.urlopen(url, timeout=10) as r: body=r.read()
@@ -1510,16 +1570,16 @@ class DashHandler(http.server.SimpleHTTPRequestHandler):
                 self.wfile.write(body); return
             except Exception as e:
                 self.send_response(502); self.end_headers(); self.wfile.write(json.dumps({"error":str(e)}).encode()); return
-        return super().do_GET()
+        self.send_response(404); self.end_headers()   # no file serving: the bot folder holds .env and the key vault
     def end_headers(self):
-        self.send_header("Access-Control-Allow-Origin","*"); super().end_headers()
+        super().end_headers()
 
 def start_dashboard_server(port=None):
     port=port or CONFIG["dashboard_port"]
     root=str(Path(__file__).parent)
     os.chdir(root)
     handler=lambda *a, **kw: DashHandler(*a, directory=root, **kw)
-    with socketserver.TCPServer(("", port), handler) as httpd:
+    with socketserver.TCPServer(("127.0.0.1", port), handler) as httpd:   # this machine only
         log(f"🌐 الداشبورد http://localhost:{port}/  (index.html)")
         try: webbrowser.open(f"http://localhost:{port}/index.html")
         except: pass
@@ -1562,6 +1622,7 @@ if __name__=="__main__":
         STATE_PATH=Path(__file__).parent / "state_momentum.json"; LOG_PATH=Path(__file__).parent / "state_momentum.log"
     elif ratio_mode():
         STATE_PATH=Path(__file__).parent / "state_ratio.json"; LOG_PATH=Path(__file__).parent / "state_ratio.log"
+    if args.paper and args.live: p.error("--paper و --live مع بعض؟ اختار واحد")
     if args.paper: CONFIG["paper_trading"]=True
     if args.live: CONFIG["paper_trading"]=False
     if args.port: CONFIG["dashboard_port"]=args.port

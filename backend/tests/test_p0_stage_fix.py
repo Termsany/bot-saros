@@ -236,19 +236,24 @@ class E_RestartRecoveryTests(unittest.TestCase):
 
 class F_PositionSideMismatchTests(unittest.TestCase):
     def test_binance_params(self):
+        # one-way mode (ensure_futures_setup sets it): Binance rejects positionSide LONG/SHORT (-4061) and
+        # positionSide + reduceOnly together (-1106); orderLinkId is Bybit-only
         ex = _mock_ex_for_place(ex_id="binance", hedge=False)
         botmod.CONFIG["paper_trading"]=False
         botmod.CONFIG["market"]="future"
-        res = botmod.place_order(ex, "BTC/USDT","long",20,50000, client_order_id="raqm-test-bin")
+        botmod.place_order(ex, "BTC/USDT","long",20,50000, client_order_id="raqm-test-bin")
         last = ex._last_calls_list[-1]
-        self.assertIn("positionSide", last["params"])
+        self.assertNotIn("positionSide", last["params"])
         self.assertNotIn("positionIdx", last["params"])
-        self.assertEqual(last["params"]["positionSide"], "LONG")
+        self.assertNotIn("orderLinkId", last["params"])
+        self.assertEqual(last["params"]["clientOrderId"], "raqm-test-bin")
         ex2 = _mock_ex_for_place(ex_id="binance", hedge=False)
-        botmod.place_order(ex2, "BTC/USDT","close_long",20,50000, client_order_id="raqm-test-bin2")
+        botmod.place_order(ex2, "BTC/USDT","close_long",0,50000, client_order_id="raqm-test-bin2", close_qty=0.002)
         last2 = ex2._last_calls_list[-1]
-        self.assertEqual(last2["params"]["positionSide"], "LONG")
+        self.assertNotIn("positionSide", last2["params"])
         self.assertTrue(last2["params"].get("reduceOnly"))
+        self.assertAlmostEqual(float(last2["qty"]), 0.002)       # the position's own size, leverage not applied again
+        ex2.set_leverage.assert_not_called()                     # a close never waits on account settings
     def test_bybit_hedge_params(self):
         ex = _mock_ex_for_place(ex_id="bybit", hedge=True)
         botmod.CONFIG["paper_trading"]=False
