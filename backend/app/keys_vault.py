@@ -19,8 +19,10 @@ def get_fernet():
         return Fernet(env_key.encode())
     # P1-03a: fail closed in production (Render/Vercel/VPS) where VAULT_MASTER_KEY must be set.
     # Local dev fallback only: generate a dev-only key and warn.
-    if os.getenv("RENDER") or os.getenv("VERCEL") or os.getenv("RAILWAY_ENVIRONMENT"):
-        raise RuntimeError("VAULT_MASTER_KEY not set — refusing to generate ephemeral key in production")
+    # Real money needs the master key apart from the encrypted keys: anyone who copies the app folder must not get both.
+    # Moving an existing install over: VAULT_MASTER_KEY=<contents of backend/.master.key>, then delete the file.
+    if os.getenv("ALLOW_LIVE_TRADING", "").strip().lower() == "true" or os.getenv("RENDER") or os.getenv("VERCEL") or os.getenv("RAILWAY_ENVIRONMENT"):
+        raise RuntimeError("VAULT_MASTER_KEY not set — refusing to use a key file next to the vault (live trading / hosted)")
     if MASTER_KEY_PATH.exists():
         key = MASTER_KEY_PATH.read_bytes().strip()
     else:
@@ -45,12 +47,11 @@ def save_keys(exchange: str, apiKey: str, secret: str, passphrase: str = ""):
     data = {}
     if VAULT_PATH.exists():
         try:
-            # Decrypt existing
             f = get_fernet()
-            raw = VAULT_PATH.read_bytes()
-            data = json.loads(f.decrypt(raw).decode())
-        except:
-            data = {}
+            data = json.loads(f.decrypt(VAULT_PATH.read_bytes()).decode())
+        except Exception as e:
+            # wrong master key or damaged file: writing now would silently drop every other exchange's keys
+            raise RuntimeError(f"vault can't be decrypted ({type(e).__name__}) — not overwriting it; check VAULT_MASTER_KEY") from e
     # New keys always start in Paper; going LIVE is an explicit, separate step (set_paper).
     # Updating keys keeps the existing mode.
     paper = bool(data.get(exchange, {}).get("paper", True))
@@ -68,7 +69,8 @@ def load_keys(exchange: str):
         f = get_fernet()
         data = json.loads(f.decrypt(VAULT_PATH.read_bytes()).decode())
         return data.get(exchange)
-    except:
+    except Exception as e:
+        print(f"ERROR vault: can't decrypt ({type(e).__name__}) — no exchange keys, nothing will trade")
         return None
 
 def load_all_status():

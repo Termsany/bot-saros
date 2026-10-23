@@ -7,7 +7,7 @@ import { PAIRS } from "@/lib/pairs"
 import { AppShell } from "@/components/AppShell"
 import { Kpi } from "@/components/Kpi"
 import { RaqmMark } from "@/components/Logo"
-import { apiBacktest, apiUserTier, chartUrl } from "@/lib/api"
+import { apiBacktest, apiUserTier, apiChartObjectUrl } from "@/lib/api"
 import { runBacktestClient } from "@/lib/backtest-client"
 import { runPortfolioBacktest, PORTFOLIO_LEVERAGES } from "@/lib/portfolio-backtest"
 import { Check, Lock, Play, TriangleAlert } from "lucide-react"
@@ -64,6 +64,13 @@ export default function BacktestPage(){
   const [chartKey, setChartKey] = useState(0)
   // server chart name comes from the backend (unique per run); browser backtests have no server chart
   const [chartFile, setChartFile] = useState("")
+  const [chartSrc, setChartSrc] = useState("")
+  useEffect(()=>{
+    if(!chartFile){ setChartSrc(""); return }
+    let url = "", stop = false
+    apiChartObjectUrl(chartFile).then(u=>{ if(u){ url = u; if(!stop) setChartSrc(u); else URL.revokeObjectURL(u) } else if(!stop) setChartSrc("failed") })
+    return ()=>{ stop = true; setChartSrc(""); if(url) URL.revokeObjectURL(url) }
+  }, [chartFile, chartKey])
   const [tier, setTier] = useState("free")
   // plan's max range — the server enforces it too; here it just keeps the UI honest
   const [maxDays, setMaxDays] = useState<number|null>(BACKTEST_DAYS.free)
@@ -355,7 +362,7 @@ export default function BacktestPage(){
               {chartFile && (
                 <div className="rounded-2xl border border-line bg-surface p-5">
                   <h3 className="mb-3 text-base font-bold">شارت السيرفر</h3>
-                  <img key={chartKey} src={`${chartUrl(chartFile)}&k=${chartKey}`} alt="شارت الباك تست" className="w-full rounded-xl border border-line"/>
+                  {chartSrc === "failed" ? <div className="py-8 text-center text-xs text-faint">الشارت مش متاح</div> : chartSrc ? <img key={chartKey} src={chartSrc} alt="شارت الباك تست" className="w-full rounded-xl border border-line"/> : <div className="py-8 text-center text-xs text-faint">بيحمّل الشارت…</div>}
                 </div>
               )}
 

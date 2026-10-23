@@ -79,19 +79,20 @@ class A_EmergencyCloseFailureTests(unittest.TestCase):
                                 analysis = {"total": 0.9, "price": 50000, "decision": "buy", "amount_mult": 1.0}
                                 botmod.try_enter("BTC/USDT", analysis, state, ex)
                                 self.assertIn("BTC/USDT", state.get("recovery_required", {}))
-                                self.assertIn("BTC/USDT", state.get("pending_orders", {}))
-                                self.assertNotIn("BTC/USDT", state.get("positions", {}))
+                                self.assertIn("BTC/USDT", state.get("positions", {}))
+                                self.assertTrue(state["positions"]["BTC/USDT"].get("unprotected"))
                                 ex2 = _mock_ex_for_place(ex_id="binance")
                                 with mock.patch.object(botmod, "fetch_ohlcv", return_value=_fake_df()):
                                     with mock.patch.object(botmod, "adx_value", return_value=25):
                                         with mock.patch.object(botmod, "volume_ok", return_value=True):
                                             with mock.patch.object(botmod, "htf_trend_ok", return_value=True):
                                                 with mock.patch.object(botmod, "regime_detect", return_value="trend"):
-                                                    botmod.try_enter("BTC/USDT", analysis, state, ex2)
-                                                    self.assertNotIn("BTC/USDT", state.get("positions", {}))
+                                                    botmod.try_enter("ETH/USDT", {**analysis, "price": 2500}, state, ex2)
+                                                    self.assertNotIn("ETH/USDT", state.get("positions", {}))   # any symbol is blocked
+                                                    ex2.create_order.assert_not_called()
                                 reloaded = botmod.load_state()
-                                self.assertIn("BTC/USDT", reloaded.get("pending_orders", {}))
                                 self.assertIn("BTC/USDT", reloaded.get("recovery_required", {}))
+                                self.assertIn("BTC/USDT", reloaded.get("positions", {}))
 
 class B_AmbiguousTimeoutTests(unittest.TestCase):
     def test_timeout_reconciles_via_fetch_open_orders(self):
@@ -135,7 +136,10 @@ class C_MissingProtectiveOrdersTests(unittest.TestCase):
     def test_verify_fail_closed_triggers_flatten(self):
         ex = _mock_ex_for_place(ex_id="binance", fail_sl=False, fail_tp=False, open_orders=[])
         res = place_oco_orders(ex, "BTC/USDT","long",0.01,49000,51000, paper=False, pos_id="abcd1234")
-        self.assertTrue(res.get("protection_missing") or res.get("verify_failed"))
+        self.assertTrue(res.get("verify_failed"))
+        self.assertTrue(res.get("sl_unverified"))
+        self.assertNotIn("protection_missing", res)
+        ex.cancel_order.assert_not_called()
         self.assertIn("verify_warn", res)
         import tempfile
         from pathlib import Path
@@ -161,8 +165,8 @@ class C_MissingProtectiveOrdersTests(unittest.TestCase):
                                 state=botmod.load_state()
                                 analysis={"total":0.9,"price":50000,"decision":"buy","amount_mult":1.0}
                                 botmod.try_enter("BTC/USDT", analysis, state, ex2)
-                                self.assertNotIn("BTC/USDT", state.get("positions", {}))
-                                self.assertNotIn("BTC/USDT", state.get("recovery_required", {}))
+                                self.assertTrue(state["positions"]["BTC/USDT"].get("sl_unverified"))
+                                self.assertIn("BTC/USDT", state.get("recovery_required", {}))
 class D_PartialFillsTests(unittest.TestCase):
     def test_partial_fill_reconcile(self):
         import tempfile
@@ -292,7 +296,9 @@ class G_BothLegsFailedTests(unittest.TestCase):
         cid_sl = f"{OCO_PREFIX}-abcd1234-sl"
         ex = _mock_ex_for_place(ex_id="binance", fail_sl=False, fail_tp=False, open_orders=[{"clientOrderId": cid_sl, "id":"ex-sl"}])
         res = place_oco_orders(ex, "BTC/USDT","long",0.01,49000,51000, paper=False, pos_id="abcd1234")
-        self.assertTrue(res.get("protection_missing"))
+        self.assertNotIn("protection_missing", res)
+        self.assertTrue(res.get("tp_unverified"))
+        self.assertNotIn("sl_unverified", res)
         self.assertTrue(res.get("verify_failed"))
 class H_IdOnlyCancelTests(unittest.TestCase):
     def test_cancel_without_ids_does_nothing(self):

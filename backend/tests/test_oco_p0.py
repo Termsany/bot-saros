@@ -18,7 +18,7 @@ class FuturesSetupTests(unittest.TestCase):
 
 # P0-01: place_oco_orders must not leave partial protection
 class OcoTests(unittest.TestCase):
-    def test_partial_oco_cancels_succeeded_leg(self):
+    def test_partial_oco_keeps_the_stop(self):
         from backend.app.oco import place_oco_orders
         ex = mock.Mock()
         ex.price_to_precision.side_effect = lambda s, p: str(p)
@@ -31,8 +31,9 @@ class OcoTests(unittest.TestCase):
         ex.cancel_order = mock.Mock()
         ex.fetch_open_orders.return_value = []
         res = place_oco_orders(ex, "BTC/USDT", "long", 0.01, 90000, 110000, paper=False, pos_id="abcd1234")
-        self.assertIn("partial", res)
-        self.assertTrue(ex.cancel_order.called)
+        self.assertTrue(res.get("tp_missing"))
+        self.assertNotIn("protection_missing", res)
+        ex.cancel_order.assert_not_called()      # a position with its stop beats one without
 
     def test_paper_path_no_exchange_call(self):
         from backend.app.oco import place_oco_orders

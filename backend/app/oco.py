@@ -13,8 +13,11 @@ OCO_PREFIX = "raqm"
 MAX_RETRY_OCO = 2
 
 def _oco_id(pos_id, leg):
-    pid = str(pos_id or uuid.uuid4().hex[:8])
-    return f"{OCO_PREFIX}-{pid[:8]}-{leg}"[:36]
+    # the random part of the entry id (12 hex): 8 characters of "raqm-xxxxxxxx" left only 3 random ones, so two
+    # positions could share ids and one close would cancel the other's stop
+    pid = str(pos_id or uuid.uuid4().hex[:12])
+    if pid.startswith(OCO_PREFIX + "-"): pid = pid[len(OCO_PREFIX) + 1:]
+    return f"{OCO_PREFIX}-{pid[-12:]}-{leg}"[:36]
 
 def _position_idx_for_side(ex, side: str):
     try:
@@ -23,86 +26,84 @@ def _position_idx_for_side(ex, side: str):
     except: pass
     return None
 
+def _order_cid(o):
+    return (o or {}).get("clientOrderId") or ((o or {}).get("info") or {}).get("clientOrderId") or (o or {}).get("orderLinkId")
+
+
+def _leg_on_exchange(ex, symbol, order, cid):
+    """True if the exchange shows this protective order as open. Conditional (stop / take-profit) orders are kept
+    apart from plain orders on several exchanges (Binance algo orders, Bybit conditional), so look by id first,
+    then in the open orders, then in the open trigger orders."""
+    oid = (order or {}).get("id")
+    if oid:
+        try:
+            o = ex.fetch_order(oid, symbol)
+            if isinstance(o, dict) and (o.get("id") == oid or _order_cid(o) == cid):
+                return (o.get("status") or "open") == "open"
+        except Exception:
+            pass
+    for params in ({}, {"trigger": True}, {"stop": True}):
+        try:
+            opens = ex.fetch_open_orders(symbol, None, None, params) if params else ex.fetch_open_orders(symbol)
+        except Exception:
+            continue
+        if not isinstance(opens, list):
+            continue
+        for o in opens:
+            if isinstance(o, dict) and (_order_cid(o) == cid or (oid and o.get("id") == oid)):
+                return True
+    return False
+
+
 def place_oco_orders(ex, symbol, side, qty, sl_price, tp_price, paper: bool = True, pos_id: str = None, position_idx=None):
-    """Returns {sl, tp, sl_id, tp_id} or {sl_error, tp_error, partial: True} plus fail-closed flags."""
+    """Places the stop and the target as reduceOnly orders tagged with our own ids.
+
+    A leg that was accepted is never cancelled here — a position with its stop is safer than one without.
+    Result flags for the caller:
+      protection_missing — the stop was rejected: the position has no exchange stop, the caller must close it
+      tp_missing         — only the target was rejected: the stop protects the position, the bot exits at the target itself
+      sl_unverified / tp_unverified — the exchange accepted the order but it can't be found afterwards:
+                           the caller keeps the position, alerts and blocks new entries until someone checks
+    """
     if paper:
         return {"paper": True, "sl": sl_price, "tp": tp_price}
     if not pos_id:
         pos_id = uuid.uuid4().hex[:8]
-    is_long = side == "long"
-    close_side = "sell" if is_long else "buy"
-    sl_id = _oco_id(pos_id, "sl")
-    tp_id = _oco_id(pos_id, "tp")
+    close_side = "sell" if side == "long" else "buy"
+    sl_id, tp_id = _oco_id(pos_id, "sl"), _oco_id(pos_id, "tp")
     results: dict = {"pos_id": pos_id, "sl_id": sl_id, "tp_id": tp_id}
     idx = position_idx if position_idx is not None else _position_idx_for_side(ex, side)
     base_params: dict = {"reduceOnly": True}
     if idx:
         base_params["positionIdx"] = int(idx)
-    try:
-        sl_params = {**base_params, "stopLossPrice": float(ex.price_to_precision(symbol, sl_price)), "clientOrderId": sl_id}
-        if idx is not None:
-            sl_params["orderLinkId"] = sl_id
-        results["sl"] = ex.create_order(symbol, "market", close_side, qty, None, sl_params)
-    except Exception as e:
-        results["sl_error"] = str(e)
-    try:
-        tp_params = {**base_params, "takeProfitPrice": float(ex.price_to_precision(symbol, tp_price)), "clientOrderId": tp_id}
-        if idx is not None:
-            tp_params["orderLinkId"] = tp_id
-        results["tp"] = ex.create_order(symbol, "market", close_side, qty, None, tp_params)
-    except Exception as e:
-        results["tp_error"] = str(e)
-
-    has_sl = "sl" in results
-    has_tp = "tp" in results
-    has_sl_err = "sl_error" in results
-    has_tp_err = "tp_error" in results
-
-    if has_sl_err and has_tp_err:
-        results["both_failed"] = True
-        results["protection_missing"] = True
-        results["verify_failed"] = True
-        return results
-
-    if (has_sl and has_tp_err) or (has_tp and has_sl_err):
-        results["partial"] = True
-        results["protection_missing"] = True
+    for leg, cid, key, price in (("sl", sl_id, "stopLossPrice", sl_price), ("tp", tp_id, "takeProfitPrice", tp_price)):
         try:
-            if has_sl:
-                ex.cancel_order(results["sl"].get("id") or sl_id, symbol)
-        except Exception: pass
-        try:
-            if has_tp:
-                ex.cancel_order(results["tp"].get("id") or tp_id, symbol)
-        except Exception: pass
-        return results
-
-    if has_sl and has_tp:
-        try:
-            opens = ex.fetch_open_orders(symbol)
-            open_ids = {o.get("clientOrderId") or o.get("orderLinkId") or o.get("id") for o in (opens or [])}
-            sl_found = sl_id in open_ids
-            tp_found = tp_id in open_ids
-            if not sl_found and not tp_found:
-                results["protection_missing"] = True
-                results["verify_failed"] = True
-                results["verify_warn"] = "oco ids not in open_orders — protection missing"
-                try:
-                    ex.cancel_order(results["sl"].get("id") or sl_id, symbol)
-                except Exception: pass
-                try:
-                    ex.cancel_order(results["tp"].get("id") or tp_id, symbol)
-                except Exception: pass
-            elif not sl_found or not tp_found:
-                results["protection_missing"] = True
-                results["verify_failed"] = True
-                results["verify_warn"] = f"partial verify: sl_found={sl_found} tp_found={tp_found}"
+            params = {**base_params, key: float(ex.price_to_precision(symbol, price)), "clientOrderId": cid}
+            if idx is not None:
+                params["orderLinkId"] = cid
+            results[leg] = ex.create_order(symbol, "market", close_side, qty, None, params)
         except Exception as e:
-            results["protection_missing"] = True
-            results["verify_failed"] = True
-            results["verify_error"] = str(e)
-        return results
+            results[f"{leg}_error"] = str(e)
 
+    if "sl_error" in results:
+        results["protection_missing"] = True
+        if "tp_error" in results:
+            results["both_failed"] = True
+        else:
+            results["partial"] = True
+        return results
+    if "tp_error" in results:
+        results["partial"] = True
+        results["tp_missing"] = True
+
+    missing = []
+    for leg, cid in (("sl", sl_id), ("tp", tp_id)):
+        if leg in results and not _leg_on_exchange(ex, symbol, results[leg], cid):
+            results[f"{leg}_unverified"] = True
+            missing.append(leg)
+    if missing:
+        results["verify_failed"] = True
+        results["verify_warn"] = f"accepted but not found on the exchange: {', '.join(missing)}"
     return results
 
 

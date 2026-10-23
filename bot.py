@@ -964,12 +964,16 @@ def ensure_futures_setup(ex, symbol):
     if CONFIG.get("market")!="future": return
     lev = int(CONFIG.get("leverage", 5))
     mtype = CONFIG.get("margin_type", "ISOLATED")
-    try: ex.set_leverage(lev, symbol)
-    except Exception as e: raise RuntimeError(f"set_leverage({lev},{symbol}) فشل: {e}") from e
-    try: ex.set_margin_mode(mtype, symbol)
-    except Exception as e: raise RuntimeError(f"set_margin_mode({mtype},{symbol}) فشل: {e}") from e
-    try: ex.set_position_mode(False)  # one-way mode
-    except Exception as e: raise RuntimeError(f"set_position_mode(one-way,{symbol}) فشل: {e}") from e
+    # exchanges answer "already set" with an error (Binance -4046 / -4059, Bybit 110026 / 110043 / 110025): that's success
+    def _already(e):
+        m = str(e).lower()
+        return any(k in m for k in ("no need to change", "-4046", "-4059", "not modified", "110026", "110043", "110025", "already"))
+    for what, call in ((f"set_leverage({lev},{symbol})", lambda: ex.set_leverage(lev, symbol)),
+                       (f"set_margin_mode({mtype},{symbol})", lambda: ex.set_margin_mode(mtype, symbol)),
+                       (f"set_position_mode(one-way,{symbol})", lambda: ex.set_position_mode(False))):
+        try: call()
+        except Exception as e:
+            if not _already(e): raise RuntimeError(f"{what} فشل: {e}") from e
     # verify via read-back where supported (skip mocks)
     try:
         # only verify if exchange explicitly exposes fetch_position_mode as non-mock or configured mock
@@ -1107,11 +1111,7 @@ def check_sl_tp(state, prices, ex=None):
                     except: pass
                     tag = " (UNVERIFIED - exchange SL not moved)" if pos.get("sl_unverified") else " (exchange verified)" if not CONFIG.get("paper_trading") else ""
                     log(f"Breakeven {symbol} {side} @ {price:.4f} SL {be_sl:.4f}{tag}")
-                    try:
-                        from backend.app.telegram_bot import send_telegram as _tg
-                        import asyncio as _aio
-                        _aio.create_task(_tg(f"Breakeven {symbol} {side} - SL {be_sl:.4f}{tag}"))
-                    except: pass
+                    notify(f"Breakeven {symbol} {side} - SL {be_sl:.4f}{tag}")
                 else:
                     pos["breakeven"] = True
                     try: save_state(state)
@@ -1206,9 +1206,9 @@ def try_enter_trend(symbol, analysis, state, ex):
 
 def try_enter(symbol, analysis, state, ex):
     """فيوتشر: لونج لو سكور > buy_threshold، شورت لو سكور < sell_threshold"""
-    # Block entries while recovery pending (1) and until pending resolved
-    if state.get("recovery_required", {}).get(symbol):
-        log(f"⛔ {symbol} recovery pending — block entry حتى التسوية")
+    # Block every new entry while any position needs a human (unprotected / unverified / ambiguous order)
+    if state.get("recovery_required"):
+        log(f"⛔ {symbol} دخول متوقف — فيه صفقة محتاجة مراجعة: {', '.join(state['recovery_required'])}")
         return
     if state.get("pending_orders", {}).get(symbol):
         # try to reconcile ambiguous timeout before blocking
@@ -1330,89 +1330,73 @@ def try_enter(symbol, analysis, state, ex):
                 try:
                     oco = place_oco_orders(ex, symbol, side, res["qty"], sl, tp, paper=False, pos_id=pos_id)
                 except Exception as e:
-                    oco = {"sl_error": str(e), "tp_error": str(e), "both_failed": True}
-                need_flatten = False
-                reason = ""
-                if oco is None:
-                    need_flatten = True; reason = "oco_none"
-                elif oco.get("both_failed"):
-                    need_flatten = True; reason = f"both_failed {oco.get('sl_error')}"
-                elif oco.get("sl_error") or oco.get("tp_error") or oco.get("partial"):
-                    need_flatten = True; reason = f"SL err={oco.get('sl_error')} TP err={oco.get('tp_error')} partial={oco.get('partial')}"
-                elif oco.get("protection_missing") or oco.get("verify_failed"):
-                    need_flatten = True; reason = "protection_missing (verify fail-closed)"
-                elif oco.get("verify_warn"):
-                    need_flatten = True; reason = f"verify_warn {oco.get('verify_warn')}"
-                if need_flatten:
+                    oco = {"sl_error": str(e), "tp_error": str(e), "both_failed": True, "protection_missing": True}
+                pos["oco_ids"] = {"sl": (oco or {}).get("sl_id"), "tp": (oco or {}).get("tp_id"), "pos_id": pos_id}
+                if oco is None or oco.get("protection_missing"):
+                    # the exchange refused the stop: close at once; if that fails too, keep tracking the position
+                    reason = f"SL err={(oco or {}).get('sl_error')}"
                     log(f"⚠️ OCO فشل {symbol} {side} — {reason} — إغلاق طارئ")
-                    flatten_ok = False
-                    flatten_qty = res["qty"]
-                    flatten_price = res["price"]
+                    notify(f"🚨 {symbol}: أمر الوقف اترفض على المنصة — بيقفل الصفقة فورا")
+                    flatten_qty, flatten_price = res["qty"], res["price"]
                     try:
-                        ex_pos = None
-                        try:
-                            plist = ex.fetch_positions([symbol])
-                            for p in plist or []:
-                                s = p.get("symbol") or (p.get("info") or {}).get("symbol","")
-                                if s == symbol or s.split(":")[0]==symbol:
-                                    ex_pos = p; break
-                        except Exception:
-                            pass
-                        if ex_pos is not None:
-                            raw = ex_pos.get("contracts")
-                            if raw is None:
-                                raw = (ex_pos.get("info") or {}).get("size")
-                            if raw is not None:
-                                try:
-                                    ex_qty = float(raw or 0)
-                                    if ex_qty and ex_qty>0:
-                                        flatten_qty = ex_qty
-                                except:
-                                    pass
+                        for p in ex.fetch_positions([symbol]) or []:
+                            s = p.get("symbol") or (p.get("info") or {}).get("symbol", "")
+                            if s == symbol or s.split(":")[0] == symbol:
+                                raw = p.get("contracts") if p.get("contracts") is not None else (p.get("info") or {}).get("size")
+                                if raw is not None and float(raw) > 0: flatten_qty = float(raw)
+                                break
                     except Exception:
                         pass
+                    flatten_ok = False
                     try:
-                        close_side = "close_long" if side=="long" else "close_short"
-                        fr = place_order(ex, symbol, close_side, flatten_qty*flatten_price/max(1,int(CONFIG.get("leverage",5))), flatten_price)
+                        close_side = "close_long" if side == "long" else "close_short"
+                        fr = place_order(ex, symbol, close_side, flatten_qty*flatten_price/max(1, int(CONFIG.get("leverage", 5))), flatten_price)
                         try:
-                            plist2 = ex.fetch_positions([symbol])
                             still_open = False
-                            for p in plist2 or []:
-                                s = p.get("symbol") or (p.get("info") or {}).get("symbol","")
-                                if s == symbol or s.split(":")[0]==symbol:
-                                    c = p.get("contracts")
-                                    if c is None: c=(p.get("info") or {}).get("size")
-                                    try:
-                                        if float(c or 0) != 0:
-                                            still_open=True
-                                    except:
-                                        pass
-                            if not still_open:
-                                flatten_ok = True
+                            for p in ex.fetch_positions([symbol]) or []:
+                                s = p.get("symbol") or (p.get("info") or {}).get("symbol", "")
+                                if s == symbol or s.split(":")[0] == symbol:
+                                    c = p.get("contracts") if p.get("contracts") is not None else (p.get("info") or {}).get("size")
+                                    if float(c or 0) != 0: still_open = True
+                            flatten_ok = not still_open
                         except Exception:
-                            try:
-                                if float(fr.get("qty",0))>0:
-                                    flatten_ok=True
-                            except:
-                                pass
-                        if flatten_ok:
-                            log(f"🔒 إغلاق طارئ {symbol} نجح — qty {flatten_qty}")
-                            state.get("pending_orders", {}).pop(symbol, None)
-                            state.get("recovery_required", {}).pop(symbol, None)
-                            try: save_state(state)
-                            except: pass
-                            return
+                            flatten_ok = float(fr.get("qty", 0) or 0) > 0
                     except Exception as ee:
                         log(f"فشل إغلاق طارئ {symbol}: {ee}")
-                    state.setdefault("recovery_required", {})[symbol] = {"cid": cid, "pos": pos, "oco": oco, "reason": reason, "qty": flatten_qty, "price": flatten_price, "at": datetime.now(timezone.utc).isoformat()}
-                    state["pending_orders"][symbol] = cid
-                    pos["oco_ids"] = {"sl": oco.get("sl_id") if oco else None, "tp": oco.get("tp_id") if oco else None, "pos_id": pos_id}
-                    state["recovery_required"][symbol]["pos_with_ids"] = pos
+                    if flatten_ok:
+                        if oco and "tp" in oco:
+                            try:
+                                from backend.app.oco import cancel_oco_orders
+                                cancel_oco_orders(ex, symbol, pos_id=pos_id)   # our leftover target only
+                            except Exception:
+                                pass
+                        log(f"🔒 إغلاق طارئ {symbol} نجح — qty {flatten_qty}")
+                        state.get("pending_orders", {}).pop(symbol, None)
+                        state.get("recovery_required", {}).pop(symbol, None)
+                        state["last_trade"][symbol] = datetime.now(timezone.utc).isoformat()
+                        try: save_state(state)
+                        except: pass
+                        return
+                    # still open on the exchange without a stop: the bot keeps managing it (its own SL/TP check)
+                    # and no new entry anywhere until someone resolves it
+                    pos["unprotected"] = True
+                    state["positions"][symbol] = pos
+                    state.setdefault("recovery_required", {})[symbol] = {"cid": cid, "reason": "unprotected: " + reason, "qty": flatten_qty, "price": flatten_price, "at": datetime.now(timezone.utc).isoformat()}
+                    state.get("pending_orders", {}).pop(symbol, None)
                     try: save_state(state)
                     except: pass
-                    log(f"🚨 {symbol} RECOVERY_REQUIRED persisted — block entries until resolved")
+                    log(f"🚨 {symbol} RECOVERY_REQUIRED — صفقة مفتوحة من غير وقف، الدخول متوقف لحد ما تتراجع")
+                    notify(f"🚨 {symbol}: الإغلاق الطارئ فشل — الصفقة مفتوحة من غير وقف على المنصة. راجعها يدويا. البوت وقف أي دخول جديد.")
                     return
-                pos["oco_ids"] = {"sl": oco.get("sl_id"), "tp": oco.get("tp_id"), "pos_id": pos_id}
+                if oco.get("tp_missing"):
+                    log(f"⚠️ {symbol}: الهدف اترفض ({oco.get('tp_error')}) — الوقف شغال، والبوت هيقفل عند الهدف بنفسه")
+                    notify(f"⚠️ {symbol}: أمر الهدف اترفض على المنصة — الوقف موجود، والبوت هيقفل عند الهدف بنفسه")
+                if oco.get("verify_failed"):
+                    # accepted by the exchange but not found afterwards: keep the position, stop new entries, alert
+                    pos["sl_unverified"] = bool(oco.get("sl_unverified"))
+                    state.setdefault("recovery_required", {})[symbol] = {"cid": cid, "reason": oco.get("verify_warn"), "at": datetime.now(timezone.utc).isoformat()}
+                    log(f"🚨 {symbol}: {oco.get('verify_warn')} — الدخول متوقف لحد ما تتراجع")
+                    notify(f"🚨 {symbol}: أوامر الحماية اتقبلت بس مش لاقيها على المنصة ({oco.get('verify_warn')}). راجعها يدويا — البوت وقف أي دخول جديد.")
             state["positions"][symbol]=pos
             try:
                 if pos.get("oco_ids"):
@@ -1420,7 +1404,6 @@ def try_enter(symbol, analysis, state, ex):
             except:
                 pass
             state.get("pending_orders", {}).pop(symbol, None)
-            state.get("recovery_required", {}).pop(symbol, None)
             state["last_trade"][symbol]=datetime.now(timezone.utc).isoformat(); save_state(state)
             mode="وهمي" if CONFIG["paper_trading"] else "حقيقي"
             lev_txt=f" x{res.get('leverage',CONFIG.get('leverage',5))}" if CONFIG.get("market")=="future" else ""

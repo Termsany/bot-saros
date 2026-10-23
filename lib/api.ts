@@ -52,6 +52,14 @@ export async function apiSaveSettings(body: { capital: number; strategy: string 
   return d
 }
 export function chartUrl(file:string){ return `${API}/api/chart?file=${encodeURIComponent(file)}` }
+/** The chart needs the user's login (it's theirs only) — an <img src> can't send it, so fetch it and show a local copy. */
+export async function apiChartObjectUrl(file:string): Promise<string|null>{
+  try{
+    const headers = await signedInHeaders(); if(!headers) return null
+    const r=await fetch(chartUrl(file), { headers }); if(!r.ok) return null
+    return URL.createObjectURL(await r.blob())
+  }catch{ return null }
+}
 export const API_URL = API
 
 export async function apiTrades(limit=20){

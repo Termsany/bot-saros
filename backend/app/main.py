@@ -420,6 +420,23 @@ async def bot_loop(cfg):
                 try:
                     state.setdefault("_reconcile", {})
                     recon = state["_reconcile"]
+                    recon["state"] = "ok"   # decided again every cycle from what the exchange shows now (pending counts carry over)
+                    # positions on the exchange that we didn't open (manual trades, another bot, a lost record)
+                    try:
+                        mine = {k.split(":")[0] for k in state.get("positions", {})}
+                        unknown = []
+                        for pp in ex.fetch_positions() or []:
+                            s_ = (pp.get("symbol") or "").split(":")[0]
+                            c_ = pp.get("contracts") if pp.get("contracts") is not None else (pp.get("info") or {}).get("size")
+                            if s_ and s_ not in mine and float(c_ or 0) != 0:
+                                unknown.append(s_)
+                        recon["unknown"] = unknown
+                        if unknown:
+                            print(f"reconcile: positions on {ex_name} the bot didn't open: {unknown} — use a sub-account only for the bot")
+                            recon["state"] = "reconciling"
+                    except Exception as e:
+                        print(f"reconcile: fetch all positions failed {e}")
+                        recon["state"] = "reconciling"
                     local_items = list(state.get("positions", {}).items())
                     validated_syms = []
                     has_invalid = False
@@ -443,7 +460,6 @@ async def bot_loop(cfg):
                         else:
                             validated_syms.append(sym)
                     if not local_items:
-                        recon["state"] = "ok"
                         recon.pop("pending", None)
                     elif has_invalid and not validated_syms:
                         recon["state"] = "reconciling"
@@ -528,10 +544,25 @@ async def bot_loop(cfg):
                         state.setdefault("_reconcile", {})["state"] = "reconciling"
                     except Exception:
                         pass
+                try: botmod.save_state(state)   # pending counts must survive to the next cycle
+                except Exception as e: print(f"reconcile save {e}")
             if prices: botmod.check_sl_tp(state, prices, ex)
-            for sym,a in analyses.items():
-                try: botmod.try_enter(sym,a,state,ex)
-                except Exception as e: print(f"enter {sym} {e}")
+            # no new position while the exchange and our record disagree, or a position needs a human
+            blocked = None
+            if not cycle_paper and (state.get("_reconcile") or {}).get("state") == "reconciling":
+                blocked = "reconciling with the exchange"
+            if state.get("recovery_required"):
+                blocked = f"needs review: {', '.join(state['recovery_required'])}"
+            review_before = set(state.get("recovery_required") or {})
+            if blocked:
+                print(f"entries blocked — {blocked}")
+            else:
+                for sym,a in analyses.items():
+                    try: botmod.try_enter(sym,a,state,ex)
+                    except Exception as e: print(f"enter {sym} {e}")
+            for sym in set(state.get("recovery_required") or {}) - review_before:
+                info = state["recovery_required"][sym]
+                await send_telegram(f"🚨 {ex_name} {sym}: {info.get('reason', 'needs review')} — new entries are blocked until it is resolved")
             after = set(state.get("positions",{}).keys())
             # Persist to DB
             try:
