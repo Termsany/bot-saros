@@ -28,7 +28,8 @@ export async function GET(req: NextRequest){
 
   const count = TIERS.find(t => t.id === tier)?.count ?? 1
   if(idx >= count) return NextResponse.json({ error: "الاستراتيجية دي مش في باقتك" }, { status: 403 })
-  const maxDays = BACKTEST_DAYS[tier] ?? BACKTEST_DAYS.free
+  // null = unlimited (elite) — `??` would turn it into the free plan's 7 days
+  const maxDays = tier in BACKTEST_DAYS ? BACKTEST_DAYS[tier] : BACKTEST_DAYS.free
   if(maxDays !== null && backtestSpanDays(from, to) > maxDays) return NextResponse.json({ error: `باقتك لحد ${maxDays} يوم` }, { status: 403 })
 
   const byLev = FILE.trades[strategy]
