@@ -67,8 +67,18 @@ def get_exchange(auth=False):
         ak = os.getenv("BINANCE_API_KEY","").strip(); sc = os.getenv("BINANCE_SECRET","").strip()
         if not ak or not sc: return None, "ضع مفاتيح Binance في .env"
         kwargs["apiKey"]=ak; kwargs["secret"]=sc
-        return (ccxt.binanceusdm(kwargs) if mtype == "future" else ccxt.binance(kwargs)), None
+        ex = ccxt.binanceusdm(kwargs) if mtype == "future" else ccxt.binance(kwargs)
+        # BINANCE_ENV=demo: Binance Demo Trading (fake money, real exchange behaviour) — keys made in demo mode on binance.com
+        env = binance_env()
+        if env == "demo": ex.enable_demo_trading(True)
+        elif env == "testnet": ex.set_sandbox_mode(True)
+        return ex, None
     return ccxt.bybit(kwargs), None   # public market data only (paper)
+
+def binance_env():
+    """live (real money) / demo (Binance Demo Trading) / testnet (old futures testnet)."""
+    e = os.getenv("BINANCE_ENV", "live").strip().lower()
+    return e if e in ("live", "demo", "testnet") else "live"
 
 STABLES = {"USDC", "FDUSD", "TUSD", "USDP", "BUSD", "DAI", "USDE", "USD1", "PAXG", "XAUT"}  # stablecoins, gold
 _universe = {"key": None, "symbols": []}
@@ -79,12 +89,13 @@ def volume_universe(ex, n):
     key = (datetime.now(timezone.utc).date().isoformat(), n)
     if _universe["key"] == key: return _universe["symbols"]
     ex.load_markets()
-    tickers = ex.fetch_tickers(params={"category": "linear"})
+    tickers = ex.fetch_tickers(params={"category": "linear"} if ex.id == "bybit" else {})
     cands = []
     for sym, t in tickers.items():
         m = ex.markets.get(sym) or {}
         info = m.get("info") or {}
         crypto = info.get("symbolType", "") in ("", "innovation")   # Bybit also lists stocks, ETFs, commodities, forex as USDT perps
+        crypto = crypto and info.get("underlyingType", "COIN") == "COIN" and info.get("contractType", "PERPETUAL") == "PERPETUAL"   # Binance's
         if m.get("swap") and m.get("linear") and m.get("quote") == "USDT" and m.get("settle") == "USDT" and m.get("base") not in STABLES                 and crypto and m.get("active", True) and not info.get("isPreListing"):
             cands.append((float(t.get("quoteVolume") or 0), sym))
     ranked = []
@@ -1224,44 +1235,178 @@ def try_enter_wave(symbol, analysis, state, ex):
         log(f"✅ {emoji} وهمي {symbol} {sig['kind']} @ {res['price']:.6g} SL {sig['stop']:.6g} TP {tp:.6g}{tp1_txt}")
     except Exception as e: log(f"فشل {side} {symbol}: {e}")
 
+def _live_label():
+    return {"demo": "Demo", "testnet": "Testnet"}.get(binance_env(), "حقيقي")
+
+_ENTRY_BLOCK = {"reason": ""}   # set by reconcile_live each cycle: no new position while the exchange disagrees with us
+
+def reconcile_live(state, ex):
+    """Live only, every cycle before anything else: compare our positions with the exchange.
+    Flat there = its stop filled (or someone closed it): record it and clean up. Unknown positions or a size
+    mismatch block new entries and alert once — the account must be used by the bot alone (a sub-account)."""
+    _ENTRY_BLOCK["reason"] = ""
+    try:
+        live = {}
+        for p in ex.fetch_positions() or []:
+            c = p.get("contracts") if p.get("contracts") is not None else (p.get("info") or {}).get("positionAmt")
+            if c and abs(float(c)) > 0: live[(p.get("symbol") or "").split(":")[0]] = abs(float(c))
+    except Exception as e:
+        _ENTRY_BLOCK["reason"] = f"مقدرناش نقرا الصفقات من المنصة: {e}"; log(f"⚠️ {_ENTRY_BLOCK['reason']}"); return
+    for sym, pos in list(state["positions"].items()):
+        q = live.get(sym.split(":")[0])
+        if not q:
+            exit_px = pos.get("sl") or pos["entry"]
+            try:
+                fills = [t for t in ex.fetch_my_trades(sym, limit=20) if t.get("side") == "sell"]
+                if fills: exit_px = float(fills[-1]["price"])
+            except Exception: pass
+            pnl = (exit_px - pos["entry"]) * pos["qty"]
+            log(f"🔒 {sym}: المنصة قفلت الصفقة (الوقف اتنفذ) @ {exit_px:.6g} PnL {pnl:+.2f}")
+            notify(f"🔒 قفل {sym} — وقف الحماية اتنفذ على المنصة\nدخول {pos['entry']:.6g} → خروج {exit_px:.6g}\nPnL {pnl:+.2f}$ ({_live_label()})")
+            state["history"].append({"symbol": sym, "side": "long", "entry": pos["entry"], "exit": exit_px, "qty": pos["qty"], "pnl": pnl,
+                "pnl_pct": pnl / (pos["entry"] * pos["qty"]) * 100, "reason": "وقف المنصة", "time": datetime.now(timezone.utc).isoformat(),
+                "type": "live", "opened": pos.get("time"), "rank": pos.get("rank")})
+            state["stats"]["trades"] += 1; state["stats"]["pnl"] += float(pnl); state["stats"]["wins" if pnl > 0 else "losses"] += 1
+            try:
+                from backend.app.oco import cancel_oco_orders
+                ids = pos.get("oco_ids") or {}
+                cancel_oco_orders(ex, sym, pos_id=ids.get("pos_id"), sl_id=ids.get("sl"))
+            except Exception: pass
+            state["positions"].pop(sym, None); state["last_trade"][sym] = datetime.now(timezone.utc).isoformat()
+            state.get("recovery_required", {}).pop(sym, None)
+        elif abs(q - float(pos["qty"])) > 0.02 * float(pos["qty"]):
+            if sym not in state.setdefault("recovery_required", {}):
+                state["recovery_required"][sym] = {"reason": f"الكمية على المنصة {q} مش {pos['qty']}", "at": datetime.now(timezone.utc).isoformat()}
+                notify(f"🚨 {sym}: الكمية على المنصة {q} مختلفة عن البوت {pos['qty']} — راجعها. البوت وقف أي دخول جديد.")
+    mine = {k.split(":")[0] for k in state["positions"]}
+    unknown = sorted(set(live) - mine)
+    if unknown:
+        _ENTRY_BLOCK["reason"] = f"صفقات على المنصة البوت مفتحهاش: {', '.join(unknown)}"
+        if state.get("_unknown_seen") != unknown:
+            notify(f"⚠️ {_ENTRY_BLOCK['reason']} — البوت مش هيفتح جديد لحد ما تتقفل. استخدم حساب فرعي للبوت لوحده.")
+        state["_unknown_seen"] = unknown
+    else:
+        state.pop("_unknown_seen", None)
+    save_state(state)
+
 def try_enter_trend(symbol, analysis, state, ex):
-    """Daily trend: buy at market when the last closed daily candle turns the trend on; sell when it turns off."""
+    """Daily trend: buy at market when the last closed daily candle turns the trend on; sell when it turns off.
+    Live: market buy, then a stop on the exchange at the protective level (no target — the exit is the signal)."""
     import strategies_trend as stt
     sig=analysis.get("trend"); price=analysis["price"]
     if not sig: return
+    live = not CONFIG["paper_trading"]
     if in_position(state, symbol):
         if sig["on"]: return
         pos=state["positions"][symbol]
-        if not CONFIG["paper_trading"]: log(f"⏸️ {symbol} الترند اليومي شغال Paper بس"); return
-        pnl=(price-pos["entry"])*pos["qty"]
-        log(f"📉 اغلاق {symbol} — الترند وقف @ {price:.6g} PnL {pnl:+.4f}")
-        notify(f"📉 قفل {symbol} — الترند وقف\nدخول {pos['entry']:.6g} → خروج {price:.6g}\nPnL {pnl:+.2f}$ (Paper)")
-        state["history"].append({"symbol":symbol,"side":"long","entry":pos["entry"],"exit":price,"qty":pos["qty"],"pnl":pnl,"pnl_pct":pnl/(pos["entry"]*pos["qty"])*100,"reason":"الترند وقف","time":datetime.now(timezone.utc).isoformat(),"type":"paper","opened":pos.get("time"),"rank":pos.get("rank")})
+        if live:
+            try:
+                res = close_live_position(ex, symbol, pos, price)
+            except Exception as e:
+                log(f"⚠️ {symbol}: الترند وقف بس القفل فشل — هيحاول تاني الدورة الجاية: {e}")
+                notify(f"⚠️ {symbol}: الترند وقف بس أمر القفل فشل — البوت هيحاول تاني. الوقف لسه على المنصة."); return
+            exit_px, qty = res["price"], res["qty"]
+        else:
+            exit_px, qty = price, pos["qty"]
+        pnl=(exit_px-pos["entry"])*qty
+        mode = _live_label() if live else "Paper"
+        log(f"📉 اغلاق {symbol} — الترند وقف @ {exit_px:.6g} PnL {pnl:+.4f}")
+        notify(f"📉 قفل {symbol} — الترند وقف\nدخول {pos['entry']:.6g} → خروج {exit_px:.6g}\nPnL {pnl:+.2f}$ ({mode})")
+        state["history"].append({"symbol":symbol,"side":"long","entry":pos["entry"],"exit":exit_px,"qty":qty,"pnl":pnl,"pnl_pct":pnl/(pos["entry"]*qty)*100,"reason":"الترند وقف","time":datetime.now(timezone.utc).isoformat(),"type":"live" if live else "paper","opened":pos.get("time"),"rank":pos.get("rank")})
         state["stats"]["trades"]+=1; state["stats"]["pnl"]+=float(pnl); state["stats"]["wins" if pnl>0 else "losses"]+=1
         state["positions"].pop(symbol,None); state["last_trade"][symbol]=datetime.now(timezone.utc).isoformat(); save_state(state)
         return
     if not analysis.get("in_universe", True): return   # not in the volume top list today: no new trade
     seen=state.setdefault("trend_seen",{})
     if not sig["on"] or seen.get(symbol)==sig["ts"]: return   # one entry per closed daily candle, like the backtest
+    if live and _ENTRY_BLOCK["reason"]:
+        log(f"⛔ {symbol} مفيش دخول — {_ENTRY_BLOCK['reason']}"); return   # retried next cycle (trend_seen not marked)
     seen[symbol]=sig["ts"]; save_state(state)
-    if not CONFIG["paper_trading"]:
-        log(f"⏸️ {symbol} الترند اليومي شغال Paper بس — مفيش أوامر حقيقية"); return
     if len(state["positions"])>=CONFIG["max_open_positions"] or not daily_pnl_ok(state): return
+    lev=int(CONFIG.get("leverage",2))
+    margin=position_size(price, ex)*sig["size"]
+    if not live:
+        try:
+            res=place_order(ex,symbol,"long",margin,price)
+            sl=res["price"]*(1-stt.STOP_SHARE/lev)
+            state["positions"][symbol]={"side":"long","entry":res["price"],"qty":res["qty"],"cost":res["cost"],"notional":res.get("notional"),"leverage":res.get("leverage",lev),
+                "time":datetime.now(timezone.utc).isoformat(),"sl":sl,"tp":None,"breakeven":False,"trend":True,"rank":analysis.get("rank")}
+            state["last_trade"][symbol]=datetime.now(timezone.utc).isoformat(); save_state(state)
+            log(f"✅ 🟢 لونج وهمي {symbol} ترند يومي x{lev} @ {res['price']:.6g} حجم {sig['size']*100:.0f}% وقف حماية {sl:.6g}")
+            notify(f"🟢 لونج {symbol} — ترند يومي x{lev} (Paper)\nدخول {res['price']:.6g} · حجم {sig['size']*100:.0f}% من ${position_size(price, ex)*lev:.0f}\nوقف حماية {sl:.6g} · الخروج لما الترند يقف")
+        except Exception as e: log(f"فشل long {symbol}: {e}")
+        return
+    _enter_trend_live(symbol, analysis, state, ex, margin, lev, price)
+
+def _enter_trend_live(symbol, analysis, state, ex, margin, lev, price):
+    import strategies_trend as stt
+    from backend.app.oco import place_oco_orders
+    # the exchange's minimum order value (Binance: $5, ETH $20, BTC $50) — skip instead of having it rejected
+    try: min_cost = float(((ex.market(symbol).get("limits") or {}).get("cost") or {}).get("min") or 5)
+    except Exception: min_cost = 5.0
+    if margin * lev < min_cost * 1.05:
+        log(f"⏸️ {symbol} حجم {margin*lev:.2f}$ أقل من أقل أمر على المنصة {min_cost}$ — مفيش دخول"); return
     try:
-        lev=int(CONFIG.get("leverage",2))
-        res=place_order(ex,symbol,"long",position_size(price, ex)*sig["size"],price)
-        sl=res["price"]*(1-stt.STOP_SHARE/lev)
-        state["positions"][symbol]={"side":"long","entry":res["price"],"qty":res["qty"],"cost":res["cost"],"notional":res.get("notional"),"leverage":res.get("leverage",lev),
-            "time":datetime.now(timezone.utc).isoformat(),"sl":sl,"tp":None,"breakeven":False,"trend":True,"rank":analysis.get("rank")}
-        state["last_trade"][symbol]=datetime.now(timezone.utc).isoformat(); save_state(state)
-        log(f"✅ 🟢 لونج وهمي {symbol} ترند يومي x{lev} @ {res['price']:.6g} حجم {sig['size']*100:.0f}% وقف حماية {sl:.6g}")
-        notify(f"🟢 لونج {symbol} — ترند يومي x{lev} (Paper)\nدخول {res['price']:.6g} · حجم {sig['size']*100:.0f}% من ${position_size(price, ex)*lev:.0f}\nوقف حماية {sl:.6g} · الخروج لما الترند يقف")
-    except Exception as e: log(f"فشل long {symbol}: {e}")
+        bal = ex.fetch_balance()
+        free = float((bal.get("USDT") or {}).get("free") or (bal.get("free") or {}).get("USDT") or 0)
+    except Exception as e:
+        log(f"⏸️ {symbol} فحص الرصيد فشل — مفيش دخول: {e}"); return
+    if free < margin * 1.02:
+        log(f"⏸️ {symbol} رصيد {free:.2f}$ مش كفاية لهامش {margin:.2f}$"); return
+    cid = f"raqm-{uuid.uuid4().hex[:12]}"
+    state.setdefault("pending_orders", {})[symbol] = cid; save_state(state)   # survives a crash between order and record
+    try:
+        res = place_order(ex, symbol, "long", margin, price, client_order_id=cid)
+    except Exception as e:
+        q = _exchange_position_qty(ex, symbol)
+        if q is None:
+            state.setdefault("recovery_required", {})[symbol] = {"cid": cid, "reason": f"entry error, position unknown: {e}", "at": datetime.now(timezone.utc).isoformat()}
+            save_state(state)
+            notify(f"🚨 {symbol}: أمر الدخول رجّع خطأ ومقدرناش نعرف اتنفذ ولا لأ — راجع المنصة. البوت وقف أي دخول جديد."); return
+        if q == 0:
+            state["pending_orders"].pop(symbol, None); save_state(state)
+            log(f"فشل دخول {symbol}: {e}"); return
+        log(f"{symbol}: أمر الدخول رجّع خطأ بس الصفقة اتفتحت ({q}) — بنكمل ونحط الوقف: {e}")
+        res = {"price": price, "qty": q, "cost": q * price, "notional": q * price, "leverage": lev}
+    sl = res["price"] * (1 - stt.STOP_SHARE / lev)
+    pos = {"side":"long","entry":res["price"],"qty":res["qty"],"cost":res["cost"],"notional":res.get("notional"),"leverage":res.get("leverage",lev),
+           "time":datetime.now(timezone.utc).isoformat(),"sl":sl,"tp":None,"breakeven":False,"trend":True,"rank":analysis.get("rank"),
+           "clientOrderId": cid, "oco_ids": {"pos_id": cid}}
+    try:
+        oco = place_oco_orders(ex, symbol, "long", res["qty"], sl, None, paper=False, pos_id=cid)
+    except Exception as e:
+        oco = {"sl_error": str(e), "protection_missing": True}
+    pos["oco_ids"]["sl"] = oco.get("sl_id")
+    state["pending_orders"].pop(symbol, None)
+    if oco.get("protection_missing"):
+        notify(f"🚨 {symbol}: أمر الوقف اترفض ({oco.get('sl_error')}) — بيقفل الصفقة فورا")
+        try:
+            r = close_live_position(ex, symbol, pos, price)
+            pnl = (r["price"] - pos["entry"]) * r["qty"]
+            state["history"].append({"symbol":symbol,"side":"long","entry":pos["entry"],"exit":r["price"],"qty":r["qty"],"pnl":pnl,"pnl_pct":pnl/(pos["entry"]*r["qty"])*100,
+                "reason":"الوقف اترفض — قفل فوري","time":datetime.now(timezone.utc).isoformat(),"type":"live","opened":pos["time"],"rank":pos.get("rank")})
+            state["stats"]["trades"]+=1; state["stats"]["pnl"]+=float(pnl); state["stats"]["wins" if pnl>0 else "losses"]+=1
+            state["last_trade"][symbol]=datetime.now(timezone.utc).isoformat(); save_state(state)
+            log(f"🔒 {symbol}: اتقفلت فورا لأن الوقف اترفض"); return
+        except Exception as e:
+            pos["unprotected"] = True
+            state.setdefault("recovery_required", {})[symbol] = {"reason": f"no stop and close failed: {e}", "at": datetime.now(timezone.utc).isoformat()}
+            notify(f"🚨🚨 {symbol}: الصفقة مفتوحة من غير وقف والقفل فشل — اقفلها يدويا من Binance دلوقتي. البوت وقف أي دخول جديد.")
+    elif oco.get("verify_failed"):
+        pos["sl_unverified"] = True
+        state.setdefault("recovery_required", {})[symbol] = {"reason": oco.get("verify_warn"), "at": datetime.now(timezone.utc).isoformat()}
+        notify(f"🚨 {symbol}: الوقف اتقبل بس مش لاقيه على المنصة — راجعه. البوت وقف أي دخول جديد.")
+    state["positions"][symbol] = pos
+    state["last_trade"][symbol]=datetime.now(timezone.utc).isoformat(); save_state(state)
+    log(f"✅ 🟢 لونج {_live_label()} {symbol} ترند يومي x{lev} @ {res['price']:.6g} qty {res['qty']} وقف على المنصة {sl:.6g}")
+    notify(f"🟢 لونج {symbol} — ترند يومي x{lev} ({_live_label()})\nدخول {res['price']:.6g} · هامش {margin:.2f}$\nوقف على المنصة {sl:.6g} · الخروج لما الترند يقف")
 
 def try_enter(symbol, analysis, state, ex):
     """فيوتشر: لونج لو سكور > buy_threshold، شورت لو سكور < sell_threshold"""
     # Block every new entry while any position needs a human (unprotected / unverified / ambiguous order)
     if state.get("recovery_required"):
+        if trend_mode() and in_position(state, symbol):
+            return try_enter_trend(symbol, analysis, state, ex)   # an open position still exits on its signal
         log(f"⛔ {symbol} دخول متوقف — فيه صفقة محتاجة مراجعة: {', '.join(state['recovery_required'])}")
         return
     if state.get("pending_orders", {}).get(symbol):
@@ -1488,17 +1633,27 @@ def run_once():
         log(f"⛔ LIVE من غير مفاتيح: {err} — البوت وقف"); notify(f"⛔ البوت الحقيقي وقف: {err}")
         raise SystemExit(2)
     prices={}; analyses={}
-    try: symbols, allowed = cycle_symbols(ex, state)
+    # live: the coin list and the signals come from Binance's real public market (no keys) — Demo Trading's own
+    # volumes and candles are its play-money activity — and only orders, positions and balance use the account
+    data_ex = ex
+    if not CONFIG["paper_trading"]:
+        global _live_data_ex
+        if "_live_data_ex" not in globals(): _live_data_ex = ccxt.binanceusdm({"enableRateLimit": True})
+        data_ex = _live_data_ex
+        try: ex.load_markets()
+        except Exception as e: log(f"⚠️ markets: {e}")
+    try: symbols, allowed = cycle_symbols(data_ex, state)
     except Exception as e: log(f"قائمة العملات: {e}"); symbols, allowed = sorted(set(_universe["symbols"]) | set(state["positions"])), set(_universe["symbols"])
     for sym in symbols:
         try:
-            df=fetch_ohlcv(sym, CONFIG["timeframe"], limit=candles_needed(), ex=ex)
+            df=fetch_ohlcv(sym, CONFIG["timeframe"], limit=candles_needed(), ex=data_ex)
             a=analyze(sym, df); a["in_universe"]=allowed is None or sym in allowed; analyses[sym]=a; prices[sym]=a["price"]
             if sym in _universe["symbols"]: a["rank"]=_universe["symbols"].index(sym)+1   # 1 = most volume
             bd=" | ".join(f"{k} {v[0]:+.2f}" for k,v in a["breakdown"].items())
             # اختصر SHIB/PEPE لعرض أوضح
             log(f"{sym:10s} @ {a['price']:.6g} سكور {a['total']:+.3f} {a['decision']:8s} | {bd} | SL {a['sl']:.4g} TP {a['tp']:.4g}" if a.get('tp') else f"{sym:10s} @ {a['price']:.6g} {a['decision']:8s} | {bd} | وقف حماية {a['sl']:.4g}")
         except Exception as e: log(f"{sym} فشل: {e}")
+    if not CONFIG["paper_trading"]: reconcile_live(state, ex)
     if prices: check_sl_tp(state, prices, ex)
     for sym,a in analyses.items():
         try: try_enter(sym,a,state,ex)
@@ -1624,7 +1779,11 @@ if __name__=="__main__":
         STATE_PATH=Path(__file__).parent / "state_ratio.json"; LOG_PATH=Path(__file__).parent / "state_ratio.log"
     if args.paper and args.live: p.error("--paper و --live مع بعض؟ اختار واحد")
     if args.paper: CONFIG["paper_trading"]=True
-    if args.live: CONFIG["paper_trading"]=False
+    if args.live:
+        if not trend_mode(): p.error("--live متاح للترند اليومي بس (--strategy trend_daily)")
+        if binance_env() == "live" and os.getenv("ALLOW_LIVE_TRADING", "").strip().lower() != "true":
+            p.error("فلوس حقيقية محتاجة ALLOW_LIVE_TRADING=true — أو BINANCE_ENV=demo للتجربة بفلوس وهمية على Binance")
+        CONFIG["paper_trading"]=False
     if args.port: CONFIG["dashboard_port"]=args.port
     if args.serve_only:
         start_dashboard_server()

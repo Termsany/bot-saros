@@ -364,8 +364,10 @@ async def bot_start(req: BotStartReq, bg: BackgroundTasks, user: dict = Depends(
     global bot_task
     if bot_task and not bot_task.done():
         return {"ok": False, "msg": "already running"}
-    if not req.paper and not live_trading_allowed():
-        raise HTTPException(400, "LIVE disabled — set ALLOW_LIVE_TRADING=true on the backend to allow real orders")
+    if not req.paper:
+        # this loop runs the old score strategies, never tested with real orders; the daily trend's real orders
+        # run as their own service (bot.py --live, deploy/vps/raqm-trend-demo.service), not from the dashboard
+        raise HTTPException(400, "real orders don't start from the dashboard — the daily trend runs them as its own service on the server")
     solo = [s for s in (req.strategies or []) if s in SOLO_STRATEGIES]
     if not req.paper and solo:
         # Wave Flats: partial take-profit + moving stop aren't exchange orders yet (and it lost money in testing);

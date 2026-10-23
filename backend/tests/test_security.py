@@ -175,6 +175,12 @@ class ApiAuthTests(unittest.TestCase):
         self.assertEqual(r.status_code, 400)
         self.assertIsNone(_get_exchange_for_cycle(paper=False))
 
+    def test_bot_live_start_refused_even_with_the_switch_on(self):
+        # real orders run only as the daily trend's own service, never from the dashboard loop
+        with mock.patch.dict(os.environ, {"ALLOW_LIVE_TRADING": "true"}):
+            r = self.c.post("/api/bot/start", headers=self.h("admin-token"), json={"paper": False})
+        self.assertEqual(r.status_code, 400)
+
     def test_chart_path_traversal_blocked(self):
         # traversal must be 400 even with auth; unauthenticated without traversal is 401
         for f in ["backtest_/../backend/vault.json", "backtest_..%2f..%2fx.json", "backtest_a.png/../../x.png", "x.png"]:

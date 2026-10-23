@@ -59,6 +59,7 @@ def _leg_on_exchange(ex, symbol, order, cid):
 def place_oco_orders(ex, symbol, side, qty, sl_price, tp_price, paper: bool = True, pos_id: str = None, position_idx=None):
     """Places the stop and the target as reduceOnly orders tagged with our own ids.
 
+    tp_price=None places the stop alone.
     A leg that was accepted is never cancelled here — a position with its stop is safer than one without.
     Result flags for the caller:
       protection_missing — the stop was rejected: the position has no exchange stop, the caller must close it
@@ -78,6 +79,8 @@ def place_oco_orders(ex, symbol, side, qty, sl_price, tp_price, paper: bool = Tr
     if idx:
         base_params["positionIdx"] = int(idx)
     for leg, cid, key, price in (("sl", sl_id, "stopLossPrice", sl_price), ("tp", tp_id, "takeProfitPrice", tp_price)):
+        if price is None:   # stop only (the daily trend exits on its signal, not at a target)
+            continue
         try:
             params = {**base_params, key: float(ex.price_to_precision(symbol, price)), "clientOrderId": cid}
             if idx is not None:

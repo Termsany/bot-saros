@@ -1,0 +1,29 @@
+[Unit]
+Description=Raqm bot — daily trend with real orders on Binance Demo Trading (play money), $100 x5, top 10 coins
+After=network-online.target
+Wants=network-online.target
+# not started until the demo keys exist
+ConditionPathExists=/opt/raqm-bot/.env.demo
+
+[Service]
+User=raqm
+Group=raqm
+WorkingDirectory=/opt/raqm-bot
+# TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID
+EnvironmentFile=-/opt/raqm-bot/.env
+# BINANCE_API_KEY / BINANCE_SECRET made in Binance Demo Trading — never committed, chmod 600, owner raqm
+EnvironmentFile=/opt/raqm-bot/.env.demo
+# play money: this service can never reach a real account (bot.py adds keys to demo-fapi.binance.com only)
+Environment=BINANCE_ENV=demo
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/raqm-bot/venv/bin/python bot.py --live --strategy trend_daily --leverage 5 --amount 100 --universe 10 --poll 60 --notify --state state_demo.json
+Restart=always
+RestartSec=60
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/raqm-bot
+
+[Install]
+WantedBy=multi-user.target

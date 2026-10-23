@@ -266,9 +266,8 @@ class BreakevenAmendTests(unittest.TestCase):
             ex = mock.Mock()
             ex.edit_order.side_effect = Exception("fail")
             import backend.app.oco as oco_mod
-            oco_mod.place_oco_orders = mock.Mock(return_value={"sl_error": "fail"})
-            oco_mod.cancel_oco_orders = mock.Mock()
-            with mock.patch.object(botmod, "save_state", lambda s: None):
+            # patched for this test only (assigning them leaked the mocks into every later test)
+            with mock.patch.object(oco_mod, "place_oco_orders", mock.Mock(return_value={"sl_error": "fail"})),                  mock.patch.object(oco_mod, "cancel_oco_orders", mock.Mock()),                  mock.patch.object(botmod, "save_state", lambda s: None):
                 botmod.check_sl_tp(state, {"BTC/USDT": 49600}, ex=ex)
             pos = state["positions"]["BTC/USDT"]
             self.assertTrue(pos.get("breakeven"))
