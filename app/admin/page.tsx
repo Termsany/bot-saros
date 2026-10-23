@@ -3,6 +3,7 @@ import { Logo } from "@/components/Logo"
 import { useState } from "react"
 import { STRATEGIES, TIERS } from "@/lib/strategies"
 import { authHeaders } from "@/lib/supabase"
+import { LivePositions } from "@/components/LivePositions"
 
 export default function AdminPage(){
   const [tiers, setTiers] = useState(TIERS)
@@ -26,7 +27,9 @@ export default function AdminPage(){
             <a href="/" className="text-xs px-3 py-1.5 rounded-xl border border-line">الرئيسية</a>
           </div>
         </div>
-        <p className="text-xs text-muted mt-1">عدّل التسعير وأسماء البوتات للمعاينة — احفظها في lib/strategies.ts للنشر. أرقام الأداء بتيجي من research/bots_stats.py ومش بتتعدّل بإيدك.</p>
+        <LivePositions/>
+
+        <p className="text-xs text-muted mt-6">عدّل التسعير وأسماء البوتات للمعاينة — احفظها في lib/strategies.ts للنشر. أرقام الأداء بتيجي من research/bots_stats.py ومش بتتعدّل بإيدك.</p>
 
         <div className="mt-6">
           <h2 className="text-sm font-black">الباقات — التسعير</h2>

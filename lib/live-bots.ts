@@ -4,7 +4,20 @@
 import { useEffect, useState } from "react"
 import { BOT_PAGE, STRATEGIES, type Strategy } from "./strategies"
 
-export type LivePosition = { label: string; side: "long" | "short" | "pair"; entry?: number; price?: number; pnl: number; detail?: string }
+/** sl = the stop price; exit = when/where it takes profit or leaves (each bot has its own rule — some have no fixed target). */
+export type LivePosition = { label: string; side: "long" | "short" | "pair"; entry?: number; price?: number; pnl: number; detail?: string
+  sl?: number; exit?: string }
+
+const day = (iso?: string) => iso ? new Date(iso).toLocaleDateString("ar-EG", { day: "numeric", month: "short", timeZone: "UTC" }) : "—"
+const num = (v: number) => Number(v).toLocaleString("en-US", { maximumSignificantDigits: 6 })
+
+/** The exit rule of one position, in words, from what the bot publishes. */
+function exitRule(s: Strategy, d: any, p: any): string {
+  if (s.live === "status") return p.exit_below ? `هدف: الترند يقف — لو قفل يومي تحت ${num(p.exit_below)}` : "هدف: الترند يقف (مفيش سعر هدف ثابت)"
+  if (s.live === "momentum") return `هدف: التبديل الأسبوعي ${day(d.next_rebalance)}`
+  if (s.live === "listing") return `هدف: خروج ${day(p.exit_at)} (بعد ${d.rules?.hold_days ?? 90} يوم)`
+  return "مفيش وقف ثابت — خروج لما النسبة تعدي متوسط 50 يوم"
+}
 export type LiveBot = {
   strategy: Strategy; ok: boolean; updated?: string; fresh: boolean
   realized: number; unrealized: number; open: number; closed: number; wins: number; losses: number
@@ -18,11 +31,12 @@ function normalise(s: Strategy, d: any): LiveBot {
   let note: string | undefined
   if (s.live === "ratio") {
     positions = (d.pairs || []).map((p: any) => ({ label: `${p.long.symbol.replace("/USDT", "")} / ${p.short.symbol.replace("/USDT", "")}`,
-      side: "pair", pnl: p.pnl, detail: "لونج / شورت" }))
+      side: "pair", pnl: p.pnl, detail: "لونج / شورت", exit: exitRule(s, d, p) }))
     if (d.members?.length) note = `القائمة: ${d.members.join(" · ")}`
   } else {
     positions = (d.positions || []).map((p: any) => ({ label: p.symbol.replace("/USDT", ""), side: p.side, entry: p.entry, price: p.price, pnl: p.pnl,
-      detail: p.ret !== undefined ? `${p.ret > 0 ? "+" : ""}${Number(p.ret).toFixed(0)}% أسبوعين` : undefined }))
+      detail: p.ret !== undefined ? `${p.ret > 0 ? "+" : ""}${Number(p.ret).toFixed(0)}% أسبوعين` : undefined,
+      sl: p.sl ?? undefined, exit: exitRule(s, d, p) }))
     if (s.live === "listing" && d.upcoming?.length) note = `جاي: ${d.upcoming.slice(0, 3).map((u: any) => `${u.symbol.replace("/USDT", "")} بعد ${Math.max(0, Math.ceil(u.days_left))} يوم`).join(" · ")}`
     if (s.live === "momentum" && d.next_rebalance) note = `التبديل الجاي: ${new Date(d.next_rebalance).toLocaleDateString("ar-EG", { weekday: "long", day: "numeric", month: "short", timeZone: "UTC" })}`
   }

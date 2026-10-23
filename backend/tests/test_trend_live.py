@@ -163,3 +163,46 @@ class StartupGateTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ManualCloseTests(TrendLiveTests):
+    def _request(self, ipc, symbol, age=0):
+        import json, time
+        (ipc / "commands").mkdir(parents=True, exist_ok=True)
+        (ipc / "commands" / "close-abc.json").write_text(json.dumps({"id": "abc", "symbol": symbol, "at_epoch": time.time() - age, "by": "admin"}))
+
+    def test_site_close_closes_records_and_holds_the_coin(self):
+        ex = FakeBinance(); ipc = Path(self.td.name) / "ipc"
+        botmod.try_enter("SOL/USDT:USDT", SIG_ON, self.state, ex)
+        self._request(ipc, "SOL/USDT")
+        with mock.patch.dict(os.environ, {"RAQM_IPC_DIR": str(ipc)}):
+            botmod.process_manual_closes(self.state, ex, {"SOL/USDT:USDT": 105.0})
+        import json
+        res = json.loads((ipc / "results" / "abc.json").read_text(encoding="utf-8"))
+        self.assertTrue(res["ok"]); self.assertNotIn("SOL/USDT:USDT", self.state["positions"])
+        self.assertEqual(self.state["history"][-1]["reason"], "قفل يدوي من الموقع")
+        self.assertFalse(list((ipc / "commands").glob("*.json")))
+        n = len(ex.orders)                                   # trend still on, next day: no re-buy while held
+        botmod.try_enter("SOL/USDT:USDT", {**SIG_ON, "trend": {"on": True, "ts": 5, "size": 1.0}}, self.state, ex)
+        self.assertEqual(len(ex.orders), n)
+        botmod.try_enter("SOL/USDT:USDT", {**SIG_OFF, "trend": {"on": False, "ts": 6, "size": 1.0}}, self.state, ex)
+        botmod.try_enter("SOL/USDT:USDT", {**SIG_ON, "trend": {"on": True, "ts": 7, "size": 1.0}}, self.state, ex)
+        self.assertGreater(len(ex.orders), n)                # off then on again: a new signal may buy
+
+    def test_old_request_is_dropped_not_executed(self):
+        ex = FakeBinance(); ipc = Path(self.td.name) / "ipc"
+        botmod.try_enter("SOL/USDT:USDT", SIG_ON, self.state, ex)
+        self._request(ipc, "SOL/USDT", age=3600)
+        with mock.patch.dict(os.environ, {"RAQM_IPC_DIR": str(ipc)}):
+            botmod.process_manual_closes(self.state, ex, {})
+        self.assertIn("SOL/USDT:USDT", self.state["positions"])
+
+
+class ExitLevelTests(unittest.TestCase):
+    def test_exit_level_is_the_trend_boundary(self):
+        import random, strategies_trend as st
+        random.seed(3); c = [100.0]
+        for _ in range(300): c.append(c[-1] * (1 + random.gauss(0.001, 0.03)))
+        lvl = st.exit_level(c)
+        self.assertTrue(st.trend_on(c + [lvl * 1.001], len(c)))
+        self.assertFalse(st.trend_on(c + [lvl * 0.999], len(c)))

@@ -1,4 +1,5 @@
 "use client"
+import { Fragment } from "react"
 import { ExternalLink } from "lucide-react"
 import { BOT_PAGE } from "@/lib/strategies"
 import { ago, type LiveBot } from "@/lib/live-bots"
@@ -54,8 +55,8 @@ export function LiveBots({ bots, loaded }: { bots: LiveBot[], loaded: boolean })
                   {top.length === 0 ? <div className="py-4 text-center text-xs text-faint">مفيش صفقات مفتوحة دلوقتي</div> : (
                     <table className="w-full text-[12px]">
                       <tbody>
-                        {top.map(p => (
-                          <tr key={p.label + p.side} className="border-t border-line/70">
+                        {top.map(p => (<Fragment key={p.label + p.side}>
+                          <tr className="border-t border-line/70">
                             <td className="py-1.5 font-bold" dir="ltr" style={{ textAlign: "right" }}>{p.label}</td>
                             <td className="py-1.5">
                               {p.side === "pair" ? <span className="text-faint">{p.detail}</span>
@@ -64,7 +65,11 @@ export function LiveBots({ bots, loaded }: { bots: LiveBot[], loaded: boolean })
                             <td className="py-1.5 font-mono text-muted tabular" dir="ltr" style={{ textAlign: "right" }}>{p.price !== undefined ? `${px(p.entry)} → ${px(p.price)}` : ""}</td>
                             <td className={`py-1.5 font-mono font-bold tabular ${tone(p.pnl)}`} dir="ltr" style={{ textAlign: "right" }}>{money(p.pnl)}</td>
                           </tr>
-                        ))}
+                          <tr><td colSpan={4} className="pb-1.5 text-[10.5px] leading-4 text-faint">
+                            {p.sl !== undefined && <><span className="text-loss/90">وقف <span className="font-mono" dir="ltr">{px(p.sl)}</span></span> · </>}
+                            <span className="text-profit/90">{p.exit}</span>
+                          </td></tr>
+                        </Fragment>))}
                       </tbody>
                     </table>
                   )}

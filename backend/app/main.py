@@ -908,6 +908,60 @@ async def llm_evolve(prompt: str = "innovative crypto futures strategy combining
     except: pass
     return {"results": results, "promoted": len(promoted), "total": len(results)}
 
+# ── Real-orders bot (bot.py --live, its own service): the admin sees its positions and can close one by hand.
+# The bot runs as another OS user; they share only RAQM_IPC_DIR: live_status.json out, commands/ in, results/ back.
+# A request can only close — the bot ignores anything else, and drops requests older than 10 minutes.
+IPC_DIR = Path(os.getenv("RAQM_IPC_DIR", "/opt/raqm-ipc"))
+LIVE_SYMBOL_RE = re.compile(r"^[A-Z0-9]{1,20}/USDT(:USDT)?$")
+
+class LiveCloseReq(BaseModel):
+    symbol: str
+
+@app.get("/api/live/status")
+async def live_status(user: dict = Depends(require_admin)):
+    f = IPC_DIR / "live_status.json"
+    if not f.exists():
+        return {"running": False}
+    try:
+        data = json.loads(f.read_text(encoding="utf-8"))
+    except Exception:
+        return {"running": False, "error": "status unreadable"}
+    data["running"] = (datetime.now(timezone.utc) - datetime.fromisoformat(data["updated"])).total_seconds() < 300
+    return data
+
+@app.post("/api/live/close")
+async def live_close(req: LiveCloseReq, user: dict = Depends(require_admin)):
+    rate_limit(user["id"], "live_close", 10, 60)
+    sym = req.symbol.strip().upper()
+    if not LIVE_SYMBOL_RE.match(sym):
+        raise HTTPException(400, "bad symbol")
+    st = await live_status(user)
+    if not st.get("running"):
+        raise HTTPException(409, "the real-orders bot isn't running — close it in Binance")
+    if sym.split(":")[0] not in {p["symbol"] for p in st.get("positions", [])}:
+        raise HTTPException(404, "no open position on that coin")
+    rid = uuid.uuid4().hex
+    cmd = {"id": rid, "symbol": sym, "at_epoch": _time.time(), "by": user.get("email")}
+    d = IPC_DIR / "commands"
+    tmp = d / f".close-{rid}.tmp"
+    tmp.write_text(json.dumps(cmd), encoding="utf-8")
+    tmp.replace(d / f"close-{rid}.json")   # the bot only picks up close-*.json: never a half-written file
+    try:
+        from app.telegram_bot import send_telegram
+        await send_telegram(f"🖐️ manual close requested from the site: {sym} ({user.get('email')})")
+    except Exception: pass
+    return {"ok": True, "id": rid}
+
+@app.get("/api/live/close/{rid}")
+async def live_close_result(rid: str, user: dict = Depends(require_admin)):
+    if not re.fullmatch(r"[0-9a-f]{32}", rid):
+        raise HTTPException(400, "bad id")
+    f = IPC_DIR / "results" / f"{rid}.json"
+    if not f.exists():
+        pending = (IPC_DIR / "commands" / f"close-{rid}.json").exists()
+        return {"done": False, "pending": pending}
+    return {"done": True, **json.loads(f.read_text(encoding="utf-8"))}
+
 @app.get("/api/llm/promoted")
 async def llm_promoted(user: dict = Depends(require_admin)):
     from pathlib import Path as _P

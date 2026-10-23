@@ -154,7 +154,9 @@ def write_public_status(state, analyses, symbols_allowed):
         margin = pos["entry"] * pos["qty"] / max(1, int(pos.get("leverage", lev)))
         positions.append({"symbol": sym.split(":")[0], "side": pos.get("side", "long"), "entry": pos["entry"], "price": price,
                           "qty": pos["qty"], "margin": round(margin, 2), "sl": pos.get("sl"), "pnl": round(pnl, 4),
-                          "pnl_pct": round(pnl / margin * 100, 2) if margin else 0, "opened": pos.get("time"), "rank": pos.get("rank")})
+                          "pnl_pct": round(pnl / margin * 100, 2) if margin else 0, "opened": pos.get("time"), "rank": pos.get("rank"),
+                          "exit_below": ((analyses.get(sym) or {}).get("trend") or {}).get("exit_below") if pos.get("trend") else None,
+                          "tp": pos.get("tp")})
     history = [{"symbol": h["symbol"].split(":")[0], "side": h.get("side", "long"), "entry": h.get("entry"), "exit": h.get("exit"), "qty": h.get("qty"),
                 "pnl": round(float(h.get("pnl", 0)), 4), "reason": h.get("reason", ""), "time": h.get("time"),
                 "opened": h.get("opened"), "rank": h.get("rank")} for h in state.get("history", [])[-200:]]
@@ -748,14 +750,14 @@ def analyze_wave(symbol, df):
 def analyze_trend(symbol, df):
     """Daily trend on the closed daily candles (the last row from the exchange is still forming)."""
     import strategies_trend as stt
-    closed=df.iloc[:-1]; on,size=stt.signal_now(list(closed.close))
+    closed=df.iloc[:-1]; on,size=stt.signal_now(list(closed.close)); exit_below=stt.exit_level(list(closed.close))
     price=float(df.close.iloc[-1]); lev=int(CONFIG.get("leverage",2))
     sr_info=sr_signal(df)[2]; rsi_info=rsi_macd_signal(df)[2]
     reason=f"ترند صاعد — حجم {size*100:.0f}%" if on else "مفيش ترند صاعد"
     return {"symbol":symbol,"price":price,"total":1.0 if on else 0.0,"decision":"شراء" if on else "انتظار",
             "breakdown":{"trend_daily":(1.0 if on else 0.0,reason)},"amount_mult":1.0,
             "sl":price*(1-stt.STOP_SHARE/lev),"tp":None,"rsi":rsi_info["rsi"],"supports":sr_info["supports"],"resistances":sr_info["resistances"],
-            "trend":{"on":on,"size":size,"ts":int(closed.ts.iloc[-1].value//10**6)},"time":datetime.now(timezone.utc).isoformat()}
+            "trend":{"on":on,"size":size,"ts":int(closed.ts.iloc[-1].value//10**6),"exit_below":exit_below},"time":datetime.now(timezone.utc).isoformat()}
 
 def analyze(symbol, df=None, timeframe=None):
     if df is None: df=fetch_ohlcv(symbol, timeframe or CONFIG["timeframe"], limit=candles_needed())
@@ -1261,10 +1263,13 @@ def reconcile_live(state, ex):
                 if fills: exit_px = float(fills[-1]["price"])
             except Exception: pass
             pnl = (exit_px - pos["entry"]) * pos["qty"]
-            log(f"🔒 {sym}: المنصة قفلت الصفقة (الوقف اتنفذ) @ {exit_px:.6g} PnL {pnl:+.2f}")
-            notify(f"🔒 قفل {sym} — وقف الحماية اتنفذ على المنصة\nدخول {pos['entry']:.6g} → خروج {exit_px:.6g}\nPnL {pnl:+.2f}$ ({_live_label()})")
+            by_hand = exit_px > float(pos.get("sl") or 0) * 1.01   # well above the stop: closed by hand in the Binance app
+            why = "اتقفلت يدوي من Binance" if by_hand else "وقف الحماية اتنفذ على المنصة"
+            if by_hand: state.setdefault("manual_hold", {})[sym] = datetime.now(timezone.utc).isoformat()
+            log(f"🔒 {sym}: {why} @ {exit_px:.6g} PnL {pnl:+.2f}")
+            notify(f"🔒 قفل {sym} — {why}\nدخول {pos['entry']:.6g} → خروج {exit_px:.6g}\nPnL {pnl:+.2f}$ ({_live_label()})")
             state["history"].append({"symbol": sym, "side": "long", "entry": pos["entry"], "exit": exit_px, "qty": pos["qty"], "pnl": pnl,
-                "pnl_pct": pnl / (pos["entry"] * pos["qty"]) * 100, "reason": "وقف المنصة", "time": datetime.now(timezone.utc).isoformat(),
+                "pnl_pct": pnl / (pos["entry"] * pos["qty"]) * 100, "reason": "قفل يدوي من Binance" if by_hand else "وقف المنصة", "time": datetime.now(timezone.utc).isoformat(),
                 "type": "live", "opened": pos.get("time"), "rank": pos.get("rank")})
             state["stats"]["trades"] += 1; state["stats"]["pnl"] += float(pnl); state["stats"]["wins" if pnl > 0 else "losses"] += 1
             try:
@@ -1288,6 +1293,85 @@ def reconcile_live(state, ex):
     else:
         state.pop("_unknown_seen", None)
     save_state(state)
+
+def _ipc_dir():
+    """Folder shared with the backend (RAQM_IPC_DIR, e.g. /opt/raqm-ipc): live status out, close requests in."""
+    d = os.getenv("RAQM_IPC_DIR", "").strip()
+    return Path(d) if d else None
+
+def _write_json_atomic(path, data):
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, default=str), encoding="utf-8"); tmp.replace(path)
+
+MANUAL_CLOSE_MAX_AGE_S = 600   # a request the bot couldn't run within 10 minutes is dropped, never executed late
+
+def process_manual_closes(state, ex, prices):
+    """Close requests from the site's admin button: close the position now, record it, and don't buy the coin
+    again until its trend turns off and back on. Only closes — a request can never open anything."""
+    d = _ipc_dir()
+    if not d: return
+    cmd_dir, res_dir = d / "commands", d / "results"
+    try: files = sorted(cmd_dir.glob("close-*.json"))
+    except Exception: return
+    for f in files:
+        try: req = json.loads(f.read_text(encoding="utf-8"))
+        except Exception: req = {}
+        rid, sym = str(req.get("id", f.stem))[:64], str(req.get("symbol", ""))
+        out = {"id": rid, "symbol": sym, "done_at": datetime.now(timezone.utc).isoformat()}
+        try:
+            age = time.time() - float(req.get("at_epoch", 0))
+            match = next((k for k in state["positions"] if k.split(":")[0] == sym.split(":")[0]), None)
+            if age > MANUAL_CLOSE_MAX_AGE_S:
+                out.update(ok=False, msg="الطلب قديم — اتلغى من غير تنفيذ")
+            elif not match:
+                out.update(ok=False, msg="مفيش صفقة مفتوحة على العملة دي")
+            else:
+                pos = state["positions"][match]
+                px = prices.get(match)
+                if px is None:
+                    try: px = float(ex.fetch_ticker(match)["last"])
+                    except Exception: px = pos["entry"]
+                r = close_live_position(ex, match, pos, px)
+                pnl = (r["price"] - pos["entry"]) * r["qty"]
+                state["history"].append({"symbol": match, "side": "long", "entry": pos["entry"], "exit": r["price"], "qty": r["qty"], "pnl": pnl,
+                    "pnl_pct": pnl / (pos["entry"] * r["qty"]) * 100, "reason": "قفل يدوي من الموقع", "time": datetime.now(timezone.utc).isoformat(),
+                    "type": "live", "opened": pos.get("time"), "rank": pos.get("rank"), "by": req.get("by")})
+                state["stats"]["trades"] += 1; state["stats"]["pnl"] += float(pnl); state["stats"]["wins" if pnl > 0 else "losses"] += 1
+                state["positions"].pop(match, None); state["last_trade"][match] = datetime.now(timezone.utc).isoformat()
+                state.get("recovery_required", {}).pop(match, None)
+                state.setdefault("manual_hold", {})[match] = datetime.now(timezone.utc).isoformat()
+                save_state(state)
+                out.update(ok=True, msg="اتقفلت", price=r["price"], qty=r["qty"], pnl=round(pnl, 4))
+                log(f"🖐️ قفل يدوي {match} @ {r['price']:.6g} PnL {pnl:+.2f} (طلب {req.get('by', '?')})")
+                notify(f"🖐️ قفل يدوي من الموقع: {match}\nدخول {pos['entry']:.6g} → خروج {r['price']:.6g}\nPnL {pnl:+.2f}$ ({_live_label()})\nمش هيشتري العملة دي تاني غير لما الترند يقف ويبدأ من جديد")
+        except Exception as e:
+            out.update(ok=False, msg=f"القفل فشل: {e}")
+            log(f"⚠️ قفل يدوي {sym} فشل: {e}"); notify(f"⚠️ القفل اليدوي لـ {sym} فشل: {e} — الوقف لسه على المنصة")
+        try:
+            res_dir.mkdir(exist_ok=True); _write_json_atomic(res_dir / f"{rid}.json", out)
+        except Exception as e: log(f"manual close result {rid}: {e}")
+        try: f.unlink()
+        except Exception: pass
+
+def write_live_status(state, prices, analyses=None):
+    """What the site's admin page shows for the real-orders bot (not public)."""
+    d = _ipc_dir()
+    if not d: return
+    pos = []
+    for sym, p in state["positions"].items():
+        px = prices.get(sym)
+        exit_below = (((analyses or {}).get(sym) or {}).get("trend") or {}).get("exit_below")
+        pos.append({"symbol": sym.split(":")[0], "entry": p["entry"], "qty": p["qty"], "sl": p.get("sl"), "price": px,
+                    "exit_below": exit_below, "tp": p.get("tp"),
+                    "loss_at_sl": round((float(p["sl"]) - p["entry"]) * p["qty"], 2) if p.get("sl") else None,
+                    "pnl": round((px - p["entry"]) * p["qty"], 4) if px else None, "opened": p.get("time"),
+                    "unprotected": bool(p.get("unprotected")), "sl_unverified": bool(p.get("sl_unverified"))})
+    hist = [h for h in state.get("history", []) if h.get("type") == "live"][-30:][::-1]
+    try:
+        _write_json_atomic(d / "live_status.json", {"updated": datetime.now(timezone.utc).isoformat(), "env": binance_env(),
+            "leverage": CONFIG.get("leverage"), "margin": CONFIG.get("trade_amount_usdt"), "positions": pos, "history": hist,
+            "review": state.get("recovery_required") or {}, "entry_block": _ENTRY_BLOCK["reason"], "manual_hold": list(state.get("manual_hold", {}))})
+    except Exception as e: log(f"live status: {e}")
 
 def try_enter_trend(symbol, analysis, state, ex):
     """Daily trend: buy at market when the last closed daily candle turns the trend on; sell when it turns off.
@@ -1315,6 +1399,10 @@ def try_enter_trend(symbol, analysis, state, ex):
         state["history"].append({"symbol":symbol,"side":"long","entry":pos["entry"],"exit":exit_px,"qty":qty,"pnl":pnl,"pnl_pct":pnl/(pos["entry"]*qty)*100,"reason":"الترند وقف","time":datetime.now(timezone.utc).isoformat(),"type":"live" if live else "paper","opened":pos.get("time"),"rank":pos.get("rank")})
         state["stats"]["trades"]+=1; state["stats"]["pnl"]+=float(pnl); state["stats"]["wins" if pnl>0 else "losses"]+=1
         state["positions"].pop(symbol,None); state["last_trade"][symbol]=datetime.now(timezone.utc).isoformat(); save_state(state)
+        return
+    hold = state.get("manual_hold", {})
+    if symbol in hold:   # closed by hand: wait for the trend to turn off, then a new signal may buy it again
+        if not sig["on"]: hold.pop(symbol, None); save_state(state)
         return
     if not analysis.get("in_universe", True): return   # not in the volume top list today: no new trade
     seen=state.setdefault("trend_seen",{})
@@ -1653,12 +1741,15 @@ def run_once():
             # اختصر SHIB/PEPE لعرض أوضح
             log(f"{sym:10s} @ {a['price']:.6g} سكور {a['total']:+.3f} {a['decision']:8s} | {bd} | SL {a['sl']:.4g} TP {a['tp']:.4g}" if a.get('tp') else f"{sym:10s} @ {a['price']:.6g} {a['decision']:8s} | {bd} | وقف حماية {a['sl']:.4g}")
         except Exception as e: log(f"{sym} فشل: {e}")
-    if not CONFIG["paper_trading"]: reconcile_live(state, ex)
+    if not CONFIG["paper_trading"]:
+        reconcile_live(state, ex)
+        process_manual_closes(state, ex, prices)
     if prices: check_sl_tp(state, prices, ex)
     for sym,a in analyses.items():
         try: try_enter(sym,a,state,ex)
         except Exception as e: log(f"دخول {sym}: {e}")
     write_public_status(state, analyses, allowed if allowed is not None else symbols)
+    if not CONFIG["paper_trading"]: write_live_status(state, prices, analyses)
     if state["positions"]: log(f"📊 مفتوحة: {list(state['positions'].keys())} | PnL {state['stats']['pnl']:+.4f} | {state['stats']['wins']}W/{state['stats']['losses']}L")
     else: log(f"📊 لا صفقات مفتوحة | PnL {state['stats']['pnl']:+.4f} | {state['stats']['wins']}W/{state['stats']['losses']}L")
     # حدث ملف الداشبورد

@@ -258,3 +258,34 @@ class BacktestTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LiveCloseApiTests(ApiAuthTests):
+    """Manual close from the admin page: admin only, only an open position, written as a request file for the bot."""
+    def setUp(self):
+        super().setUp()
+        import app.main as m
+        self.ipc = Path(self.tmp.name) / "ipc"; (self.ipc / "commands").mkdir(parents=True); (self.ipc / "results").mkdir()
+        self.p_ipc = mock.patch.object(m, "IPC_DIR", self.ipc); self.p_ipc.start()
+        from datetime import datetime, timezone
+        import json as _j
+        (self.ipc / "live_status.json").write_text(_j.dumps({"updated": datetime.now(timezone.utc).isoformat(), "env": "demo",
+            "positions": [{"symbol": "SOL/USDT", "entry": 100, "qty": 1, "sl": 84}]}), encoding="utf-8")
+    def tearDown(self):
+        self.p_ipc.stop(); super().tearDown()
+
+    def test_admin_only(self):
+        self.assertEqual(self.c.get("/api/live/status", headers=self.h("user-token")).status_code, 403)
+        self.assertEqual(self.c.post("/api/live/close", headers=self.h("user-token"), json={"symbol": "SOL/USDT"}).status_code, 403)
+
+    def test_close_writes_one_request_for_an_open_position(self):
+        r = self.c.post("/api/live/close", headers=self.h("admin-token"), json={"symbol": "SOL/USDT"})
+        self.assertEqual(r.status_code, 200)
+        files = list((self.ipc / "commands").glob("close-*.json"))
+        self.assertEqual(len(files), 1)
+        self.assertEqual(self.c.get(f"/api/live/close/{r.json()['id']}", headers=self.h("admin-token")).json(), {"done": False, "pending": True})
+
+    def test_refuses_unknown_coin_and_junk(self):
+        self.assertEqual(self.c.post("/api/live/close", headers=self.h("admin-token"), json={"symbol": "ETH/USDT"}).status_code, 404)
+        self.assertEqual(self.c.post("/api/live/close", headers=self.h("admin-token"), json={"symbol": "../../x"}).status_code, 400)
+        self.assertEqual(self.c.get("/api/live/close/../../etc", headers=self.h("admin-token")).status_code in (400, 404), True)

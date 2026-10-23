@@ -19,6 +19,13 @@ def trend_on(c, i):
     return sum(c[i] > c[i - L] for L in LOOKBACKS) >= 2
 
 
+def exit_level(c):
+    """The trend stays on at the next daily close only above the middle of the closes 20, 60 and 120 days before it
+    (on = above at least 2 of the 3). c = closed daily closes, oldest first; None without enough history."""
+    if len(c) < max(LOOKBACKS): return None
+    return sorted(c[-L] for L in LOOKBACKS)[1]
+
+
 def volatility(c, i):
     """Annualised standard deviation (n-1) of the last VOL_DAYS daily returns ending at candle i."""
     r = [c[k] / c[k - 1] - 1 for k in range(i - VOL_DAYS + 1, i + 1)]

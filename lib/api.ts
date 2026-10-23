@@ -51,6 +51,23 @@ export async function apiSaveSettings(body: { capital: number; strategy: string 
   if(!r.ok) throw new Error(d.detail || "ما اتحفظش")
   return d
 }
+// ── real-orders bot (admin only): positions, manual close, its result
+export async function apiLiveStatus(): Promise<any|null>{
+  try{
+    const headers = await signedInHeaders(); if(!headers) return null
+    const r=await fetch(`${API}/api/live/status`, { headers, cache: "no-store" }); return r.ok ? r.json() : null
+  }catch{ return null }
+}
+export async function apiLiveClose(symbol: string): Promise<{ id: string }>{
+  const r=await fetch(`${API}/api/live/close`, { method:"POST", headers: await authHeaders(JSON_CT), body: JSON.stringify({ symbol }) })
+  const d = await r.json().catch(()=>({}))
+  if(!r.ok) throw new Error(d.detail || "الطلب ما اتبعتش")
+  return d
+}
+export async function apiLiveCloseResult(id: string): Promise<any>{
+  const r=await fetch(`${API}/api/live/close/${id}`, { headers: await authHeaders(), cache: "no-store" })
+  return r.ok ? r.json() : { done: false }
+}
 export function chartUrl(file:string){ return `${API}/api/chart?file=${encodeURIComponent(file)}` }
 /** The chart needs the user's login (it's theirs only) — an <img src> can't send it, so fetch it and show a local copy. */
 export async function apiChartObjectUrl(file:string): Promise<string|null>{

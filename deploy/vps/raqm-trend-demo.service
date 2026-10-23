@@ -15,6 +15,8 @@ EnvironmentFile=-/opt/raqm-bot/.env
 EnvironmentFile=/opt/raqm-bot/.env.demo
 # play money: this service can never reach a real account (bot.py adds keys to demo-fapi.binance.com only)
 Environment=BINANCE_ENV=demo
+# the admin page reads live_status.json here and drops manual close requests (deploy/vps/setup-ipc.sh)
+Environment=RAQM_IPC_DIR=/opt/raqm-ipc
 Environment=PYTHONUNBUFFERED=1
 ExecStart=/opt/raqm-bot/venv/bin/python bot.py --live --strategy trend_daily --leverage 5 --amount 100 --universe 10 --poll 60 --notify --state state_demo.json
 Restart=always
@@ -23,7 +25,7 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-ReadWritePaths=/opt/raqm-bot
+ReadWritePaths=/opt/raqm-bot /opt/raqm-ipc
 
 [Install]
 WantedBy=multi-user.target
