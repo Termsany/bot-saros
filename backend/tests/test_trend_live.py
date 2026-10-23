@@ -206,3 +206,23 @@ class ExitLevelTests(unittest.TestCase):
         lvl = st.exit_level(c)
         self.assertTrue(st.trend_on(c + [lvl * 1.001], len(c)))
         self.assertFalse(st.trend_on(c + [lvl * 0.999], len(c)))
+
+
+class UniverseFilterTests(unittest.TestCase):
+    """The paper bot ranks Bybit's market, the live bot Binance's: the coin filter must keep coins on both."""
+    def _ex(self, ex_id, info):
+        ex = mock.Mock(); ex.id = ex_id
+        ex.markets = {"SOL/USDT:USDT": {"swap": True, "linear": True, "quote": "USDT", "settle": "USDT", "base": "SOL", "active": True, "info": info}}
+        ex.fetch_tickers.return_value = {"SOL/USDT:USDT": {"quoteVolume": 1e9}}
+        ex.fetch_ohlcv.return_value = [[0, 1, 1, 1, 100.0, 1000.0]] * 200
+        return ex
+
+    def test_bybit_linear_perpetual_is_kept(self):
+        botmod._universe.update(key=None, symbols=[])
+        self.assertEqual(botmod.volume_universe(self._ex("bybit", {"contractType": "LinearPerpetual", "symbolType": ""}), 10), ["SOL/USDT:USDT"])
+
+    def test_binance_coin_perpetual_kept_index_dropped(self):
+        botmod._universe.update(key=None, symbols=[])
+        self.assertEqual(botmod.volume_universe(self._ex("binanceusdm", {"contractType": "PERPETUAL", "underlyingType": "COIN"}), 10), ["SOL/USDT:USDT"])
+        botmod._universe.update(key=None, symbols=[])
+        self.assertEqual(botmod.volume_universe(self._ex("binanceusdm", {"contractType": "PERPETUAL", "underlyingType": "INDEX"}), 10), [])

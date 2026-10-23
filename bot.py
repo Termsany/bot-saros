@@ -95,7 +95,8 @@ def volume_universe(ex, n):
         m = ex.markets.get(sym) or {}
         info = m.get("info") or {}
         crypto = info.get("symbolType", "") in ("", "innovation")   # Bybit also lists stocks, ETFs, commodities, forex as USDT perps
-        crypto = crypto and info.get("underlyingType", "COIN") == "COIN" and info.get("contractType", "PERPETUAL") == "PERPETUAL"   # Binance's
+        if ex.id != "bybit":   # Binance: coins only (it also lists index / TradFi perpetuals); Bybit says contractType "LinearPerpetual"
+            crypto = crypto and info.get("underlyingType", "COIN") == "COIN" and info.get("contractType", "PERPETUAL") == "PERPETUAL"
         if m.get("swap") and m.get("linear") and m.get("quote") == "USDT" and m.get("settle") == "USDT" and m.get("base") not in STABLES                 and crypto and m.get("active", True) and not info.get("isPreListing"):
             cands.append((float(t.get("quoteVolume") or 0), sym))
     ranked = []
