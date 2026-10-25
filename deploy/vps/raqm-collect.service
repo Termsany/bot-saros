@@ -1,0 +1,20 @@
+[Unit]
+Description=Raqm — collect Binance futures positioning data (open interest, long/short ratios, taker volume) for research
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=raqm
+Group=raqm
+WorkingDirectory=/opt/raqm-bot
+Environment=PYTHONUNBUFFERED=1
+# public endpoints, no keys; hourly rows into data/market_data.sqlite (collect_market_data.py)
+ExecStart=/opt/raqm-bot/venv/bin/python collect_market_data.py --db /opt/raqm-bot/data/market_data.sqlite
+TimeoutStartSec=2h
+Nice=10
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/raqm-bot/data

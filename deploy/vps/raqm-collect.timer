@@ -1,0 +1,10 @@
+[Unit]
+Description=Collect Binance futures positioning data twice a day (Binance keeps only 30 days)
+
+[Timer]
+OnCalendar=*-*-* 00,12:20:00 UTC
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target
