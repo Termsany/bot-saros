@@ -1701,7 +1701,160 @@ def try_enter(symbol, analysis, state, ex):
         except Exception as e: log(f"فشل {side} {symbol}: {e}")
 
 
+# ── Williams volatility breakout + Connors RSI-2: two paper bots on Binance's public market (research/traders_study.py,
+#    traders_robustness.py, breakout_stop_hourly.py) ──
+VB = {"top": 10, "k": 0.7, "ma": 20, "stop": 0.40, "slip": 0.001}
+RSI2 = {"top": 10, "below": 5, "trend_ma": 200, "exit_ma": 5, "max_days": 10, "stop": 0.40}
+
+def breakout_mode():
+    """Paper volatility breakout (Larry Williams): each UTC day, among the top 10 by 30-day volume whose close is above
+    its 20-day average, buy when the price trades 0.7 x yesterday's range above today's open; sell at the next day's
+    open. No intraday stop (it cut profit in every hourly test), only the 40% guard before liquidation."""
+    return "vol_breakout" in (CONFIG.get("enabled_strategies") or [])
+
+def rsi2_mode():
+    """Paper RSI-2 pullback (Larry Connors): at each daily close, among the top 10 by 30-day volume above their 200-day
+    average, buy when the 2-day RSI is below 5; sell after a close above the 5-day average or 10 days, stop 40%."""
+    return "rsi2_pullback" in (CONFIG.get("enabled_strategies") or [])
+
+def _utc_day(now):
+    return now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+def rsi_wilder(closes, n=2):
+    s = pd.Series(closes, dtype=float); d = s.diff().fillna(0)
+    up = d.clip(lower=0).ewm(alpha=1 / n, adjust=False).mean(); dn = (-d.clip(upper=0)).ewm(alpha=1 / n, adjust=False).mean()
+    return float(100.0 if dn.iloc[-1] == 0 else 100 - 100 / (1 + up.iloc[-1] / dn.iloc[-1]))
+
+def _paper_open(state, sym, price, now, extra):
+    lev = int(CONFIG.get("leverage", 2)); q = position_size(price) * lev / price
+    state["positions"][sym] = {"side": "long", "entry": price, "qty": q, "leverage": lev, "time": now.isoformat(), "tp": None, **extra}
+    return q
+
+def _guard_stops(ex, state, prices, label):
+    """The 40% protective stop (before liquidation at x2) between the bot's own exits."""
+    for sym, pos in list(state["positions"].items()):
+        try:
+            price = float(ex.fetch_ticker(sym)["last"]); prices[sym] = price
+            if price <= pos["sl"]:
+                pnl = _paper_close(ex, state, sym, price, f"وقف {pos['sl']:.6g}"); save_state(state)
+                log(f"🔒 {label}: وقف {sym} @ {price:.6g} PnL {pnl:+.4f}")
+                notify(f"🔒 {label}: وقف {sym.split(':')[0]} @ {price:.6g}\nPnL {pnl:+.2f}$ · Paper")
+        except Exception as e: log(f"{label} {sym}: {e}")
+
+def run_once_breakout(ex):
+    V = VB; state = load_state(); now = datetime.now(timezone.utc); day = _utc_day(now); prices = {}
+    if not CONFIG["paper_trading"]: log("⏸️ البريك أوت Paper بس"); return
+    if state.get("vb_day") != day.isoformat():
+        # a new UTC day: yesterday's trades close at today's open, then today's triggers
+        day_ms = int(day.timestamp() * 1000); closed = 0.0; n = 0
+        for sym in list(state["positions"]):
+            try:
+                k = ex.fetch_ohlcv(sym, "1d", limit=2)
+                px_open = float(k[-1][1]) if k and k[-1][0] == day_ms else float(ex.fetch_ticker(sym)["last"])
+                closed += _paper_close(ex, state, sym, px_open, "خروج افتتاح اليوم"); n += 1
+            except Exception as e: log(f"بريك أوت قفل {sym}: {e}")
+        plan = {}
+        for sym in volume_universe(ex, V["top"]):
+            try:
+                k = ex.fetch_ohlcv(sym, "1d", limit=V["ma"] + 3)
+                if not k or k[-1][0] != day_ms: continue                  # today's candle not open yet
+                closes = [r[4] for r in k[:-1]]; prev = k[-2]; rng = prev[2] - prev[3]
+                avg = sum(closes[-V["ma"]:]) / V["ma"]
+                plan[sym] = {"open": k[-1][1], "trigger": k[-1][1] + V["k"] * rng if rng > 0 else None, "above_ma": closes[-1] > avg,
+                             "range": rng}
+            except Exception as e: log(f"بريك أوت {sym}: {e}")
+        state.update(vb_day=day.isoformat(), vb_plan=plan, vb_done=[]); save_state(state)
+        armed = [f"{s.split('/')[0]} {p['trigger']:.6g}" for s, p in plan.items() if p["above_ma"] and p["trigger"]]
+        log(f"📐 بريك أوت: يوم جديد — قفل {n} صفقة {closed:+.2f}$ | مستني اختراق: {', '.join(armed) or 'ولا عملة فوق متوسط 20'}")
+        if n: notify(f"📐 بريك أوت (Paper): قفل {n} صفقة امبارح على افتتاح النهارده — {closed:+.2f}$")
+    _guard_stops(ex, state, prices, "بريك أوت")
+    plan = state.get("vb_plan") or {}
+    for sym, p in plan.items():
+        if not (p.get("above_ma") and p.get("trigger")) or sym in state["positions"] or sym in state.get("vb_done", []): continue
+        try:
+            price = prices.get(sym) or float(ex.fetch_ticker(sym)["last"]); prices[sym] = price
+            if price < p["trigger"]: continue
+            fill = price * (1 + V["slip"])
+            _paper_open(state, sym, fill, now, {"sl": fill * (1 - V["stop"]), "trigger": p["trigger"],
+                                                "exit_at": (day + pd.Timedelta(days=1)).isoformat()})
+            state.setdefault("vb_done", []).append(sym); save_state(state)
+            log(f"✅ 🟢 بريك أوت {sym} @ {fill:.6g} (الاختراق {p['trigger']:.6g})")
+            notify(f"🟢 بريك أوت {sym.split(':')[0]} (Paper)\nاخترق {p['trigger']:.6g} — دخول {fill:.6g}\nخروج: افتتاح بكرة 00:00 UTC · وقف أمان {fill * (1 - V['stop']):.6g}")
+        except Exception as e: log(f"بريك أوت دخول {sym}: {e}")
+    write_simple_status("breakout", state, prices, V, {"day": state.get("vb_day"),
+        "plan": [{"symbol": s.split(":")[0], "open": p["open"], "trigger": p["trigger"], "above_ma": p["above_ma"],
+                  "entered": s in state.get("vb_done", []), "price": prices.get(s)} for s, p in plan.items()]})
+    log(f"📊 بريك أوت: {len(state['positions'])} مفتوحة | PnL محقق {state['stats']['pnl']:+.4f}")
+
+def run_once_rsi2(ex):
+    R = RSI2; state = load_state(); now = datetime.now(timezone.utc); day = _utc_day(now); prices = {}
+    if not CONFIG["paper_trading"]: log("⏸️ RSI-2 Paper بس"); return
+    _guard_stops(ex, state, prices, "RSI-2")
+    if state.get("rsi2_day") != day.isoformat():
+        # once per closed daily candle: exits first, then new entries at about today's open
+        universe = volume_universe(ex, R["top"]); watch = []
+        for sym in sorted(set(universe) | set(state["positions"])):
+            try:
+                k = ex.fetch_ohlcv(sym, "1d", limit=R["trend_ma"] + 15)[:-1]   # closed candles only
+                c = [r[4] for r in k]
+                if len(c) < R["exit_ma"] + 1: continue
+                price = float(ex.fetch_ticker(sym)["last"]); prices[sym] = price
+                if sym in state["positions"]:
+                    pos = state["positions"][sym]
+                    held = (day - _utc_day(datetime.fromisoformat(pos["time"]))).days
+                    if c[-1] > sum(c[-R["exit_ma"]:]) / R["exit_ma"] or held >= R["max_days"]:
+                        why = f"قفل فوق متوسط {R['exit_ma']} يوم" if c[-1] > sum(c[-R["exit_ma"]:]) / R["exit_ma"] else f"{R['max_days']} أيام"
+                        pnl = _paper_close(ex, state, sym, price, why)
+                        log(f"📉 RSI-2: قفل {sym} @ {price:.6g} ({why}) PnL {pnl:+.4f}")
+                        notify(f"📉 RSI-2: قفل {sym.split(':')[0]} @ {price:.6g}\n{why} · PnL {pnl:+.2f}$ · Paper")
+                    continue
+                if sym not in universe or len(c) < R["trend_ma"]: continue
+                r2 = rsi_wilder(c, 2); ma = sum(c[-R["trend_ma"]:]) / R["trend_ma"]
+                watch.append({"symbol": sym.split(":")[0], "rsi2": round(r2, 1), "above_200": c[-1] > ma, "price": price})
+                if r2 < R["below"] and c[-1] > ma:
+                    _paper_open(state, sym, price, now, {"sl": price * (1 - R["stop"]), "rsi2": round(r2, 1),
+                                                         "exit_at": (day + pd.Timedelta(days=R["max_days"])).isoformat()})
+                    log(f"✅ 🟢 RSI-2 {sym} @ {price:.6g} (RSI-2 {r2:.1f} في ترند صاعد)")
+                    notify(f"🟢 RSI-2 {sym.split(':')[0]} (Paper)\nRSI-2 {r2:.1f} وفوق متوسط 200 يوم — دخول {price:.6g}\nخروج: أول قفل يومي فوق متوسط 5 أيام (أقصى {R['max_days']} أيام) · وقف {price * (1 - R['stop']):.6g}")
+            except Exception as e: log(f"RSI-2 {sym}: {e}")
+        state.update(rsi2_day=day.isoformat(), rsi2_watch=watch); save_state(state)
+    for sym in state["positions"]:
+        if sym not in prices:
+            try: prices[sym] = float(ex.fetch_ticker(sym)["last"])
+            except Exception: pass
+    write_simple_status("rsi2", state, prices, R, {"day": state.get("rsi2_day"), "watch": state.get("rsi2_watch", [])})
+    log(f"📊 RSI-2: {len(state['positions'])} مفتوحة | PnL محقق {state['stats']['pnl']:+.4f}")
+
+def write_simple_status(name, state, prices, rules, extra):
+    """Public <name>.json for a long-only paper bot, in the shape the site reads for momentum.json."""
+    out_dir = CONFIG.get("public_dir")
+    if not out_dir: return
+    pos = []
+    for sym, p in state["positions"].items():
+        price = prices.get(sym, p["entry"]); pnl = (price - p["entry"]) * p["qty"]
+        margin = p["entry"] * p["qty"] / max(1, int(p.get("leverage", 2)))
+        pos.append({"symbol": sym.split(":")[0], "id": sym.split("/")[0] + "USDT", "side": "long", "entry": p["entry"], "price": price,
+                    "qty": p["qty"], "margin": round(margin, 2), "sl": p["sl"], "pnl": round(pnl, 4),
+                    "pnl_pct": round(pnl / margin * 100, 2) if margin else 0, "opened": p["time"], "exit_at": p.get("exit_at")})
+    st = state.get("stats", {})
+    data = {"updated": datetime.now(timezone.utc).isoformat(), "mode": "paper" if CONFIG["paper_trading"] else "live", "rules": rules,
+            "leverage": int(CONFIG.get("leverage", 2)), "margin": CONFIG.get("trade_amount_usdt"), "started": CONFIG.get("started_at"),
+            "stats": {"closed": st.get("trades", 0), "wins": st.get("wins", 0), "losses": st.get("losses", 0),
+                      "realized": round(float(st.get("pnl", 0)), 4), "unrealized": round(sum(x["pnl"] for x in pos), 4), "open": len(pos)},
+            "positions": pos, **extra,
+            "history": [{"symbol": h["symbol"].split(":")[0], "side": "long", "entry": h["entry"], "exit": h["exit"], "pnl": round(h["pnl"], 4),
+                         "reason": h.get("reason", ""), "time": h.get("time"), "opened": h.get("opened")}
+                        for h in state.get("history", [])[-300:]][::-1]}
+    try:
+        d = Path(out_dir); tmp = d / f"{name}.json.tmp"
+        tmp.write_text(json.dumps(data, ensure_ascii=False, default=str), encoding="utf-8"); tmp.replace(d / f"{name}.json")
+    except Exception as e: log(f"public {name} status: {e}")
+
 def run_once():
+    if breakout_mode() or rsi2_mode():
+        global _rules_ex
+        if "_rules_ex" not in globals(): _rules_ex = ccxt.binanceusdm({"enableRateLimit": True})   # the research data is Binance's
+        return run_once_breakout(_rules_ex) if breakout_mode() else run_once_rsi2(_rules_ex)
     if ratio_mode():
         global _ratio_ex
         if "_ratio_ex" not in globals(): _ratio_ex = ccxt.binanceusdm({"enableRateLimit": True})
@@ -1762,7 +1915,15 @@ def run_once():
 def run_loop():
     mode="Paper وهمي" if CONFIG["paper_trading"] else "LIVE حقيقي"
     CONFIG["started_at"]=datetime.now(timezone.utc).isoformat()
-    if ratio_mode():
+    if breakout_mode():
+        V=VB
+        log(f"=== بريك أوت التذبذب (Larry Williams): أعلى {V['top']} فوليوم فوق متوسط {V['ma']} يوم، دخول عند الافتتاح + {V['k']} × مدى امبارح، خروج افتتاح بكرة — {mode} | هامش {CONFIG['trade_amount_usdt']} USDT x{CONFIG.get('leverage',2)} ===")
+        notify(f"▶️ بوت بريك أوت التذبذب اشتغل ({mode})\nأعلى {V['top']} عملة فوليوم · دخول عند اختراق الافتتاح + {V['k']} × مدى امبارح · خروج افتتاح اليوم التالي")
+    elif rsi2_mode():
+        R=RSI2
+        log(f"=== RSI-2 (Larry Connors): أعلى {R['top']} فوليوم فوق متوسط {R['trend_ma']} يوم، دخول لما RSI-2 تحت {R['below']}، خروج فوق متوسط {R['exit_ma']} أيام (أقصى {R['max_days']}) — {mode} | هامش {CONFIG['trade_amount_usdt']} USDT x{CONFIG.get('leverage',2)} ===")
+        notify(f"▶️ بوت RSI-2 اشتغل ({mode})\nأعلى {R['top']} عملة فوليوم في ترند صاعد · شراء الهبوط لما RSI-2 تحت {R['below']} · خروج فوق متوسط {R['exit_ma']} أيام")
+    elif ratio_mode():
         R=RATIO
         log(f"=== ⚠️ HIGH RISK — ratio trend: كل الأزواج بين أعلى {R['top']} فوليوم، فوق متوسط {R['sma']} يوم = لونج الأولى/شورت التانية — {mode} | هامش {CONFIG['trade_amount_usdt']} USDT x{CONFIG.get('leverage',2)} لكل رجل ===")
         notify(f"▶️ ⚠️ HIGH RISK — بوت ratio trend اشتغل ({mode})\nكل الأزواج بين أعلى {R['top']} عملة فوليوم · تجربة لمتابعة الأداء بس")

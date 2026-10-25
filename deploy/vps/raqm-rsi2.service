@@ -1,0 +1,23 @@
+[Unit]
+Description=Raqm bot — Larry Connors RSI-2 pullback, top 10 Binance coins above their 200-day average (paper, research/traders_study.py)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=raqm
+Group=raqm
+WorkingDirectory=/opt/raqm-bot
+EnvironmentFile=-/opt/raqm-bot/.env
+Environment=PYTHONUNBUFFERED=1
+# own state file (state_rsi2.json / state_rsi2.log); page data -> rsi2.json
+ExecStart=/opt/raqm-bot/venv/bin/python bot.py --paper --strategy rsi2_pullback --amount 100 --leverage 2 --poll 60 --notify --public /var/www/bot.da3m.io --state state_rsi2.json
+Restart=always
+RestartSec=30
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/raqm-bot /var/www/bot.da3m.io
+
+[Install]
+WantedBy=multi-user.target

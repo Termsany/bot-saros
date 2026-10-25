@@ -2,7 +2,7 @@
 // Live data of the four paper bots on the VPS — the same files https://bot.da3m.io reads.
 // nginx sends Access-Control-Allow-Origin for these files (deploy/vps/nginx-bot.da3m.io.conf).
 import { useEffect, useState } from "react"
-import { BOT_PAGE, STRATEGIES, type Strategy } from "./strategies"
+import { BOT_PAGE, LIVE_BOTS, type LiveStrategy } from "./strategies"
 
 /** sl = the stop price; exit = when/where it takes profit or leaves (each bot has its own rule — some have no fixed target). */
 export type LivePosition = { label: string; side: "long" | "short" | "pair"; entry?: number; price?: number; pnl: number; detail?: string
@@ -12,19 +12,21 @@ const day = (iso?: string) => iso ? new Date(iso).toLocaleDateString("ar-EG", { 
 const num = (v: number) => Number(v).toLocaleString("en-US", { maximumSignificantDigits: 6 })
 
 /** The exit rule of one position, in words, from what the bot publishes. */
-function exitRule(s: Strategy, d: any, p: any): string {
+function exitRule(s: LiveStrategy, d: any, p: any): string {
   if (s.live === "status") return p.exit_below ? `هدف: الترند يقف — لو قفل يومي تحت ${num(p.exit_below)}` : "هدف: الترند يقف (مفيش سعر هدف ثابت)"
   if (s.live === "momentum") return `هدف: التبديل الأسبوعي ${day(d.next_rebalance)}`
+  if (s.live === "breakout") return "هدف: خروج افتتاح بكرة 00:00 UTC"
+  if (s.live === "rsi2") return `هدف: أول قفل يومي فوق متوسط 5 أيام (لحد ${day(p.exit_at)})`
   if (s.live === "listing") return `هدف: خروج ${day(p.exit_at)} (بعد ${d.rules?.hold_days ?? 90} يوم)`
   return "مفيش وقف ثابت — خروج لما النسبة تعدي متوسط 50 يوم"
 }
 export type LiveBot = {
-  strategy: Strategy; ok: boolean; updated?: string; fresh: boolean
+  strategy: LiveStrategy; ok: boolean; updated?: string; fresh: boolean
   realized: number; unrealized: number; open: number; closed: number; wins: number; losses: number
   positions: LivePosition[]; note?: string; raw?: any
 }
 
-function normalise(s: Strategy, d: any): LiveBot {
+function normalise(s: LiveStrategy, d: any): LiveBot {
   const st = d.stats || {}
   const fresh = !!d.updated && Date.now() - Date.parse(d.updated) < 15 * 60_000
   let positions: LivePosition[] = []
@@ -50,7 +52,7 @@ export function useLiveBots(intervalMs = 15_000){
   useEffect(() => {
     let stop = false
     const load = async () => {
-      const res = await Promise.all(STRATEGIES.map(async s => {
+      const res = await Promise.all(LIVE_BOTS.map(async s => {
         try {
           const r = await fetch(`${BOT_PAGE}/${s.live}.json?t=${Date.now()}`, { cache: "no-store" })
           if (!r.ok) throw 0

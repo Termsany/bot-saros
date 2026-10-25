@@ -15,7 +15,7 @@ export function LiveBots({ bots, loaded }: { bots: LiveBot[], loaded: boolean })
       <div className="flex flex-wrap items-end justify-between gap-2">
         <div>
           <h2 className="text-lg font-bold">البوتات شغالة دلوقتي</h2>
-          <p className="text-[13px] text-muted">الـ 4 بوتات على السيرفر — Paper (فلوس وهمية)، بتتحدث كل 15 ثانية</p>
+          <p className="text-[13px] text-muted">الـ {bots.length || 6} بوتات على السيرفر — Paper (فلوس وهمية)، بتتحدث كل 15 ثانية</p>
         </div>
         <a href={BOT_PAGE} target="_blank" rel="noopener" className="flex items-center gap-1 text-sm font-semibold text-corona hover:underline">صفحة البوتات بالأسعار اللحظية <ExternalLink size={14}/></a>
       </div>
@@ -31,6 +31,7 @@ export function LiveBots({ bots, loaded }: { bots: LiveBot[], loaded: boolean })
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="text-base font-bold">{s.nameAr}</span>
                       {s.risk === "high" && <span className="rounded-full border border-loss/45 bg-loss/10 px-2 py-0.5 text-[10px] font-bold text-loss">⚠️ HIGH RISK</span>}
+                      {s.experimental && <span className="rounded-full border border-corona/45 bg-corona/10 px-2 py-0.5 text-[10px] font-bold text-corona">تجربة جديدة</span>}
                     </div>
                     <div className="text-xs text-muted">{s.desc} · {s.sides}</div>
                   </div>

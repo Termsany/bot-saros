@@ -178,6 +178,46 @@
     </table></div>
   </section>
 
+  <section id="boSec" style="margin-top:44px;border-top:1px solid var(--line);padding-top:26px;display:none">
+    <div class="head"><h2>بريك أوت التذبذب (Larry Williams) — تجربة Paper</h2><span class="count" id="boUpdated"></span></div>
+    <p class="sub" style="font-size:13px">بوت خامس منفصل: كل يوم على أعلى 10 عملات فوليوم على Binance اللي قفلت فوق متوسط 20 يوم، بيشتري لو السعر طلع فوق افتتاح اليوم بـ 0.7 من مدى امبارح، ويقفل على افتتاح اليوم اللي بعده. من غير وقف خلال اليوم (اختبار الساعة بيّن إنه بيقلل الربح) — بس وقف أمان 40% قبل التصفية.</p>
+    <div class="kpis" style="margin-top:14px">
+      <div class="card kpi"><div class="label">ربح محقق</div><div class="value mono" id="boRealized">—</div><div class="note" id="boWl">—</div></div>
+      <div class="card kpi"><div class="label">ربح الصفقات المفتوحة</div><div class="value mono" id="boUnreal">—</div><div class="note">بالسعر اللحظي من Binance</div></div>
+      <div class="card kpi"><div class="label">مفتوحة</div><div class="value mono" id="boOpen" style="font-size:18px">—</div><div class="note" id="boMargin">—</div></div>
+      <div class="card kpi"><div class="label">مستني اختراق النهارده</div><div class="value mono" id="boWatch" style="font-size:14px">—</div><div class="note" id="boTotal">—</div></div>
+    </div>
+    <div class="table" style="margin-top:14px"><table>
+      <thead><tr><th>العملة</th><th>الدخول</th><th>السعر الحالي</th><th>الوقف</th><th>الخروج</th><th>الربح $</th><th>على الهامش</th></tr></thead>
+      <tbody id="boPositions"><tr><td colspan="7" class="empty">بيحمّل…</td></tr></tbody>
+    </table></div>
+    <div class="head" style="margin-top:16px"><h2 style="font-size:14px">اتقفلت</h2><span class="count" id="boHistCount"></span></div>
+    <div class="table"><table>
+      <thead><tr><th>العملة</th><th>الدخول</th><th>الخروج</th><th>الربح $</th><th>السبب</th><th>الوقت</th></tr></thead>
+      <tbody id="boHistory"><tr><td colspan="6" class="empty">لسه مفيش صفقات اتقفلت</td></tr></tbody>
+    </table></div>
+  </section>
+
+  <section id="r2Sec" style="margin-top:44px;border-top:1px solid var(--line);padding-top:26px;display:none">
+    <div class="head"><h2>RSI-2 شراء الهبوط (Larry Connors) — تجربة Paper</h2><span class="count" id="r2Updated"></span></div>
+    <p class="sub" style="font-size:13px">بوت سادس منفصل: كل يوم على أعلى 10 عملات فوليوم فوق متوسط 200 يوم، بيشتري لما RSI-2 ينزل تحت 5 (هبوط حاد في ترند صاعد)، ويقفل أول ما يقفل يومي فوق متوسط 5 أيام أو بعد 10 أيام. وقف 40%.</p>
+    <div class="kpis" style="margin-top:14px">
+      <div class="card kpi"><div class="label">ربح محقق</div><div class="value mono" id="r2Realized">—</div><div class="note" id="r2Wl">—</div></div>
+      <div class="card kpi"><div class="label">ربح الصفقات المفتوحة</div><div class="value mono" id="r2Unreal">—</div><div class="note">بالسعر اللحظي من Binance</div></div>
+      <div class="card kpi"><div class="label">مفتوحة</div><div class="value mono" id="r2Open" style="font-size:18px">—</div><div class="note" id="r2Margin">—</div></div>
+      <div class="card kpi"><div class="label">أقرب عملات لإشارة</div><div class="value mono" id="r2Watch" style="font-size:14px">—</div><div class="note" id="r2Total">—</div></div>
+    </div>
+    <div class="table" style="margin-top:14px"><table>
+      <thead><tr><th>العملة</th><th>الدخول</th><th>السعر الحالي</th><th>الوقف</th><th>الخروج</th><th>الربح $</th><th>على الهامش</th></tr></thead>
+      <tbody id="r2Positions"><tr><td colspan="7" class="empty">بيحمّل…</td></tr></tbody>
+    </table></div>
+    <div class="head" style="margin-top:16px"><h2 style="font-size:14px">اتقفلت</h2><span class="count" id="r2HistCount"></span></div>
+    <div class="table"><table>
+      <thead><tr><th>العملة</th><th>الدخول</th><th>الخروج</th><th>الربح $</th><th>السبب</th><th>الوقت</th></tr></thead>
+      <tbody id="r2History"><tr><td colspan="6" class="empty">لسه مفيش صفقات اتقفلت</td></tr></tbody>
+    </table></div>
+  </section>
+
   <footer>
     نتايج Paper حيّة من البوت، مش نصيحة استثمارية ومش ضمان لأي ربح. اختبار الاستراتيجية التاريخي في
     <a href="https://github.com/Termsany/bot-saros/blob/main/research/README.md" rel="noopener">research/README.md</a>.
@@ -352,7 +392,8 @@ async function loadListing(){
 function bsubscribe(){
   if(!bws || bws.readyState !== 1) return
   const ids = [...(LS ? LS.positions : []), ...(typeof MS !== "undefined" && MS ? MS.positions : []),
-               ...(typeof RS !== "undefined" && RS ? RS.pairs.flatMap(p => [p.long, p.short]) : [])].map(p => p.id)
+               ...(typeof RS !== "undefined" && RS ? RS.pairs.flatMap(p => [p.long, p.short]) : []),
+               ...(typeof BO !== "undefined" && BO ? BO.positions : []), ...(typeof R2 !== "undefined" && R2 ? R2.positions : [])].map(p => p.id)
   const add = ids.filter(x => !bsubs.has(x))
   if(add.length) bws.send(JSON.stringify({ method: "SUBSCRIBE", params: add.map(x => `${x.toLowerCase()}@miniTicker`), id: Date.now() }))
   add.forEach(x => bsubs.add(x))
@@ -456,6 +497,58 @@ async function loadRatio(){
 loadRatio()
 setInterval(loadRatio, 15000)
 setInterval(() => { if(RS) renderRatio() }, 1000)
+// ── volatility breakout + RSI-2 (fifth and sixth paper bots): breakout.json / rsi2.json every 15 s, Binance prices ──
+let BO = null, R2 = null
+function renderSimple(key, d, watchHtml){
+  const sec = $(key + "Sec")
+  if(!d){ sec.style.display = "none"; return }
+  sec.style.display = ""
+  $(key + "Updated").textContent = `آخر دورة ${ago(d.updated)}`
+  const pos = d.positions.map(p => { const price = blive[p.id] ?? p.price, pnl = (price - p.entry) * p.qty
+    return { ...p, price, pnl, pnl_pct: p.margin ? pnl / p.margin * 100 : 0 } })
+  const s = d.stats, unreal = pos.reduce((a, p) => a + p.pnl, 0), total = s.realized + unreal
+  $(key + "Realized").innerHTML = `<span class="${tone(s.realized)}">${usd(s.realized)}</span>`
+  $(key + "Wl").textContent = `${s.closed} اتقفلت · ${s.wins} كسبانة / ${s.losses} خسرانة`
+  $(key + "Unreal").innerHTML = `<span class="${tone(unreal)}">${usd(unreal)}</span>`
+  $(key + "Open").textContent = `${pos.length} لونج`
+  $(key + "Margin").textContent = `هامش مستخدم $${pos.reduce((a, p) => a + p.margin, 0).toFixed(0)}`
+  $(key + "Watch").innerHTML = watchHtml
+  $(key + "Total").innerHTML = `الإجمالي <b class="mono ${tone(total)}">${usd(total)}</b>`
+  $(key + "Positions").innerHTML = pos.length ? pos.map(p => `<tr>
+      <td class="coin">${esc(p.symbol.replace("/USDT", ""))}</td>
+      <td class="num mono">${px(p.entry)}</td><td class="num mono">${px(p.price)}</td>
+      <td class="num mono" style="color:var(--faint)">${px(p.sl)}</td>
+      <td style="color:var(--muted)">${key === "bo" ? "افتتاح بكرة 00:00 UTC" : "قفل فوق متوسط 5 أيام · لحد " + day(p.exit_at)}</td>
+      <td class="num mono ${tone(p.pnl)}">${usd(p.pnl)}</td>
+      <td class="num mono ${tone(p.pnl_pct)}">${p.pnl_pct > 0 ? "+" : ""}${p.pnl_pct.toFixed(1)}%</td></tr>`).join("")
+    : `<tr><td colspan="7" class="empty">مفيش صفقات مفتوحة — مستني إشارة</td></tr>`
+  $(key + "HistCount").textContent = d.history.length ? `آخر ${d.history.length}` : ""
+  if(d.history.length) $(key + "History").innerHTML = d.history.slice(0, 100).map(h => `<tr>
+      <td class="coin">${esc(h.symbol.replace("/USDT", ""))}</td>
+      <td class="num mono">${px(h.entry)}</td><td class="num mono">${px(h.exit)}</td>
+      <td class="num mono ${tone(h.pnl)}">${usd(h.pnl)}</td>
+      <td style="color:var(--muted)">${esc(h.reason)}</td>
+      <td class="mono" style="color:var(--muted)">${day(h.time)}</td></tr>`).join("")
+}
+function renderBreakout(){
+  const plan = (BO && BO.plan || []).filter(p => p.above_ma && p.trigger && !p.entered)
+  renderSimple("bo", BO, plan.length ? plan.slice(0, 5).map(p => `${esc(p.symbol.replace("/USDT", ""))} <span class="mono">${px(p.trigger)}</span>`).join("<br>")
+                                     : `<span style="color:var(--faint)">ولا عملة فوق متوسط 20 النهارده</span>`)
+}
+function renderRsi2(){
+  const w = (R2 && R2.watch || []).filter(x => x.above_200).sort((a, b) => a.rsi2 - b.rsi2)
+  renderSimple("r2", R2, w.length ? w.slice(0, 4).map(x => `${esc(x.symbol.replace("/USDT", ""))} <span class="mono">RSI ${Number(x.rsi2).toFixed(0)}</span>`).join("<br>")
+                                  : `<span style="color:var(--faint)">مفيش عملة في ترند صاعد</span>`)
+}
+async function loadSimple(){
+  for(const [file, set, render] of [["breakout", v => BO = v, renderBreakout], ["rsi2", v => R2 = v, renderRsi2]]){
+    try{ const r = await fetch(`${file}.json?t=${Date.now()}`, {cache: "no-store"}); if(!r.ok) throw 0; set(await r.json()); render() } catch{ render() }
+  }
+  bsubscribe()
+}
+loadSimple()
+setInterval(loadSimple, 15000)
+setInterval(() => { if(BO) renderBreakout(); if(R2) renderRsi2() }, 1000)
 </script>
 </body>
 </html>

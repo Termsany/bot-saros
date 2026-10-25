@@ -34,6 +34,18 @@ const BASE: Omit<Strategy, keyof BotStats>[] = [
 const MEASURED = BOT_STATS.bots as unknown as Record<string, BotStats>
 export const STRATEGIES: Strategy[] = BASE.map(s => ({ ...s, ...MEASURED[s.id] }))
 
+/** What the live bots section needs about a bot. */
+export type LiveStrategy = Pick<Strategy, "id" | "name" | "nameAr" | "desc" | "sides" | "risk" | "live"> & { experimental?: boolean }
+/** Paper experiments running on the server next to the four bots — not in the plans or the backtest until they prove
+ *  themselves (research/traders_study.py, traders_robustness.py). */
+export const EXPERIMENTS: LiveStrategy[] = [
+  { id: "vol_breakout", name: "Volatility Breakout", nameAr: "بريك أوت التذبذب (Williams)", desc: "شراء اختراق الافتتاح + 0.7 من مدى امبارح، خروج افتتاح بكرة",
+    sides: "لونج", risk: "normal", live: "breakout", experimental: true },
+  { id: "rsi2_pullback", name: "RSI-2 Pullback", nameAr: "RSI-2 شراء الهبوط (Connors)", desc: "شراء الهبوط الحاد في ترند صاعد، خروج فوق متوسط 5 أيام",
+    sides: "لونج", risk: "normal", live: "rsi2", experimental: true },
+]
+export const LIVE_BOTS: LiveStrategy[] = [...STRATEGIES, ...EXPERIMENTS]
+
 /** Text colour for a profit factor / Sharpe: green good, gold roughly flat, red losing. */
 export const pfTone = (pf: number) => pf >= 1.05 ? "text-profit" : pf >= 0.95 ? "text-corona" : "text-loss"
 export const sharpeTone = (s: number) => s >= 1 ? "text-profit" : s >= 0.5 ? "text-corona" : "text-loss"

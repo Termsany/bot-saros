@@ -9,7 +9,7 @@ import { StrategyCards } from "@/components/StrategyCards"
 import { LiveBots } from "@/components/LiveBots"
 import { MyAccount } from "@/components/MyAccount"
 import { PAIRS, NAMES } from "@/lib/pairs"
-import { STRATEGIES } from "@/lib/strategies"
+import { LIVE_BOTS, STRATEGIES } from "@/lib/strategies"
 import { apiKlines } from "@/lib/api"
 import { useLiveBots } from "@/lib/live-bots"
 import { getMyTier, getUser } from "@/lib/supabase"
@@ -143,7 +143,7 @@ export default function Dashboard(){
         <header className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <h1 className="text-[26px] font-bold">لوحة التحكم</h1>
-            <p className="text-[13px] text-muted">{loaded ? `${total.running} من ${STRATEGIES.length} بوتات شغالة دلوقتي على السيرفر` : "بيحمّل البوتات…"} · الشارت: {NAMES[symbol]||symbol} على فريم {tf}</p>
+            <p className="text-[13px] text-muted">{loaded ? `${total.running} من ${LIVE_BOTS.length} بوتات شغالة دلوقتي على السيرفر` : "بيحمّل البوتات…"} · الشارت: {NAMES[symbol]||symbol} على فريم {tf}</p>
           </div>
           <div className="flex flex-wrap items-center gap-2 sm:gap-2.5" dir="ltr">
             <span className="flex items-center gap-1.5 rounded-full border border-line bg-surface px-3 py-1.5 font-mono text-[11px] font-bold text-profit"><i className="h-1.5 w-1.5 animate-pulse rounded-full bg-profit"/> LIVE · BINANCE</span>
@@ -156,10 +156,10 @@ export default function Dashboard(){
 
         {/* KPIs — the four bots together */}
         <section className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
-          <Kpi label="الربح المحقق" value={signed(total.realized)} chip={`${total.wins}W · ${total.losses}L`} tone={total.realized>=0?"profit":"loss"} sub="USDT · الـ 4 بوتات (Paper)"/>
+          <Kpi label="الربح المحقق" value={signed(total.realized)} chip={`${total.wins}W · ${total.losses}L`} tone={total.realized>=0?"profit":"loss"} sub={`USDT · الـ ${LIVE_BOTS.length} بوتات (Paper)`}/>
           <Kpi label="ربح الصفقات المفتوحة" value={signed(total.unrealized)} tone={total.unrealized>=0?"profit":"loss"} sub="USDT · بسعر آخر دورة"/>
           <Kpi label="الإجمالي" value={signed(total.realized + total.unrealized)} chip={closedTotal ? `${(total.wins/closedTotal*100).toFixed(0)}% فوز` : undefined} tone={total.realized + total.unrealized>=0?"profit":"loss"} sub="محقق + مفتوح"/>
-          <Kpi label="الصفقات المفتوحة" value={`${total.open}`} chip={`${total.running}/${STRATEGIES.length} شغالة`} tone="neutral" sub="على الـ 4 بوتات"/>
+          <Kpi label="الصفقات المفتوحة" value={`${total.open}`} chip={`${total.running}/${LIVE_BOTS.length} شغالة`} tone="neutral" sub={`على الـ ${LIVE_BOTS.length} بوتات`}/>
         </section>
 
         {/* chart (right) + strategies (left) */}

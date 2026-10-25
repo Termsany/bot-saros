@@ -60,7 +60,7 @@ SIG_OFF = {"price": 110.0, "trend": {"on": False, "ts": 2, "size": 1.0}, "in_uni
 class TrendLiveTests(unittest.TestCase):
     def setUp(self):
         self._cfg = dict(botmod.CONFIG)
-        self.td = tempfile.TemporaryDirectory()
+        self.td = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)   # Windows can still hold a file open
         self._paths = (botmod.STATE_PATH, botmod.LOG_PATH)
         botmod.STATE_PATH = Path(self.td.name) / "state.json"; botmod.LOG_PATH = Path(self.td.name) / "t.log"
         botmod.CONFIG.update({"paper_trading": False, "market": "future", "leverage": 5, "trade_amount_usdt": 100,
