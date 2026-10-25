@@ -10,7 +10,7 @@ import { LiveBots } from "@/components/LiveBots"
 import { MyAccount } from "@/components/MyAccount"
 import { PAIRS, NAMES } from "@/lib/pairs"
 import { LIVE_BOTS, STRATEGIES } from "@/lib/strategies"
-import { apiKlines } from "@/lib/api"
+import { apiIsAdmin, apiKlines } from "@/lib/api"
 import { useLiveBots } from "@/lib/live-bots"
 import { getMyTier, getUser } from "@/lib/supabase"
 
@@ -85,6 +85,8 @@ export default function Dashboard(){
   const [symbol, setSymbol] = useState("BTC/USDT")
   const [tf, setTf] = useState("1d")
   const { bots, total, loaded } = useLiveBots()
+  const [admin, setAdmin] = useState(false)
+  useEffect(()=>{ apiIsAdmin().then(setAdmin) }, [])
 
   const [candles, setCandles] = useState<Candle[]>([])
   const [loading, setLoading] = useState(true)
@@ -230,7 +232,7 @@ export default function Dashboard(){
 
         {tierReady && <MyAccount tier={tier} bots={bots}/>}
 
-        <LiveBots bots={bots} loaded={loaded}/>
+        <LiveBots bots={bots} loaded={loaded} admin={admin}/>
 
     </AppShell>
   )

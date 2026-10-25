@@ -1,7 +1,7 @@
 "use client"
 import { useEffect, useState } from "react"
 import { STRATEGIES, TIERS, sharpeTone } from "@/lib/strategies"
-import { apiGetSettings, apiSaveSettings, type UserSettings } from "@/lib/api"
+import { apiGetSettings, apiPortfolioClose, apiSaveSettings, type UserSettings } from "@/lib/api"
 import { pickSetup, personalPortfolio, smallestCapital } from "@/lib/personal"
 import { ago, type LiveBot } from "@/lib/live-bots"
 
@@ -18,6 +18,7 @@ export function MyAccount({ tier, bots }: { tier: string, bots: LiveBot[] }){
   const [strategy, setStrategy] = useState(unlocked[0].id)
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState("")
+  const [closing, setClosing] = useState("")
   useEffect(() => {
     apiGetSettings().then(s => {
       if (s === null) { setSignedIn(false); return }
@@ -37,7 +38,15 @@ export function MyAccount({ tier, bots }: { tier: string, bots: LiveBot[] }){
   const savedS = STRATEGIES.find(x => x.id === saved?.strategy)
   const savedSetup = savedS && saved?.capital ? pickSetup(savedS, saved.capital) : null
   const bot = bots.find(b => b.strategy.id === savedS?.id)
-  const mine = savedS && savedSetup && saved?.started_at && bot?.raw ? personalPortfolio(savedS, bot.raw, savedSetup, saved.started_at) : null
+  const mine = savedS && savedSetup && saved?.started_at && bot?.raw ? personalPortfolio(savedS, bot.raw, savedSetup, saved.started_at, saved.closes || []) : null
+
+  const closeMine = async (label: string, opened: string) => {
+    if (!confirm(`تقفل ${label} في محفظتك بالسعر الحالي؟\nده بيقفلها ليك إنت بس — البوت نفسه ما بيتغيرش.`)) return
+    setClosing(label + opened)
+    try { await apiPortfolioClose(label, opened); const s = await apiGetSettings(); if (s) setSaved(s) }
+    catch (e: any) { alert(`⚠️ ${e.message}`) }
+    finally { setClosing("") }
+  }
 
   const save = async () => {
     setBusy(true); setMsg("")
@@ -120,7 +129,7 @@ export function MyAccount({ tier, bots }: { tier: string, bots: LiveBot[] }){
           ) : (
             <div className="mt-3 overflow-x-auto">
               <table className="w-full min-w-[420px] text-sm">
-                <thead><tr className="text-right text-[11px] text-faint"><th className="py-1.5 font-semibold">العملة</th><th className="font-semibold">الاتجاه</th><th className="font-semibold">الحالة</th><th className="text-left font-semibold">الربح</th></tr></thead>
+                <thead><tr className="text-right text-[11px] text-faint"><th className="py-1.5 font-semibold">العملة</th><th className="font-semibold">الاتجاه</th><th className="font-semibold">الحالة</th><th className="text-left font-semibold">الربح</th><th></th></tr></thead>
                 <tbody>
                   {[...mine.open.map(t => ({ ...t, st: "مفتوحة" })), ...mine.closed.slice(0, 20).map(t => ({ ...t, st: `اتقفلت ${ago(t.closed)}` }))].map((t, i) => (
                     <tr key={i} className="border-t border-line/60">
@@ -128,13 +137,17 @@ export function MyAccount({ tier, bots }: { tier: string, bots: LiveBot[] }){
                       <td className="text-xs">{t.side === "long" ? "لونج" : t.side === "short" ? "شورت" : "زوج"}</td>
                       <td className="text-xs text-muted">{t.st}</td>
                       <td className={`text-left font-mono tabular ${tone(t.pnl)}`} dir="ltr">{money(t.pnl)}</td>
+                      <td className="pl-1 text-left">{t.st === "مفتوحة" && (
+                        <button onClick={() => closeMine(t.label, t.opened)} disabled={closing === t.label + t.opened}
+                          className="rounded-md border border-loss/50 px-2 py-0.5 text-[11px] font-bold text-loss hover:bg-loss/10 disabled:opacity-50">
+                          {closing === t.label + t.opened ? "…" : "اقفل"}</button>)}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
           )}
-          {savedS.live === "status" && <p className="mt-2 text-[11px] leading-5 text-faint">بوت الترند الشغال على x5 بوقف 16%، والمحفظة دي محسوبة بنسبة حجمك لحجمه (x2) — تقريب.</p>}
+          <p className="mt-2 text-[11px] leading-5 text-faint">«اقفل» بيقفل الصفقة في محفظتك إنت بس، بسعر البوت الحالي — البوت وباقي المستخدمين ما بيتأثروش.</p>
         </div>
       )}
     </section>

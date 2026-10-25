@@ -9,6 +9,8 @@ Group=raqm
 WorkingDirectory=/opt/raqm-bot
 EnvironmentFile=-/opt/raqm-bot/.env
 Environment=PYTHONUNBUFFERED=1
+# admin close requests from the site (deploy/vps/setup-paper-ipc.sh)
+Environment=RAQM_PAPER_IPC=/opt/raqm-ipc-paper
 # own state file (state_tbreak.json / state_tbreak.log); page data -> tbreak.json
 ExecStart=/opt/raqm-bot/venv/bin/python bot.py --paper --strategy trend_breakout --amount 100 --leverage 2 --poll 60 --notify --public /var/www/bot.da3m.io --state state_tbreak.json
 Restart=always
@@ -17,7 +19,7 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-ReadWritePaths=/opt/raqm-bot /var/www/bot.da3m.io
+ReadWritePaths=/opt/raqm-bot /var/www/bot.da3m.io /opt/raqm-ipc-paper
 
 [Install]
 WantedBy=multi-user.target

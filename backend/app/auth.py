@@ -68,6 +68,13 @@ async def require_user(authorization: str = Header(default="")) -> dict:
     return await _verify_token(_bearer(authorization))
 
 
+def is_admin(user: dict) -> bool:
+    """Same rules as require_admin, as a yes/no (for showing admin buttons; every admin endpoint still checks)."""
+    admins = _admin_emails()
+    ids = {x.strip() for x in os.getenv("ADMIN_USER_IDS", "").split(",") if x.strip()}
+    return bool(admins and user.get("email") in admins and user.get("email_confirmed") and (not ids or user.get("id") in ids))
+
+
 async def require_admin(authorization: str = Header(default="")) -> dict:
     user = await _verify_token(_bearer(authorization))
     admins = _admin_emails()

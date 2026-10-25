@@ -37,7 +37,8 @@ export async function apiUserTier(): Promise<string|null>{
     const r=await fetch(`${API}/api/user/tier`, { headers }); return r.ok ? (await r.json()).tier : null
   }catch{ return null }
 }
-export type UserSettings = { capital?: number; strategy?: string; started_at?: string }
+export type UserClose = { key: string; bot_pnl: number; exit_price: number|null; closed_at: string }
+export type UserSettings = { capital?: number; strategy?: string; started_at?: string; closes?: UserClose[] }
 /** The user's capital + chosen bot (personal paper portfolio on the dashboard). */
 export async function apiGetSettings(): Promise<UserSettings|null>{
   try{
@@ -51,6 +52,28 @@ export async function apiSaveSettings(body: { capital: number; strategy: string 
   if(!r.ok) throw new Error(d.detail || "ما اتحفظش")
   return d
 }
+/** Is the signed-in user the admin (shows the admin buttons; every admin endpoint checks again). */
+export async function apiIsAdmin(): Promise<boolean>{
+  try{
+    const headers = await signedInHeaders(); if(!headers) return false
+    const r=await fetch(`${API}/api/user/me`, { headers, cache: "no-store" }); return r.ok ? !!(await r.json()).admin : false
+  }catch{ return false }
+}
+async function postJson(path: string, body: any){
+  const r=await fetch(`${API}${path}`, { method:"POST", headers: await authHeaders(JSON_CT), body: JSON.stringify(body) })
+  const d = await r.json().catch(()=>({}))
+  if(!r.ok) throw new Error(d.detail || "الطلب ما اتبعتش")
+  return d
+}
+/** Close one trade in the caller's own paper portfolio (at the bot's current price, on the server). */
+export const apiPortfolioClose = (label: string, opened: string) => postJson("/api/user/portfolio/close", { label, opened })
+/** Admin: ask a paper bot to close one of its positions; the result comes from apiPaperCloseResult. */
+export const apiPaperClose = (bot: string, symbol: string): Promise<{ id: string }> => postJson("/api/paper/close", { bot, symbol })
+export async function apiPaperCloseResult(bot: string, id: string): Promise<any>{
+  const r=await fetch(`${API}/api/paper/close/${bot}/${id}`, { headers: await authHeaders(), cache: "no-store" })
+  return r.ok ? r.json() : { done: false }
+}
+
 // ── real-orders bot (admin only): positions, manual close, its result
 export async function apiLiveStatus(): Promise<any|null>{
   try{

@@ -143,3 +143,47 @@ class TrendBreakoutTests(Base):
         with mock.patch.object(botmod, "volume_universe", return_value=["SOL/USDT:USDT"]):
             botmod.run_once_tbreak(ex)
         self.assertEqual(botmod.load_state()["positions"], {})
+
+
+class PaperCloseTests(Base):
+    """Admin closes on the paper bots (process_paper_closes): only closes, recorded like the bot's own exit."""
+    RID = "fedcba9876543210fedcba9876543210"
+
+    def _req(self, ipc, key, symbol, rid=None, age=0):
+        import json, time
+        d = ipc / key / "commands"; d.mkdir(parents=True, exist_ok=True)
+        (d / "close-1.json").write_text(json.dumps({"id": rid or self.RID, "symbol": symbol, "at_epoch": time.time() - age}))
+
+    def _run(self, ipc, key, state, ex):
+        with mock.patch.dict(os.environ, {"RAQM_PAPER_IPC": str(ipc)}):
+            botmod.process_paper_closes(state, ex, key)
+        import json
+        f = ipc / key / "results" / f"{self.RID}.json"
+        return json.loads(f.read_text(encoding="utf-8")) if f.exists() else None
+
+    def test_momentum_position_closed_at_the_current_price(self):
+        ipc = Path(self.td.name) / "ipc"; now = datetime.now(timezone.utc)
+        st = botmod.load_state()
+        botmod._paper_open(st, "SOL/USDT:USDT", 100.0, now, {"sl": 60.0}); st["positions"]["SOL/USDT:USDT"]["side"] = "short"
+        self._req(ipc, "momentum", "SOL/USDT")
+        res = self._run(ipc, "momentum", st, FakeEx({}, {"SOL/USDT:USDT": 90.0}))
+        self.assertTrue(res["ok"]); self.assertNotIn("SOL/USDT:USDT", st["positions"])
+        h = st["history"][-1]; self.assertEqual(h["reason"], "قفل يدوي (أدمن)"); self.assertGreater(h["pnl"], 0)   # short from 100 to 90
+
+    def test_paper_trend_close_holds_the_coin(self):
+        ipc = Path(self.td.name) / "ipc"; st = botmod.load_state()
+        st["positions"]["BTC/USDT:USDT"] = {"side": "long", "entry": 100.0, "qty": 2.0, "time": "2026-10-20T00:00:00+00:00", "trend": True, "sl": 60}
+        self._req(ipc, "status", "BTC/USDT")
+        res = self._run(ipc, "status", st, FakeEx({}, {"BTC/USDT:USDT": 110.0}))
+        self.assertTrue(res["ok"]); self.assertAlmostEqual(res["pnl"], 20.0)
+        self.assertIn("BTC/USDT:USDT", st["manual_hold"])
+
+    def test_bad_id_or_stale_request_closes_nothing(self):
+        ipc = Path(self.td.name) / "ipc"; now = datetime.now(timezone.utc); st = botmod.load_state()
+        botmod._paper_open(st, "SOL/USDT:USDT", 100.0, now, {"sl": 60.0}); st["positions"]["SOL/USDT:USDT"]["side"] = "long"
+        self._req(ipc, "rsi2", "SOL/USDT", rid="../../state")
+        self._run(ipc, "rsi2", st, FakeEx({}, {"SOL/USDT:USDT": 90.0}))
+        self.assertIn("SOL/USDT:USDT", st["positions"])
+        self._req(ipc, "rsi2", "SOL/USDT", age=3600)
+        res = self._run(ipc, "rsi2", st, FakeEx({}, {"SOL/USDT:USDT": 90.0}))
+        self.assertFalse(res["ok"]); self.assertIn("SOL/USDT:USDT", st["positions"])

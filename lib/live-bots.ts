@@ -6,7 +6,7 @@ import { BOT_PAGE, LIVE_BOTS, type LiveStrategy } from "./strategies"
 
 /** sl = the stop price; exit = when/where it takes profit or leaves (each bot has its own rule — some have no fixed target). */
 export type LivePosition = { label: string; side: "long" | "short" | "pair"; entry?: number; price?: number; pnl: number; detail?: string
-  sl?: number; exit?: string }
+  sl?: number; exit?: string; ref: string }   // ref: what an admin close request names (the coin, or the ratio pair key)
 
 const day = (iso?: string) => iso ? new Date(iso).toLocaleDateString("ar-EG", { day: "numeric", month: "short", timeZone: "UTC" }) : "—"
 const num = (v: number) => Number(v).toLocaleString("en-US", { maximumSignificantDigits: 6 })
@@ -34,12 +34,12 @@ function normalise(s: LiveStrategy, d: any): LiveBot {
   let note: string | undefined
   if (s.live === "ratio") {
     positions = (d.pairs || []).map((p: any) => ({ label: `${p.long.symbol.replace("/USDT", "")} / ${p.short.symbol.replace("/USDT", "")}`,
-      side: "pair", pnl: p.pnl, detail: "لونج / شورت", exit: exitRule(s, d, p) }))
+      side: "pair", pnl: p.pnl, detail: "لونج / شورت", exit: exitRule(s, d, p), ref: p.pair }))
     if (d.members?.length) note = `القائمة: ${d.members.join(" · ")}`
   } else {
     positions = (d.positions || []).map((p: any) => ({ label: p.symbol.replace("/USDT", ""), side: p.side, entry: p.entry, price: p.price, pnl: p.pnl,
       detail: p.ret !== undefined ? `${p.ret > 0 ? "+" : ""}${Number(p.ret).toFixed(0)}% أسبوعين` : undefined,
-      sl: p.sl ?? undefined, exit: exitRule(s, d, p) }))
+      sl: p.sl ?? undefined, exit: exitRule(s, d, p), ref: p.symbol }))
     if (s.live === "listing" && d.upcoming?.length) note = `جاي: ${d.upcoming.slice(0, 3).map((u: any) => `${u.symbol.replace("/USDT", "")} بعد ${Math.max(0, Math.ceil(u.days_left))} يوم`).join(" · ")}`
     if (s.live === "momentum" && d.next_rebalance) note = `التبديل الجاي: ${new Date(d.next_rebalance).toLocaleDateString("ar-EG", { weekday: "long", day: "numeric", month: "short", timeZone: "UTC" })}`
   }

@@ -213,9 +213,11 @@ def _listing_close(ex, state, sym, price, reason):
     save_state(state)
     log(f"🔒 قفل شورت {sym} — {reason} @ {price:.6g} PnL {pnl:+.4f} (funding {funding:+.4f})")
     notify(f"🔒 قفل شورت {sym.split(':')[0]} — {reason}\nدخول {pos['entry']:.6g} → خروج {price:.6g}\nPnL {pnl:+.2f}$ (funding {funding:+.2f}$) · Paper")
+    return pnl
 
 def run_once_listing(ex):
     L = LISTING; state = load_state(); now = datetime.now(timezone.utc)
+    process_paper_closes(state, ex, "listing")
     done = state.setdefault("listing_done", {})
     mk = listing_markets(ex); prices = {}
     # open shorts: protective stop and the 90-day exit
@@ -319,6 +321,7 @@ def _paper_close(ex, state, sym, price, reason):
 
 def run_once_momentum(ex):
     M = MOM; state = load_state(); now = datetime.now(timezone.utc); prices = {}
+    process_paper_closes(state, ex, "momentum")
     # protective stops during the week
     for sym, pos in list(state["positions"].items()):
         try:
@@ -442,6 +445,7 @@ def _ratio_close_pair(ex, state, key, prices, reason, fcache):
 
 def run_once_ratio(ex):
     R = RATIO; state = load_state(); state.setdefault("pairs", {}); now = datetime.now(timezone.utc)
+    process_paper_closes(state, ex, "ratio")
     today = now.replace(hour=0, minute=0, second=0, microsecond=0); prices = {}
     if state.get("ratio_day") != today.isoformat():          # once a day, right after the daily close
         cache, fcache = {}, {}
@@ -1385,6 +1389,73 @@ def process_manual_closes(state, ex, prices):
         try: f.unlink()
         except Exception: pass
 
+PAIR_RE = r"[A-Z0-9]{1,20}/USDT:USDT\|[A-Z0-9]{1,20}/USDT:USDT"
+
+def process_paper_closes(state, ex, key):
+    """Admin close requests for a paper bot (site: live bots section): RAQM_PAPER_IPC/<key>/commands/close-*.json,
+    written by the API after checking the position exists. Only closes, at the current price, recorded like any exit;
+    requests older than 10 minutes are dropped. key = the bot's public file name (status, momentum, ratio, ...)."""
+    d = os.getenv("RAQM_PAPER_IPC", "").strip()
+    if not d: return
+    cmd_dir, res_dir = Path(d) / key / "commands", Path(d) / key / "results"
+    try: files = sorted(cmd_dir.glob("close-*.json"))
+    except Exception: return
+    try:
+        for old in res_dir.glob("*.json"):
+            if time.time() - old.stat().st_mtime > 86400: old.unlink()
+    except Exception: pass
+    for f in files:
+        if f.is_symlink() or not f.is_file():
+            try: f.unlink()
+            except OSError: pass
+            continue
+        try: req = json.loads(f.read_text(encoding="utf-8"))
+        except Exception: req = {}
+        rid, sym = str(req.get("id", "")), str(req.get("symbol", ""))
+        sym_ok = re.fullmatch(PAIR_RE, sym) if key == "ratio" else re.fullmatch(r"[A-Z0-9]{1,20}/USDT(:USDT)?", sym)
+        try: f.unlink()
+        except OSError: pass
+        if not re.fullmatch(r"[0-9a-f]{32}", rid) or not sym_ok:
+            log(f"⚠️ طلب قفل مرفوض ({f.name})"); continue
+        out = {"id": rid, "symbol": sym, "done_at": datetime.now(timezone.utc).isoformat()}
+        at = float(req.get("at_epoch") or 0); age = time.time() - at
+        reason = "قفل يدوي (أدمن)"
+        try:
+            if at <= 0 or age < -60 or age > MANUAL_CLOSE_MAX_AGE_S:
+                out.update(ok=False, msg="الطلب قديم — اتلغى من غير تنفيذ")
+            elif key == "ratio":
+                if sym not in state.get("pairs", {}): out.update(ok=False, msg="الزوج ده مش مفتوح")
+                else:
+                    pnl = _ratio_close_pair(ex, state, sym, {}, reason, {}); save_state(state)
+                    out.update(ok=True, msg="اتقفل", pnl=round(pnl, 4))
+            else:
+                match = next((k for k in state["positions"] if k.split(":")[0] == sym.split(":")[0]), None)
+                if not match: out.update(ok=False, msg="مفيش صفقة مفتوحة على العملة دي")
+                else:
+                    price = float(ex.fetch_ticker(match)["last"])
+                    if key == "status":       # paper daily trend: same record as its own exit, then no re-buy until the trend resets
+                        pos = state["positions"].pop(match); pnl = (price - pos["entry"]) * pos["qty"]
+                        state["history"].append({"symbol": match, "side": "long", "entry": pos["entry"], "exit": price, "qty": pos["qty"], "pnl": pnl,
+                            "pnl_pct": pnl / (pos["entry"] * pos["qty"]) * 100, "reason": reason, "time": datetime.now(timezone.utc).isoformat(),
+                            "type": "paper", "opened": pos.get("time"), "rank": pos.get("rank")})
+                        st = state["stats"]; st["trades"] += 1; st["pnl"] += float(pnl); st["wins" if pnl > 0 else "losses"] += 1
+                        state["last_trade"][match] = datetime.now(timezone.utc).isoformat()
+                        state.setdefault("manual_hold", {})[match] = datetime.now(timezone.utc).isoformat()
+                    elif key == "listing":
+                        pnl = _listing_close(ex, state, match, price, reason)
+                    else:
+                        pnl = _paper_close(ex, state, match, price, reason)
+                    save_state(state)
+                    out.update(ok=True, msg="اتقفلت", price=price, pnl=round(pnl, 4))
+            if out.get("ok"):
+                log(f"🖐️ {key}: {reason} {sym} — {out.get('pnl'):+.4f}")
+                notify(f"🖐️ قفل يدوي من الموقع ({key}): {sym.split(':')[0].replace('/USDT', '')}\nPnL {out.get('pnl'):+.2f}$ · Paper")
+        except Exception as e:
+            out.update(ok=False, msg=f"القفل فشل: {e}"); log(f"⚠️ {key} قفل يدوي {sym}: {e}")
+        try:
+            res_dir.mkdir(exist_ok=True); _write_json_atomic(res_dir / f"{rid}.json", out)
+        except Exception as e: log(f"paper close result {rid}: {e}")
+
 def write_live_status(state, prices, analyses=None):
     """What the site's admin page shows for the real-orders bot (not public)."""
     d = _ipc_dir()
@@ -1774,6 +1845,7 @@ def _guard_stops(ex, state, prices, label):
 
 def run_once_breakout(ex):
     V = VB; state = load_state(); now = datetime.now(timezone.utc); day = _utc_day(now); prices = {}
+    process_paper_closes(state, ex, "breakout")
     if not CONFIG["paper_trading"]: log("⏸️ البريك أوت Paper بس"); return
     if state.get("vb_day") != day.isoformat():
         # a new UTC day: yesterday's trades close at today's open, then today's triggers
@@ -1819,6 +1891,7 @@ def run_once_breakout(ex):
 
 def run_once_rsi2(ex):
     R = RSI2; state = load_state(); now = datetime.now(timezone.utc); day = _utc_day(now); prices = {}
+    process_paper_closes(state, ex, "rsi2")
     if not CONFIG["paper_trading"]: log("⏸️ RSI-2 Paper بس"); return
     _guard_stops(ex, state, prices, "RSI-2")
     if state.get("rsi2_day") != day.isoformat():
@@ -1868,6 +1941,7 @@ def tbreak_mode():
 
 def run_once_tbreak(ex):
     T = TB; state = load_state(); now = datetime.now(timezone.utc); day = _utc_day(now); prices = {}
+    process_paper_closes(state, ex, "tbreak")
     if not CONFIG["paper_trading"]: log("⏸️ اختراق الترند Paper بس"); return
     _guard_stops(ex, state, prices, "اختراق الترند")
     if state.get("tb_day") != day.isoformat():
@@ -1955,6 +2029,7 @@ def run_once():
         # switching to paper here would "close" real positions only in state.json and leave them open on the exchange
         log(f"⛔ LIVE من غير مفاتيح: {err} — البوت وقف"); notify(f"⛔ البوت الحقيقي وقف: {err}")
         raise SystemExit(2)
+    if CONFIG["paper_trading"]: process_paper_closes(state, ex, "status")
     prices={}; analyses={}
     # live: the coin list and the signals come from Binance's real public market (no keys) — Demo Trading's own
     # volumes and candles are its play-money activity — and only orders, positions and balance use the account

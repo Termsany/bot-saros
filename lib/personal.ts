@@ -17,13 +17,17 @@ export function pickSetup(s: Strategy, capital: number): Setup | null {
 }
 export const smallestCapital = (s: Strategy) => Math.min(...(s.profiles || []).map(p => p.minCapital))
 
-export type PersonalTrade = { label: string; side: string; entry?: number; exit?: number; price?: number; pnl: number; opened: string; closed?: string; reason?: string }
+export type PersonalTrade = { manual?: boolean; label: string; side: string; entry?: number; exit?: number; price?: number; pnl: number; opened: string; closed?: string; reason?: string }
 export type Personal = { open: PersonalTrade[]; closed: PersonalTrade[]; realized: number; unrealized: number; scale: number }
 
 const after = (iso: string | undefined, start: string) => !!iso && Date.parse(iso) >= Date.parse(start)
 
 /** The live bot's trades kept by the user's size, opened after `startedAt`, scaled to the user's margin (x2 as tested). */
-export function personalPortfolio(s: Strategy, raw: any, setup: Setup, startedAt: string): Personal {
+/** A trade's identity across the bot's file and the user's own closes (the server builds the same key). */
+export const tradeKey = (t: { label: string; opened: string }) => `${t.label}@${t.opened}`
+
+export function personalPortfolio(s: Strategy, raw: any, setup: Setup, startedAt: string,
+                                  closes: { key: string; bot_pnl: number; exit_price: number | null; closed_at: string }[] = []): Personal {
   const n = setup.profile.n
   // bot position notional = its margin × leverage (trend bot: $100 × 5; the others $20 × 2); user = margin × 2
   const scale = (setup.margin * 2) / ((+raw?.margin || 20) * (+raw?.leverage || 2))
@@ -61,5 +65,14 @@ export function personalPortfolio(s: Strategy, raw: any, setup: Setup, startedAt
     closed = hist.filter((h: any) => inTop(h) && after(h.opened, startedAt))
       .map((h: any) => ({ label: h.pair, side: "pair", pnl: h.pnl * scale, opened: h.opened, closed: h.time, reason: h.reason }))
   }
+  // the user's own manual closes win over the bot: closed at the bot's PnL of that moment, scaled to the user
+  const mine = new Map(closes.map(c => [c.key, c]))
+  const asClosed = (t: PersonalTrade): PersonalTrade => {
+    const c = mine.get(tradeKey(t))!
+    return { ...t, pnl: c.bot_pnl * scale, exit: c.exit_price ?? undefined, closed: c.closed_at, reason: "قفل يدوي", manual: true }
+  }
+  closed = [...open.filter(t => mine.has(tradeKey(t))).map(asClosed), ...closed.map(t => mine.has(tradeKey(t)) ? asClosed(t) : t)]
+    .sort((a, b) => Date.parse(b.closed || "") - Date.parse(a.closed || ""))
+  open = open.filter(t => !mine.has(tradeKey(t)))
   return { open, closed, scale, realized: closed.reduce((a, t) => a + t.pnl, 0), unrealized: open.reduce((a, t) => a + t.pnl, 0) }
 }

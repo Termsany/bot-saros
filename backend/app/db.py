@@ -52,6 +52,15 @@ class UserSetting(Base):
     started_at = Column(String)
     updated_at = Column(String)
 
+class UserClose(Base):
+    """A trade the user closed by hand in their personal paper portfolio (it only changes their own record)."""
+    __tablename__ = "user_closes"
+    user_id = Column(String, primary_key=True)
+    trade_key = Column(String, primary_key=True)   # "<label>@<opened>" as the site builds it (BTC@2026-..., SOL / ETH@...)
+    bot_pnl = Column(Float)                         # the bot's own PnL on that trade at the moment of the close
+    exit_price = Column(Float, nullable=True)       # single-coin trades only
+    closed_at = Column(String)
+
 class BotInstance(Base):
     __tablename__ = "bot_instances"
     id = Column(Integer, primary_key=True, autoincrement=True)

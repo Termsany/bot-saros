@@ -10,6 +10,8 @@ WorkingDirectory=/opt/raqm-bot
 # TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID — never committed
 EnvironmentFile=-/opt/raqm-bot/.env
 Environment=PYTHONUNBUFFERED=1
+# admin close requests from the site (deploy/vps/setup-paper-ipc.sh)
+Environment=RAQM_PAPER_IPC=/opt/raqm-ipc-paper
 ExecStart=/opt/raqm-bot/venv/bin/python bot.py --paper --strategy trend_daily --leverage 2 --amount 100 --universe 10 --poll 60 --notify --public /var/www/bot.da3m.io
 Restart=always
 RestartSec=30
@@ -17,7 +19,7 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-ReadWritePaths=/opt/raqm-bot /var/www/bot.da3m.io
+ReadWritePaths=/opt/raqm-bot /var/www/bot.da3m.io /opt/raqm-ipc-paper
 
 [Install]
 WantedBy=multi-user.target

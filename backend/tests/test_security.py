@@ -297,3 +297,56 @@ class LiveCloseApiTests(ApiAuthTests):
         self.assertEqual(self.c.post("/api/live/close", headers=self.h("admin-token"), json={"symbol": "ETH/USDT"}).status_code, 404)
         self.assertEqual(self.c.post("/api/live/close", headers=self.h("admin-token"), json={"symbol": "../../x"}).status_code, 400)
         self.assertEqual(self.c.get("/api/live/close/../../etc", headers=self.h("admin-token")).status_code in (400, 404), True)
+
+
+class ManualCloseApiTests(unittest.TestCase):
+    """User closes in their own portfolio; the admin closes paper bot positions. Own class: ApiAuthTests' tests
+    must not rerun with these patches."""
+    h = ApiAuthTests.h
+
+    def setUp(self):
+        ApiAuthTests.setUp(self)
+        import app.main as m, json as _j
+        from app.db import init_db, async_session, UserSetting, UserClose
+        from sqlalchemy import delete
+        async def _fresh():
+            await init_db()
+            async with async_session() as sess:
+                for model in (UserSetting, UserClose): await sess.execute(delete(model).where(model.user_id == USER["id"]))
+                await sess.commit()
+        asyncio.run(_fresh())
+        from datetime import datetime, timezone, timedelta
+        self.pub = Path(self.tmp.name) / "pub"; self.pub.mkdir()
+        self.ipc = Path(self.tmp.name) / "paper"
+        for b in m.PAPER_BOTS: (self.ipc / b / "commands").mkdir(parents=True); (self.ipc / b / "results").mkdir()
+        self.opened = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()   # after the user's start
+        (self.pub / "momentum.json").write_text(_j.dumps({"positions": [{"symbol": "SOL/USDT", "side": "long", "entry": 100, "price": 110,
+                                                                         "qty": 1, "pnl": 10.0, "opened": self.opened}]}))
+        self.patches2 = [mock.patch.object(m, "BOT_PUBLIC_DIR", self.pub), mock.patch.object(m, "PAPER_IPC", self.ipc),
+                         mock.patch.object(m, "get_tier", mock.AsyncMock(return_value="elite"))]
+        for p in self.patches2: p.start()
+    def tearDown(self):
+        for p in self.patches2: p.stop()
+        ApiAuthTests.tearDown(self)
+
+    def test_me_tells_admin_from_user(self):
+        self.assertTrue(self.c.get("/api/user/me", headers=self.h("admin-token")).json()["admin"])
+        self.assertFalse(self.c.get("/api/user/me", headers=self.h("user-token")).json()["admin"])
+
+    def test_paper_close_admin_only_and_writes_one_request(self):
+        body = {"bot": "momentum", "symbol": "SOL/USDT"}
+        self.assertEqual(self.c.post("/api/paper/close", headers=self.h("user-token"), json=body).status_code, 403)
+        r = self.c.post("/api/paper/close", headers=self.h("admin-token"), json=body)
+        self.assertEqual(r.status_code, 200); self.assertEqual(len(list((self.ipc / "momentum" / "commands").glob("close-*.json"))), 1)
+        self.assertEqual(self.c.post("/api/paper/close", headers=self.h("admin-token"), json={"bot": "../x", "symbol": "SOL/USDT"}).status_code, 400)
+        self.assertEqual(self.c.post("/api/paper/close", headers=self.h("admin-token"), json={"bot": "momentum", "symbol": "ETH/USDT"}).status_code, 404)
+
+    def test_user_closes_own_trade_at_the_bots_price_once(self):
+        self.c.post("/api/user/settings", headers=self.h("user-token"), json={"capital": 1000, "strategy": "momentum_ls"})
+        import time; time.sleep(0.01)
+        r = self.c.post("/api/user/portfolio/close", headers=self.h("user-token"), json={"label": "SOL", "opened": self.opened})
+        self.assertEqual(r.status_code, 200, r.text); self.assertEqual(r.json()["exit_price"], 110); self.assertEqual(r.json()["bot_pnl"], 10.0)
+        self.assertEqual(self.c.post("/api/user/portfolio/close", headers=self.h("user-token"), json={"label": "SOL", "opened": self.opened}).status_code, 409)
+        closes = self.c.get("/api/user/settings", headers=self.h("user-token")).json()["closes"]
+        self.assertEqual([c["key"] for c in closes], [f"SOL@{self.opened}"])
+        self.assertEqual(self.c.post("/api/user/portfolio/close", headers=self.h("user-token"), json={"label": "ETH", "opened": self.opened}).status_code, 404)

@@ -1,5 +1,6 @@
 "use client"
-import { Fragment } from "react"
+import { Fragment, useState } from "react"
+import { apiPaperClose, apiPaperCloseResult } from "@/lib/api"
 import { ExternalLink } from "lucide-react"
 import { BOT_PAGE } from "@/lib/strategies"
 import { ago, type LiveBot } from "@/lib/live-bots"
@@ -9,7 +10,23 @@ const tone = (v: number) => v > 0 ? "text-profit" : v < 0 ? "text-loss" : "text-
 const px = (v?: number) => v === undefined || v === null ? "—" : Number(v).toLocaleString("en-US", { maximumSignificantDigits: 6 })
 
 /** The four paper bots on the VPS, live (data refreshed by useLiveBots in the parent). */
-export function LiveBots({ bots, loaded }: { bots: LiveBot[], loaded: boolean }){
+export function LiveBots({ bots, loaded, admin = false }: { bots: LiveBot[], loaded: boolean, admin?: boolean }){
+  const [closing, setClosing] = useState<Record<string, string>>({})
+  async function close(bot: string, name: string, ref: string, label: string){
+    if(!confirm(`تقفل ${label} في بوت «${name}» دلوقتي بالسعر الحالي؟\nده بيغيّر سجل البوت اللي بيشوفه كل الناس.`)) return
+    const k = bot + ref
+    setClosing(c => ({ ...c, [k]: "بيبعت…" }))
+    try{
+      const { id } = await apiPaperClose(bot, ref)
+      setClosing(c => ({ ...c, [k]: "البوت بيقفل (لحد دقيقة)…" }))
+      for(let i = 0; i < 50; i++){
+        await new Promise(r => setTimeout(r, 3000))
+        const r = await apiPaperCloseResult(bot, id)
+        if(r.done){ setClosing(c => ({ ...c, [k]: r.ok ? `✅ اتقفلت ${r.pnl > 0 ? "+" : ""}${Number(r.pnl).toFixed(2)}$` : `⚠️ ${r.msg}` })); return }
+      }
+      setClosing(c => ({ ...c, [k]: "⚠️ البوت ما ردّش" }))
+    }catch(e: any){ setClosing(c => ({ ...c, [k]: `⚠️ ${e.message}` })) }
+  }
   return (
     <section id="live-bots" className="scroll-mt-6 space-y-3">
       <div className="flex flex-wrap items-end justify-between gap-2">
@@ -23,7 +40,7 @@ export function LiveBots({ bots, loaded }: { bots: LiveBot[], loaded: boolean })
         <div className="grid gap-3 lg:grid-cols-2">
           {bots.map(b => {
             const s = b.strategy, total = b.realized + b.unrealized
-            const top = [...b.positions].sort((x, y) => Math.abs(y.pnl) - Math.abs(x.pnl)).slice(0, 5)
+            const top = [...b.positions].sort((x, y) => Math.abs(y.pnl) - Math.abs(x.pnl)).slice(0, admin ? 100 : 5)   // the admin sees (and can close) all
             return (
               <div key={s.id} className={`flex flex-col rounded-2xl border bg-surface p-4 ${s.risk === "high" ? "border-loss/35" : "border-line"}`}>
                 <div className="flex items-start justify-between gap-3">
@@ -69,6 +86,9 @@ export function LiveBots({ bots, loaded }: { bots: LiveBot[], loaded: boolean })
                           <tr><td colSpan={4} className="pb-1.5 text-[10.5px] leading-4 text-faint">
                             {p.sl !== undefined && <><span className="text-loss/90">وقف <span className="font-mono" dir="ltr">{px(p.sl)}</span></span> · </>}
                             <span className="text-profit/90">{p.exit}</span>
+                            {admin && (closing[s.live + p.ref]
+                              ? <span className="mr-2 text-muted">{closing[s.live + p.ref]}</span>
+                              : <button onClick={() => close(s.live, s.nameAr, p.ref, p.label)} className="mr-2 rounded border border-loss/50 px-1.5 text-[10px] font-bold text-loss hover:bg-loss/10">اقفل</button>)}
                           </td></tr>
                         </Fragment>))}
                       </tbody>

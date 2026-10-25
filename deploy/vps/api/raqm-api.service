@@ -11,6 +11,8 @@ EnvironmentFile=/opt/raqm-api/.env
 Environment=PYTHONUNBUFFERED=1
 # shared with the real-orders bot: its live_status.json, manual close requests (deploy/vps/setup-ipc.sh)
 Environment=RAQM_IPC_DIR=/opt/raqm-ipc
+# admin close requests to the paper bots; their public JSON is read from /var/www/bot.da3m.io
+Environment=RAQM_PAPER_IPC=/opt/raqm-ipc-paper
 # one worker: the admin bot loop and the rate limits live in this process's memory; nginx in front (api.da3m.io)
 ExecStart=/opt/raqm-api/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8100 --proxy-headers --forwarded-allow-ips 127.0.0.1
 Restart=always
@@ -19,7 +21,7 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-ReadWritePaths=/opt/raqm-api /opt/raqm-ipc
+ReadWritePaths=/opt/raqm-api /opt/raqm-ipc /opt/raqm-ipc-paper
 
 [Install]
 WantedBy=multi-user.target
