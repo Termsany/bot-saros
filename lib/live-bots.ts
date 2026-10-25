@@ -16,6 +16,7 @@ function exitRule(s: LiveStrategy, d: any, p: any): string {
   if (s.live === "status") return p.exit_below ? `هدف: الترند يقف — لو قفل يومي تحت ${num(p.exit_below)}` : "هدف: الترند يقف (مفيش سعر هدف ثابت)"
   if (s.live === "momentum") return `هدف: التبديل الأسبوعي ${day(d.next_rebalance)}`
   if (s.live === "breakout") return "هدف: خروج افتتاح بكرة 00:00 UTC"
+  if (s.live === "tbreak") return "هدف: أول قفل يومي تحت متوسط 20 يوم (مفيش سعر هدف ثابت)"
   if (s.live === "rsi2") return `هدف: أول قفل يومي فوق متوسط 5 أيام (لحد ${day(p.exit_at)})`
   if (s.live === "listing") return `هدف: خروج ${day(p.exit_at)} (بعد ${d.rules?.hold_days ?? 90} يوم)`
   return "مفيش وقف ثابت — خروج لما النسبة تعدي متوسط 50 يوم"

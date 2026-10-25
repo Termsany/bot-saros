@@ -15,7 +15,7 @@ export function LiveBots({ bots, loaded }: { bots: LiveBot[], loaded: boolean })
       <div className="flex flex-wrap items-end justify-between gap-2">
         <div>
           <h2 className="text-lg font-bold">البوتات شغالة دلوقتي</h2>
-          <p className="text-[13px] text-muted">الـ {bots.length || 6} بوتات على السيرفر — Paper (فلوس وهمية)، بتتحدث كل 15 ثانية</p>
+          <p className="text-[13px] text-muted">الـ {bots.length || 7} بوتات على السيرفر — Paper (فلوس وهمية)، بتتحدث كل 15 ثانية</p>
         </div>
         <a href={BOT_PAGE} target="_blank" rel="noopener" className="flex items-center gap-1 text-sm font-semibold text-corona hover:underline">صفحة البوتات بالأسعار اللحظية <ExternalLink size={14}/></a>
       </div>

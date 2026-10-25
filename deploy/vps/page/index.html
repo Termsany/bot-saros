@@ -218,6 +218,26 @@
     </table></div>
   </section>
 
+  <section id="tbSec" style="margin-top:44px;border-top:1px solid var(--line);padding-top:26px;display:none">
+    <div class="head"><h2>اختراق الترند (Minervini / Darvas) — تجربة Paper</h2><span class="count" id="tbUpdated"></span></div>
+    <p class="sub" style="font-size:13px">بوت سابع منفصل: على أعلى 100 عملة فوليوم في ترند صاعد واضح (السعر فوق متوسط 50 فوق 150 فوق 200 يوم)، بيشتري لما القفل اليومي يكسر أعلى سعر في آخر 20 يوم، ويقفل أول قفل يومي تحت متوسط 20 يوم. وقف 40%. تجربة: في الاختبار زوّد الربح بس مش العائد مقابل المخاطرة، وبيكسب في سنين الصعود القوية بس.</p>
+    <div class="kpis" style="margin-top:14px">
+      <div class="card kpi"><div class="label">ربح محقق</div><div class="value mono" id="tbRealized">—</div><div class="note" id="tbWl">—</div></div>
+      <div class="card kpi"><div class="label">ربح الصفقات المفتوحة</div><div class="value mono" id="tbUnreal">—</div><div class="note">بالسعر اللحظي من Binance</div></div>
+      <div class="card kpi"><div class="label">مفتوحة</div><div class="value mono" id="tbOpen" style="font-size:18px">—</div><div class="note" id="tbMargin">—</div></div>
+      <div class="card kpi"><div class="label">أقرب عملات للاختراق</div><div class="value mono" id="tbWatch" style="font-size:14px">—</div><div class="note" id="tbTotal">—</div></div>
+    </div>
+    <div class="table" style="margin-top:14px"><table>
+      <thead><tr><th>العملة</th><th>الدخول</th><th>السعر الحالي</th><th>الوقف</th><th>الخروج</th><th>الربح $</th><th>على الهامش</th></tr></thead>
+      <tbody id="tbPositions"><tr><td colspan="7" class="empty">بيحمّل…</td></tr></tbody>
+    </table></div>
+    <div class="head" style="margin-top:16px"><h2 style="font-size:14px">اتقفلت</h2><span class="count" id="tbHistCount"></span></div>
+    <div class="table"><table>
+      <thead><tr><th>العملة</th><th>الدخول</th><th>الخروج</th><th>الربح $</th><th>السبب</th><th>الوقت</th></tr></thead>
+      <tbody id="tbHistory"><tr><td colspan="6" class="empty">لسه مفيش صفقات اتقفلت</td></tr></tbody>
+    </table></div>
+  </section>
+
   <footer>
     نتايج Paper حيّة من البوت، مش نصيحة استثمارية ومش ضمان لأي ربح. اختبار الاستراتيجية التاريخي في
     <a href="https://github.com/Termsany/bot-saros/blob/main/research/README.md" rel="noopener">research/README.md</a>.
@@ -393,7 +413,8 @@ function bsubscribe(){
   if(!bws || bws.readyState !== 1) return
   const ids = [...(LS ? LS.positions : []), ...(typeof MS !== "undefined" && MS ? MS.positions : []),
                ...(typeof RS !== "undefined" && RS ? RS.pairs.flatMap(p => [p.long, p.short]) : []),
-               ...(typeof BO !== "undefined" && BO ? BO.positions : []), ...(typeof R2 !== "undefined" && R2 ? R2.positions : [])].map(p => p.id)
+               ...(typeof BO !== "undefined" && BO ? BO.positions : []), ...(typeof R2 !== "undefined" && R2 ? R2.positions : []),
+               ...(typeof TBk !== "undefined" && TBk ? TBk.positions : [])].map(p => p.id)
   const add = ids.filter(x => !bsubs.has(x))
   if(add.length) bws.send(JSON.stringify({ method: "SUBSCRIBE", params: add.map(x => `${x.toLowerCase()}@miniTicker`), id: Date.now() }))
   add.forEach(x => bsubs.add(x))
@@ -498,7 +519,7 @@ loadRatio()
 setInterval(loadRatio, 15000)
 setInterval(() => { if(RS) renderRatio() }, 1000)
 // ── volatility breakout + RSI-2 (fifth and sixth paper bots): breakout.json / rsi2.json every 15 s, Binance prices ──
-let BO = null, R2 = null
+let BO = null, R2 = null, TBk = null
 function renderSimple(key, d, watchHtml){
   const sec = $(key + "Sec")
   if(!d){ sec.style.display = "none"; return }
@@ -518,7 +539,7 @@ function renderSimple(key, d, watchHtml){
       <td class="coin">${esc(p.symbol.replace("/USDT", ""))}</td>
       <td class="num mono">${px(p.entry)}</td><td class="num mono">${px(p.price)}</td>
       <td class="num mono" style="color:var(--faint)">${px(p.sl)}</td>
-      <td style="color:var(--muted)">${key === "bo" ? "افتتاح بكرة 00:00 UTC" : "قفل فوق متوسط 5 أيام · لحد " + day(p.exit_at)}</td>
+      <td style="color:var(--muted)">${key === "bo" ? "افتتاح بكرة 00:00 UTC" : key === "tb" ? "قفل يومي تحت متوسط 20 يوم" : "قفل فوق متوسط 5 أيام · لحد " + day(p.exit_at)}</td>
       <td class="num mono ${tone(p.pnl)}">${usd(p.pnl)}</td>
       <td class="num mono ${tone(p.pnl_pct)}">${p.pnl_pct > 0 ? "+" : ""}${p.pnl_pct.toFixed(1)}%</td></tr>`).join("")
     : `<tr><td colspan="7" class="empty">مفيش صفقات مفتوحة — مستني إشارة</td></tr>`
@@ -541,14 +562,19 @@ function renderRsi2(){
                                   : `<span style="color:var(--faint)">مفيش عملة في ترند صاعد</span>`)
 }
 async function loadSimple(){
-  for(const [file, set, render] of [["breakout", v => BO = v, renderBreakout], ["rsi2", v => R2 = v, renderRsi2]]){
+  for(const [file, set, render] of [["breakout", v => BO = v, renderBreakout], ["rsi2", v => R2 = v, renderRsi2], ["tbreak", v => TBk = v, renderTbreak]]){
     try{ const r = await fetch(`${file}.json?t=${Date.now()}`, {cache: "no-store"}); if(!r.ok) throw 0; set(await r.json()); render() } catch{ render() }
   }
   bsubscribe()
 }
+function renderTbreak(){
+  const w = (TBk && TBk.watch || [])
+  renderSimple("tb", TBk, w.length ? w.slice(0, 4).map(x => `${esc(x.symbol.replace("/USDT", ""))} <span class="mono">${x.gap_pct > 0 ? "+" : ""}${Number(x.gap_pct).toFixed(1)}%</span>`).join("<br>")
+                                   : `<span style="color:var(--faint)">مفيش عملة في ترند صاعد</span>`)
+}
 loadSimple()
 setInterval(loadSimple, 15000)
-setInterval(() => { if(BO) renderBreakout(); if(R2) renderRsi2() }, 1000)
+setInterval(() => { if(BO) renderBreakout(); if(R2) renderRsi2(); if(TBk) renderTbreak() }, 1000)
 </script>
 </body>
 </html>

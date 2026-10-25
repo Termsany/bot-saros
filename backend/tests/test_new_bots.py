@@ -112,3 +112,34 @@ class Rsi2Tests(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TrendBreakoutTests(Base):
+    def _candles(self, t0, closes, highs=None):
+        highs = highs or [c * 1.01 for c in closes]
+        rows = [[t0 - (len(closes) - i) * DAY, c, h, c * 0.99, c, 1000] for i, (c, h) in enumerate(zip(closes, highs))]
+        return rows + [[t0, closes[-1], closes[-1], closes[-1], closes[-1], 1]]
+
+    def test_buys_a_20_day_high_in_a_stage_2_uptrend_and_sells_below_the_20_day_average(self):
+        now = datetime.now(timezone.utc); t0 = today_ms(now)
+        closes = [50 + i * 0.3 for i in range(230)]; highs = [c * 1.01 for c in closes]
+        closes[-1] = closes[-2] * 1.05; highs[-1] = closes[-1]                    # closes above the last 20 days' highs
+        ex = FakeEx({"SOL/USDT:USDT": self._candles(t0, closes, highs)}, {"SOL/USDT:USDT": closes[-1]})
+        with mock.patch.object(botmod, "volume_universe", return_value=["SOL/USDT:USDT"]):
+            botmod.run_once_tbreak(ex)
+            pos = botmod.load_state()["positions"]["SOL/USDT:USDT"]
+            self.assertAlmostEqual(pos["entry"], closes[-1] * 1.0005)
+            st = botmod.load_state(); st["tb_day"] = "2000-01-01T00:00:00+00:00"; botmod.save_state(st)
+            closes2 = closes + [closes[-1] * 0.8]                                  # a close well below the 20-day average
+            ex.candles["SOL/USDT:USDT"] = self._candles(t0, closes2); ex.last["SOL/USDT:USDT"] = closes2[-1]
+            botmod.run_once_tbreak(ex)
+        st = botmod.load_state()
+        self.assertEqual(st["positions"], {}); self.assertEqual(st["history"][-1]["reason"], "قفل تحت متوسط 20 يوم")
+
+    def test_no_buy_without_the_trend_template(self):
+        now = datetime.now(timezone.utc); t0 = today_ms(now)
+        closes = [150 - i * 0.3 for i in range(230)]; closes[-1] = closes[-2] * 1.2  # a jump inside a downtrend
+        ex = FakeEx({"SOL/USDT:USDT": self._candles(t0, closes)}, {"SOL/USDT:USDT": closes[-1]})
+        with mock.patch.object(botmod, "volume_universe", return_value=["SOL/USDT:USDT"]):
+            botmod.run_once_tbreak(ex)
+        self.assertEqual(botmod.load_state()["positions"], {})

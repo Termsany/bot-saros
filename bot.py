@@ -1825,6 +1825,56 @@ def run_once_rsi2(ex):
     write_simple_status("rsi2", state, prices, R, {"day": state.get("rsi2_day"), "watch": state.get("rsi2_watch", [])})
     log(f"📊 RSI-2: {len(state['positions'])} مفتوحة | PnL محقق {state['stats']['pnl']:+.4f}")
 
+# ── trend-template breakout: what was left of Minervini / Darvas after research/vcp_deep.py (the contraction and the
+#    breakout-volume conditions only hurt). Paper experiment — it added profit but not risk-adjusted return. ──
+TB = {"top": 100, "L": 20, "exit_ma": 20, "stop": 0.40, "slip": 0.0005}
+
+def tbreak_mode():
+    """Paper trend-template breakout: at each daily close, among the top 100 by 30-day volume in a stage-2 uptrend
+    (close > 50 > 150 > 200-day averages), buy when the close breaks the previous 20 days' high; sell after a close
+    below the 20-day average; stop 40%."""
+    return "trend_breakout" in (CONFIG.get("enabled_strategies") or [])
+
+def run_once_tbreak(ex):
+    T = TB; state = load_state(); now = datetime.now(timezone.utc); day = _utc_day(now); prices = {}
+    if not CONFIG["paper_trading"]: log("⏸️ اختراق الترند Paper بس"); return
+    _guard_stops(ex, state, prices, "اختراق الترند")
+    if state.get("tb_day") != day.isoformat():
+        universe = volume_universe(ex, T["top"]); watch = []; opened = []
+        sma = lambda xs, n: sum(xs[-n:]) / n
+        for sym in sorted(set(universe) | set(state["positions"])):
+            try:
+                k = ex.fetch_ohlcv(sym, "1d", limit=215)[:-1]          # closed candles only
+                c = [r[4] for r in k]; h = [r[2] for r in k]
+                if len(c) < T["exit_ma"] + 1: continue
+                if sym in state["positions"]:
+                    if c[-1] < sma(c, T["exit_ma"]):
+                        price = float(ex.fetch_ticker(sym)["last"]); prices[sym] = price
+                        pnl = _paper_close(ex, state, sym, price, f"قفل تحت متوسط {T['exit_ma']} يوم")
+                        log(f"📉 اختراق الترند: قفل {sym} @ {price:.6g} PnL {pnl:+.4f}")
+                        notify(f"📉 اختراق الترند: قفل {sym.split(':')[0]} @ {price:.6g}\nقفل يومي تحت متوسط {T['exit_ma']} يوم · PnL {pnl:+.2f}$ · Paper")
+                    continue
+                if sym not in universe or len(c) < 201: continue
+                m50, m150, m200 = sma(c, 50), sma(c, 150), sma(c, 200); hi = max(h[-T["L"] - 1:-1])
+                if not (c[-1] > m50 > m150 > m200): continue
+                watch.append({"symbol": sym.split(":")[0], "close": c[-1], "high": hi, "gap_pct": round((hi / c[-1] - 1) * 100, 1)})
+                if c[-1] > hi:
+                    price = float(ex.fetch_ticker(sym)["last"]) * (1 + T["slip"]); prices[sym] = price
+                    _paper_open(state, sym, price, now, {"sl": price * (1 - T["stop"]), "breakout": hi})
+                    opened.append(f"{sym.split('/')[0]} {price:.6g}")
+                    log(f"✅ 🟢 اختراق الترند {sym} @ {price:.6g} (قفل {c[-1]:.6g} فوق أعلى {T['L']} يوم {hi:.6g})")
+            except Exception as e: log(f"اختراق الترند {sym}: {e}")
+        if opened:
+            notify(f"🟢 اختراق الترند (Paper) — {len(opened)} صفقة جديدة\n" + "\n".join(opened) +
+                   f"\nخروج: قفل يومي تحت متوسط {T['exit_ma']} يوم · وقف 40%")
+        state.update(tb_day=day.isoformat(), tb_watch=sorted(watch, key=lambda w: w["gap_pct"])[:15]); save_state(state)
+    for sym in state["positions"]:
+        if sym not in prices:
+            try: prices[sym] = float(ex.fetch_ticker(sym)["last"])
+            except Exception: pass
+    write_simple_status("tbreak", state, prices, T, {"day": state.get("tb_day"), "watch": state.get("tb_watch", [])})
+    log(f"📊 اختراق الترند: {len(state['positions'])} مفتوحة | PnL محقق {state['stats']['pnl']:+.4f}")
+
 def write_simple_status(name, state, prices, rules, extra):
     """Public <name>.json for a long-only paper bot, in the shape the site reads for momentum.json."""
     out_dir = CONFIG.get("public_dir")
@@ -1851,10 +1901,10 @@ def write_simple_status(name, state, prices, rules, extra):
     except Exception as e: log(f"public {name} status: {e}")
 
 def run_once():
-    if breakout_mode() or rsi2_mode():
+    if breakout_mode() or rsi2_mode() or tbreak_mode():
         global _rules_ex
         if "_rules_ex" not in globals(): _rules_ex = ccxt.binanceusdm({"enableRateLimit": True})   # the research data is Binance's
-        return run_once_breakout(_rules_ex) if breakout_mode() else run_once_rsi2(_rules_ex)
+        return run_once_breakout(_rules_ex) if breakout_mode() else run_once_rsi2(_rules_ex) if rsi2_mode() else run_once_tbreak(_rules_ex)
     if ratio_mode():
         global _ratio_ex
         if "_ratio_ex" not in globals(): _ratio_ex = ccxt.binanceusdm({"enableRateLimit": True})
@@ -1919,6 +1969,10 @@ def run_loop():
         V=VB
         log(f"=== بريك أوت التذبذب (Larry Williams): أعلى {V['top']} فوليوم فوق متوسط {V['ma']} يوم، دخول عند الافتتاح + {V['k']} × مدى امبارح، خروج افتتاح بكرة — {mode} | هامش {CONFIG['trade_amount_usdt']} USDT x{CONFIG.get('leverage',2)} ===")
         notify(f"▶️ بوت بريك أوت التذبذب اشتغل ({mode})\nأعلى {V['top']} عملة فوليوم · دخول عند اختراق الافتتاح + {V['k']} × مدى امبارح · خروج افتتاح اليوم التالي")
+    elif tbreak_mode():
+        T=TB
+        log(f"=== اختراق الترند (Minervini/Darvas من غير الانكماش): أعلى {T['top']} فوليوم في ترند صاعد، دخول على كسر أعلى {T['L']} يوم، خروج تحت متوسط {T['exit_ma']} يوم — {mode} | هامش {CONFIG['trade_amount_usdt']} USDT x{CONFIG.get('leverage',2)} ===")
+        notify(f"▶️ بوت اختراق الترند اشتغل ({mode}) — تجربة\nأعلى {T['top']} عملة فوليوم في ترند صاعد · دخول على كسر أعلى {T['L']} يوم · خروج تحت متوسط {T['exit_ma']} يوم")
     elif rsi2_mode():
         R=RSI2
         log(f"=== RSI-2 (Larry Connors): أعلى {R['top']} فوليوم فوق متوسط {R['trend_ma']} يوم، دخول لما RSI-2 تحت {R['below']}، خروج فوق متوسط {R['exit_ma']} أيام (أقصى {R['max_days']}) — {mode} | هامش {CONFIG['trade_amount_usdt']} USDT x{CONFIG.get('leverage',2)} ===")

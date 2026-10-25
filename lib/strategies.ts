@@ -43,6 +43,8 @@ export const EXPERIMENTS: LiveStrategy[] = [
     sides: "لونج", risk: "normal", live: "breakout", experimental: true },
   { id: "rsi2_pullback", name: "RSI-2 Pullback", nameAr: "RSI-2 شراء الهبوط (Connors)", desc: "شراء الهبوط الحاد في ترند صاعد، خروج فوق متوسط 5 أيام",
     sides: "لونج", risk: "normal", live: "rsi2", experimental: true },
+  { id: "trend_breakout", name: "Trend Breakout", nameAr: "اختراق الترند (Minervini/Darvas)", desc: "كسر أعلى 20 يوم في ترند صاعد، خروج تحت متوسط 20 يوم",
+    sides: "لونج", risk: "normal", live: "tbreak", experimental: true },
 ]
 export const LIVE_BOTS: LiveStrategy[] = [...STRATEGIES, ...EXPERIMENTS]
 
