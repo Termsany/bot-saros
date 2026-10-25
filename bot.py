@@ -1257,10 +1257,18 @@ def reconcile_live(state, ex):
         _ENTRY_BLOCK["reason"] = f"مقدرناش نقرا الصفقات من المنصة: {e}"; log(f"⚠️ {_ENTRY_BLOCK['reason']}"); return
     for sym, pos in list(state["positions"].items()):
         q = live.get(sym.split(":")[0])
+        flat = state.setdefault("_flat_seen", {})
+        if q: flat.pop(sym, None)
+        elif _exchange_position_qty(ex, sym) != 0.0:
+            flat.pop(sym, None); continue                                   # the per-coin check disagrees (or failed): wait
         if not q:
+            flat[sym] = flat.get(sym, 0) + 1
+            if flat[sym] < 2: continue                                     # flat twice in a row before believing it
+            flat.pop(sym, None)
             exit_px = pos.get("sl") or pos["entry"]
             try:
-                fills = [t for t in ex.fetch_my_trades(sym, limit=20) if t.get("side") == "sell"]
+                since = int(datetime.fromisoformat(pos["time"]).timestamp() * 1000)
+                fills = [t for t in ex.fetch_my_trades(sym, since=since, limit=50) if t.get("side") == "sell"]
                 if fills: exit_px = float(fills[-1]["price"])
             except Exception: pass
             pnl = (exit_px - pos["entry"]) * pos["qty"]
@@ -1301,8 +1309,17 @@ def _ipc_dir():
     return Path(d) if d else None
 
 def _write_json_atomic(path, data):
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, default=str), encoding="utf-8"); tmp.replace(path)
+    """New temp file with an unpredictable name (O_EXCL: never follows a link someone planted), then rename over the
+    target (rename replaces a link instead of writing through it)."""
+    import tempfile
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".w-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh: fh.write(json.dumps(data, ensure_ascii=False, default=str))
+        os.replace(tmp, path)
+    except Exception:
+        try: os.unlink(tmp)
+        except OSError: pass
+        raise
 
 MANUAL_CLOSE_MAX_AGE_S = 600   # a request the bot couldn't run within 10 minutes is dropped, never executed late
 
@@ -1314,13 +1331,27 @@ def process_manual_closes(state, ex, prices):
     cmd_dir, res_dir = d / "commands", d / "results"
     try: files = sorted(cmd_dir.glob("close-*.json"))
     except Exception: return
+    try:   # results older than a day are of no use to anyone
+        for old in res_dir.glob("*.json"):
+            if time.time() - old.stat().st_mtime > 86400: old.unlink()
+    except Exception: pass
     for f in files:
+        if f.is_symlink() or not f.is_file():
+            try: f.unlink()
+            except OSError: pass
+            continue
         try: req = json.loads(f.read_text(encoding="utf-8"))
         except Exception: req = {}
-        rid, sym = str(req.get("id", f.stem))[:64], str(req.get("symbol", ""))
+        rid, sym = str(req.get("id", "")), str(req.get("symbol", ""))
+        if not re.fullmatch(r"[0-9a-f]{32}", rid) or not re.fullmatch(r"[A-Z0-9]{1,20}/USDT(:USDT)?", sym):
+            log(f"⚠️ طلب قفل مرفوض (id أو عملة مش صحيحة): {f.name}")
+            try: f.unlink()
+            except OSError: pass
+            continue
         out = {"id": rid, "symbol": sym, "done_at": datetime.now(timezone.utc).isoformat()}
         try:
-            age = time.time() - float(req.get("at_epoch", 0))
+            at = float(req.get("at_epoch") or 0); age = time.time() - at
+            if at <= 0 or age < -60: age = MANUAL_CLOSE_MAX_AGE_S + 1      # missing or in the future: treated as stale
             match = next((k for k in state["positions"] if k.split(":")[0] == sym.split(":")[0]), None)
             if age > MANUAL_CLOSE_MAX_AGE_S:
                 out.update(ok=False, msg="الطلب قديم — اتلغى من غير تنفيذ")
@@ -2063,6 +2094,8 @@ if __name__=="__main__":
     p.add_argument("--poll", type=int, default=None, help="ثواني بين كل دورة")
     p.add_argument("--notify", action="store_true", help="رسايل تليجرام للدخول والخروج (TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID)")
     p.add_argument("--public", default=None, help="مجلد يتكتب فيه status.json لصفحة البوت العامة (صفقات ونتايج بس)")
+    p.add_argument("--expect-env", default=None, choices=["live", "demo", "testnet"],
+                   help="refuse to start unless BINANCE_ENV is exactly this (the testnet service passes testnet)")
     p.add_argument("--state", default=None, help="ملف الحالة (لتشغيل أكتر من بوت في نفس المجلد) — اللوج بيبقى بنفس الاسم .log")
     args=p.parse_args()
     if args.strategy: CONFIG["enabled_strategies"]=[s.strip() for s in args.strategy.split(",") if s.strip()]
@@ -2077,7 +2110,7 @@ if __name__=="__main__":
     if args.public: CONFIG["public_dir"]=args.public
     if args.state:
         STATE_PATH=Path(__file__).parent / args.state
-        LOG_PATH=Path(__file__).parent / (Path(args.state).stem + ".log")
+        LOG_PATH=STATE_PATH.with_suffix(".log")   # next to the state (the live bot keeps both in state/, its code folder is read-only)
     elif listing_mode():
         STATE_PATH=Path(__file__).parent / "state_listing.json"; LOG_PATH=Path(__file__).parent / "state_listing.log"
     elif momentum_mode():
@@ -2086,6 +2119,8 @@ if __name__=="__main__":
         STATE_PATH=Path(__file__).parent / "state_ratio.json"; LOG_PATH=Path(__file__).parent / "state_ratio.log"
     if args.paper and args.live: p.error("--paper و --live مع بعض؟ اختار واحد")
     if args.paper: CONFIG["paper_trading"]=True
+    if args.expect_env and binance_env() != args.expect_env:
+        p.error(f"BINANCE_ENV={binance_env()} لكن الخدمة متظبطة على {args.expect_env} — مش هيشتغل")
     if args.live:
         if not trend_mode(): p.error("--live متاح للترند اليومي بس (--strategy trend_daily)")
         if binance_env() == "live" and os.getenv("ALLOW_LIVE_TRADING", "").strip().lower() != "true":

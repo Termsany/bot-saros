@@ -175,6 +175,14 @@ class ApiAuthTests(unittest.TestCase):
         self.assertEqual(r.status_code, 400)
         self.assertIsNone(_get_exchange_for_cycle(paper=False))
 
+    def test_restart_never_resumes_a_real_money_loop(self):
+        import app.main as m, json as _j
+        cfg = Path(self.tmp.name) / "api_bot_config.json"
+        cfg.write_text(_j.dumps({"paper": False, "running": True, "symbols": [], "strategies": []}))
+        with mock.patch.object(m, "BOT_DIR", Path(self.tmp.name)), mock.patch.dict(os.environ, {"ALLOW_LIVE_TRADING": "true"}),              mock.patch("app.telegram_bot.send_telegram", mock.AsyncMock()), mock.patch.object(m, "bot_loop", mock.AsyncMock()) as loop:
+            asyncio.run(m._resume_bot_after_restart())
+        loop.assert_not_called()
+
     def test_bot_live_start_refused_even_with_the_switch_on(self):
         # real orders run only as the daily trend's own service, never from the dashboard loop
         with mock.patch.dict(os.environ, {"ALLOW_LIVE_TRADING": "true"}):

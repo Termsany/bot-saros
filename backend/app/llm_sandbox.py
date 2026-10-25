@@ -19,7 +19,7 @@ ALLOWED_IMPORTS = {"pandas", "numpy", "math"}
 FORBIDDEN_NAMES = {
     "open", "exec", "eval", "compile", "__import__", "globals", "locals", "vars", "getattr", "setattr",
     "delattr", "input", "breakpoint", "help", "memoryview", "type", "super", "classmethod", "staticmethod",
-    "property", "exit", "quit", "dir", "id", "object", "print",
+    "property", "exit", "quit", "dir", "id", "object", "print", "chr", "ord", "format", "bytes", "bytearray", "repr", "ascii",
 }
 
 # Attribute names that reach files, the interpreter, or arbitrary evaluation.
@@ -30,6 +30,7 @@ FORBIDDEN_ATTRS = {
     "builtins", "system", "popen", "subprocess", "f2py", "distutils", "show_config",
     # more file readers/writers: ndarray.dump(path), Excel/HDF5 readers-writers, Styler exports
     "dump", "dumps", "ExcelWriter", "ExcelFile", "HDFStore", "style", "Styler", "ctypes", "mmap",
+    "format", "format_map", "join", "translate", "decode", "encode",   # building attribute names at run time
 }
 # methods that look up and call another method by its *name* (df.agg("to_csv", path), df.apply("__class__"...)):
 # a string argument would get past the attribute checks above
@@ -64,8 +65,14 @@ def validate_code(code: str) -> None:
     if not any(isinstance(n, ast.FunctionDef) and n.name == "llm_signal" for n in tree.body):
         raise UnsafeCode("llm_signal(df) not defined at top level")
 
+    parent = {c: n for n in ast.walk(tree) for c in ast.iter_child_nodes(n)}
     for node in ast.walk(tree):
         line = getattr(node, "lineno", "?")
+        # a name-dispatch method may only be called on the spot: `g = df.agg; g("to_csv", ...)` skipped the check below
+        if isinstance(node, ast.Attribute) and node.attr in STRING_DISPATCH:
+            par = parent.get(node)
+            if not (isinstance(par, ast.Call) and par.func is node):
+                raise UnsafeCode(f".{node.attr} must be called directly (line {line})")
         if isinstance(node, ast.Import):
             for a in node.names:
                 if a.name.split(".")[0] not in ALLOWED_IMPORTS or "." in a.name:

@@ -34,7 +34,9 @@ def get(path, params, tries=6):
             with urllib.request.urlopen(url, timeout=25) as r:
                 return json.loads(r.read())
         except urllib.error.HTTPError as e:
-            if e.code in (418, 429):                       # rate limited / banned for a while: back off hard
+            if e.code == 418:                              # IP banned: stop the whole run (the trading bots share this IP)
+                raise SystemExit(f"Binance banned this IP (418), retry after {e.headers.get('Retry-After')}s — run stopped")
+            if e.code == 429:                              # rate limited: back off hard
                 time.sleep(int(e.headers.get("Retry-After") or 60) + 5); continue
             if e.code == 400: return []                    # symbol without this data (e.g. too new)
             time.sleep(3 * (n + 1))

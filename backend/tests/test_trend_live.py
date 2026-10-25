@@ -50,7 +50,7 @@ class FakeBinance:
     def cancel_order(self, oid, sym, *a): self.cancelled.append(oid)
     def fetch_positions(self, syms=None):
         return [{"symbol": f"{b}:USDT", "contracts": q} for b, q in self.positions.items() if q and (not syms or b in [s.split(":")[0] for s in syms])]
-    def fetch_my_trades(self, sym, limit=20): return [{"side": "sell", "price": 82.0}]
+    def fetch_my_trades(self, sym, since=None, limit=20): return [{"side": "sell", "price": 82.0}]
 
 
 SIG_ON = {"price": 100.0, "trend": {"on": True, "ts": 1, "size": 1.0}, "in_universe": True, "rank": 1, "total": 0}
@@ -134,6 +134,8 @@ class TrendLiveTests(unittest.TestCase):
         botmod.try_enter("SOL/USDT:USDT", SIG_ON, self.state, ex)
         ex.positions["SOL/USDT"] = 0.0                                                  # the exchange stop filled
         botmod.reconcile_live(self.state, ex)
+        self.assertIn("SOL/USDT:USDT", self.state["positions"])                        # one flat answer isn't enough
+        botmod.reconcile_live(self.state, ex)
         self.assertNotIn("SOL/USDT:USDT", self.state["positions"])
         h = self.state["history"][-1]; self.assertEqual(h["reason"], "وقف المنصة"); self.assertAlmostEqual(h["exit"], 82.0)
 
@@ -166,10 +168,13 @@ if __name__ == "__main__":
 
 
 class ManualCloseTests(TrendLiveTests):
-    def _request(self, ipc, symbol, age=0):
+    RID = "0123456789abcdef0123456789abcdef"
+
+    def _request(self, ipc, symbol, age=0, rid=None, at=None):
         import json, time
         (ipc / "commands").mkdir(parents=True, exist_ok=True)
-        (ipc / "commands" / "close-abc.json").write_text(json.dumps({"id": "abc", "symbol": symbol, "at_epoch": time.time() - age, "by": "admin"}))
+        (ipc / "commands" / "close-x.json").write_text(json.dumps({"id": rid or self.RID, "symbol": symbol,
+                                                                   "at_epoch": time.time() - age if at is None else at, "by": "admin"}))
 
     def test_site_close_closes_records_and_holds_the_coin(self):
         ex = FakeBinance(); ipc = Path(self.td.name) / "ipc"
@@ -178,7 +183,7 @@ class ManualCloseTests(TrendLiveTests):
         with mock.patch.dict(os.environ, {"RAQM_IPC_DIR": str(ipc)}):
             botmod.process_manual_closes(self.state, ex, {"SOL/USDT:USDT": 105.0})
         import json
-        res = json.loads((ipc / "results" / "abc.json").read_text(encoding="utf-8"))
+        res = json.loads((ipc / "results" / f"{self.RID}.json").read_text(encoding="utf-8"))
         self.assertTrue(res["ok"]); self.assertNotIn("SOL/USDT:USDT", self.state["positions"])
         self.assertEqual(self.state["history"][-1]["reason"], "قفل يدوي من الموقع")
         self.assertFalse(list((ipc / "commands").glob("*.json")))
@@ -196,6 +201,36 @@ class ManualCloseTests(TrendLiveTests):
         with mock.patch.dict(os.environ, {"RAQM_IPC_DIR": str(ipc)}):
             botmod.process_manual_closes(self.state, ex, {})
         self.assertIn("SOL/USDT:USDT", self.state["positions"])
+
+
+class ManualCloseHardeningTests(ManualCloseTests):
+    def test_request_id_cannot_name_a_file_outside_results(self):
+        ex = FakeBinance(); ipc = Path(self.td.name) / "ipc"
+        botmod.try_enter("SOL/USDT:USDT", SIG_ON, self.state, ex)
+        target = Path(self.td.name) / "state_victim"
+        self._request(ipc, "SOL/USDT", rid=str(target))                                 # an absolute path as the id
+        with mock.patch.dict(os.environ, {"RAQM_IPC_DIR": str(ipc)}):
+            botmod.process_manual_closes(self.state, ex, {})
+        self.assertFalse(target.with_suffix(".json").exists())
+        self.assertIn("SOL/USDT:USDT", self.state["positions"])                          # refused, nothing closed
+        self.assertFalse(list((ipc / "commands").glob("*.json")))
+
+    def test_future_timestamp_does_not_dodge_the_expiry(self):
+        import time
+        ex = FakeBinance(); ipc = Path(self.td.name) / "ipc"
+        botmod.try_enter("SOL/USDT:USDT", SIG_ON, self.state, ex)
+        self._request(ipc, "SOL/USDT", at=time.time() + 10 * 86400)
+        with mock.patch.dict(os.environ, {"RAQM_IPC_DIR": str(ipc)}):
+            botmod.process_manual_closes(self.state, ex, {})
+        self.assertIn("SOL/USDT:USDT", self.state["positions"])
+
+    def test_status_write_replaces_a_planted_link_instead_of_writing_through_it(self):
+        ipc = Path(self.td.name) / "ipc"; ipc.mkdir()
+        victim = Path(self.td.name) / "victim.txt"; victim.write_text("keep me")
+        try: (ipc / "live_status.json").symlink_to(victim)
+        except (OSError, NotImplementedError): self.skipTest("no symlinks here (Windows without privilege)")
+        botmod._write_json_atomic(ipc / "live_status.json", {"x": 1})
+        self.assertEqual(victim.read_text(), "keep me")
 
 
 class ExitLevelTests(unittest.TestCase):

@@ -67,8 +67,9 @@ async def _resume_bot_after_restart():
         cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
         if not cfg.get("running"): return
         from app.telegram_bot import send_telegram
-        if not cfg.get("paper", True) and not live_trading_allowed():
-            await send_telegram("⚠️ API restarted: the LIVE bot was running but ALLOW_LIVE_TRADING is off — not resumed. Check open positions on the exchange.")
+        if not cfg.get("paper", True):
+            # real orders run only as the daily trend's own service; an old config must not bring this loop back live
+            await send_telegram("⚠️ API restarted: an old dashboard config asked for real orders — not resumed (real orders run only as the trend service).")
             return
         bot_task = asyncio.create_task(bot_loop(cfg))
         await send_telegram(f"♻️ API restarted — bot loop resumed ({'paper' if cfg.get('paper', True) else 'LIVE'})")
@@ -433,7 +434,9 @@ async def bot_loop(cfg):
     if cfg.get("leverage"): botmod.CONFIG["leverage"] = int(cfg["leverage"])
     from app.telegram_bot import send_telegram, format_entry, format_exit
     from app.oco import place_oco_orders, cancel_oco_orders
-    is_paper = bool(cfg.get("paper", True))
+    is_paper = True   # the dashboard loop is paper only: real orders run as the trend's own service (bot.py --live)
+    if not cfg.get("paper", True):
+        print("bot_loop: real orders refused — paper only"); return
     print(f"Bot loop started {cfg}")
     while True:
         try:

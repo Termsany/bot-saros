@@ -15,7 +15,7 @@ export async function GET(req: NextRequest){
   const strategy = q.get("strategy") || "", lev = q.get("leverage") || "2", from = q.get("from") || "", to = q.get("to") || ""
   if(!DATE.test(from) || !DATE.test(to) || Date.parse(from) > Date.parse(to)) return NextResponse.json({ error: "bad dates" }, { status: 400 })
   const idx = STRATEGIES.findIndex(s => s.id === strategy)
-  if(idx < 0 || !FILE.trades[strategy]) return NextResponse.json({ error: "unknown strategy" }, { status: 400 })
+  if(idx < 0 || !Object.hasOwn(FILE.trades, strategy)) return NextResponse.json({ error: "unknown strategy" }, { status: 400 })
 
   const auth = req.headers.get("authorization") || ""
   if(!/^Bearer\s+\S+/i.test(auth)) return NextResponse.json({ error: "سجّل دخول الأول" }, { status: 401 })
@@ -29,11 +29,11 @@ export async function GET(req: NextRequest){
   const count = TIERS.find(t => t.id === tier)?.count ?? 1
   if(idx >= count) return NextResponse.json({ error: "الاستراتيجية دي مش في باقتك" }, { status: 403 })
   // null = unlimited (elite) — `??` would turn it into the free plan's 7 days
-  const maxDays = tier in BACKTEST_DAYS ? BACKTEST_DAYS[tier] : BACKTEST_DAYS.free
+  const maxDays = Object.hasOwn(BACKTEST_DAYS, tier) ? BACKTEST_DAYS[tier] : BACKTEST_DAYS.free
   if(maxDays !== null && backtestSpanDays(from, to) > maxDays) return NextResponse.json({ error: `باقتك لحد ${maxDays} يوم` }, { status: 403 })
 
   const byLev = FILE.trades[strategy]
-  const useLev = byLev[lev] ? lev : "2"
+  const useLev = Object.hasOwn(byLev, lev) ? lev : "2"
   const fromMs = Date.parse(from), toMs = Date.parse(to) + 86400000 - 1
   const rows = (byLev[useLev] || []).filter(r => r[0] >= fromMs && r[0] <= toMs)
   return NextResponse.json({ meta: { to: FILE.meta.to, marginUsdt: FILE.meta.marginUsdt }, leverage: Number(useLev), rows },
