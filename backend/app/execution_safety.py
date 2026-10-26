@@ -5,8 +5,10 @@ class AmbiguousFill(RuntimeError):
     """The exchange response cannot prove a positive executed quantity."""
 
 
-def futures_net_pnl(entry_price, exit_price, contracts, contract_size, side, fee_rate=0.0004, funding_pnl=0.0):
-    """Net linear-futures PnL in quote currency; contracts are not base units."""
+def futures_net_pnl(entry_price, exit_price, contracts, contract_size, side, fee_rate=0.0004, funding_pnl=None):
+    """Net linear-futures PnL; funding evidence is mandatory, never silently zeroed."""
+    if funding_pnl is None:
+        raise ValueError("funding_pnl evidence is required")
     base_qty = float(contracts) * float(contract_size)
     direction = 1.0 if side == "long" else -1.0
     gross = (float(exit_price) - float(entry_price)) * base_qty * direction

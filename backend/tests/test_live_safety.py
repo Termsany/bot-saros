@@ -20,6 +20,7 @@ def _ex(open_plain=(), open_trigger=()):
     ex.create_order.side_effect = lambda sym, typ, side, qty, price, params: {"id": "x-" + params["clientOrderId"], "clientOrderId": params["clientOrderId"]}
     ex.fetch_order.side_effect = Exception("not found")
     ex.fetch_open_orders.side_effect = lambda sym, *a: list(open_trigger if (len(a) == 3 and a[2]) else open_plain)
+    ex.fetch_funding_history = lambda symbol, since=None: []
     ex.cancel_order = mock.Mock()
     return ex
 
@@ -68,6 +69,14 @@ class ProtectiveIdTests(unittest.TestCase):
         ex = mock.Mock()
         ex.fetch_open_orders.return_value = [{"id": "sl-1", "clientOrderId": "raqm-pos-sl"}]
         self.assertFalse(cancel_oco_orders(ex, "BTC/USDT", sl_id="raqm-pos-sl"))
+
+    def test_algo_endpoint_is_read_and_cancelled(self):
+        ex = mock.Mock()
+        active = [{"id": "algo-1", "clientOrderId": "raqm-pos-sl"}]
+        ex.fetch_open_orders.return_value = []
+        ex.fetch_open_algo_orders = lambda symbol: list(active)
+        ex.cancel_algo_order = lambda oid, symbol: active.clear()
+        self.assertTrue(cancel_oco_orders(ex, "BTC/USDT", sl_id="raqm-pos-sl"))
 
     def test_cancel_leaves_the_other_positions_stop(self):
         mine, other = "raqm-0e8b777212da", "raqm-0e8f00000000"
@@ -147,6 +156,7 @@ class CloseLivePositionTests(unittest.TestCase):
         ex.amount_to_precision.side_effect = lambda s, q: str(q)
         ex.create_order.side_effect = lambda sym, typ, side, qty, price, params: {"id": "c1", "filled": qty, "average": 100.0}
         ex.fetch_open_orders.return_value = []
+        ex.fetch_funding_history = lambda symbol, since=None: []
         ex.fetch_positions.side_effect = [[{"symbol": "SOL/USDT:USDT", "contracts": 0.37}], [{"symbol": "SOL/USDT:USDT", "contracts": 0}]]
         return ex
 

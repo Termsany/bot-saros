@@ -16,6 +16,10 @@ class ExecutionSafetyTests(unittest.TestCase):
             8.79,
         )
 
+    def test_missing_funding_evidence_fails_closed(self):
+        with self.assertRaises(ValueError):
+            futures_net_pnl(100, 110, 2, 0.5, "long")
+
     def test_linear_margin_conversion_uses_contract_size(self):
         self.assertEqual(linear_contracts_from_margin(20, 5, 50_000, 0.001), 2.0)
 

@@ -28,6 +28,9 @@ class FakeFutureExchange:
     def fetch_positions(self, symbols=None):
         return self.positions
 
+    def fetch_funding_history(self, symbol, since=None):
+        return []
+
 
 class P0IntegrationTests(unittest.TestCase):
     def setUp(self):

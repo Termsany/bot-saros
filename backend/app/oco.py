@@ -135,13 +135,25 @@ def place_oco_orders(ex, symbol, side, qty, sl_price, tp_price, paper: bool = Tr
     return results
 
 
+def _order_views(ex, symbol):
+    """Enumerate unified and exchange-specific protective-order readback views."""
+    views = [("plain", lambda: ex.fetch_open_orders(symbol)),
+             ("trigger", lambda: ex.fetch_open_orders(symbol, None, None, {"trigger": True})),
+             ("stop", lambda: ex.fetch_open_orders(symbol, None, None, {"stop": True}))]
+    for view, method_name in (("algo", "fetch_open_algo_orders"), ("conditional", "fetch_open_conditional_orders"), ("trigger_api", "fetch_open_trigger_orders")):
+        fn = getattr(ex, method_name, None)
+        if callable(fn) and (method_name in dir(type(ex)) or method_name in getattr(ex, "__dict__", {})):
+            views.append((view, lambda fn=fn: fn(symbol)))
+    return views
+
+
 def _owned_orders(ex, symbol, ids):
     """Read owned orders from plain and trigger/algo views; errors are inconclusive."""
     found = {}
     complete = True
-    for params in ({}, {"trigger": True}, {"stop": True}):
+    for view, fetch_view in _order_views(ex, symbol):
         try:
-            opens = ex.fetch_open_orders(symbol, None, None, params) if params else ex.fetch_open_orders(symbol)
+            opens = fetch_view()
         except Exception:
             complete = False
             continue
@@ -152,7 +164,7 @@ def _owned_orders(ex, symbol, ids):
             if not isinstance(order, dict):
                 continue
             if _order_cid(order) in ids or order.get("id") in ids:
-                found[order.get("id")] = order
+                found.setdefault(order.get("id"), {"order": order, "view": view})
     return found, complete
 
 
@@ -167,9 +179,14 @@ def cancel_oco_orders(ex, symbol, pos_id: str = None, sl_id: str = None, tp_id: 
     if not complete:
         return False
     ok = True
-    for oid in found:
+    for oid, meta in found.items():
         try:
-            ex.cancel_order(oid, symbol)
+            view = meta.get("view")
+            cancel_name = {"algo": "cancel_algo_order", "conditional": "cancel_conditional_order", "trigger_api": "cancel_trigger_order"}.get(view)
+            cancel_fn = getattr(ex, cancel_name, None) if cancel_name else None
+            if not callable(cancel_fn) or (cancel_name and cancel_name not in dir(ex)):
+                cancel_fn = ex.cancel_order
+            cancel_fn(oid, symbol)
         except Exception:
             ok = False
     if not ok:
