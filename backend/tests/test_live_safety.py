@@ -191,8 +191,11 @@ class CloseLivePositionTests(unittest.TestCase):
         ex.fetch_positions.side_effect = None
         ex.create_order.side_effect = Exception("network down")
         ex.fetch_positions.return_value = [{"symbol": "SOL/USDT:USDT", "contracts": 1.0}]
+        res = botmod.close_live_position(ex, "SOL/USDT", {"side": "long", "qty": 1.0}, 90.0)
+        self.assertFalse(res["accounting_verified"])
+        self.assertTrue(res["recovery_required"])
         with self.assertRaises(Exception):
-            botmod.close_live_position(ex, "SOL/USDT", {"side": "long", "qty": 1.0}, 90.0)
+            botmod._require_verified_close(res)
 
 
 class LiveExchangeTests(unittest.TestCase):

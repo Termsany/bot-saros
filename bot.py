@@ -1257,41 +1257,52 @@ def _exchange_position_qty(ex, symbol, *, side=None, position_idx=None):
     except Exception:
         return None
 
+def _close_failure(reason, *, by_exchange=False):
+    return {"price": None, "qty": 0.0, "contract_size": None, "by_exchange": by_exchange, "accounting_verified": False, "recovery_required": True, "error": str(reason)}
+
 def close_live_position(ex, symbol, pos, price):
     """Close exact authoritative contracts and verify an authoritative flat readback."""
     side = pos.get("side", "long")
     exchange_qty = _exchange_position_qty(ex, symbol, side=side, position_idx=pos.get("position_idx"))
     if exchange_qty is None:
-        raise RuntimeError(f"cannot confirm current exchange position for {symbol}")
+        return _close_failure(f"cannot confirm current exchange position for {symbol}")
     if exchange_qty == 0:
         ids = pos.get("oco_ids") or {}
         if ids.get("pos_id") or ids.get("sl") or ids.get("tp"):
             from backend.app.oco import cancel_oco_orders
             if cancel_oco_orders(ex, symbol, pos_id=ids.get("pos_id"), sl_id=ids.get("sl"), tp_id=ids.get("tp")) is False:
-                raise RuntimeError(f"protective cleanup is unconfirmed for {symbol}")
-        return {"price": None, "qty": 0.0, "by_exchange": True, "accounting_verified": False}
+                return _close_failure(f"protective cleanup is unconfirmed for {symbol}", by_exchange=True)
+        return {"price": None, "qty": 0.0, "contract_size": pos.get("contract_size"), "by_exchange": True, "accounting_verified": False, "recovery_required": False, "error": None}
     try:
         res = place_order(ex, symbol, "close_long" if side == "long" else "close_short", 0, price, close_qty=exchange_qty)
     except Exception as e:
         remaining = _exchange_position_qty(ex, symbol, side=side, position_idx=pos.get("position_idx"))
         if remaining == 0:
             log(f"{symbol}: المنصة قفلت الصفقة بالفعل (وقف/هدف) — {e}")
-            return {"price": None, "qty": 0.0, "by_exchange": True, "accounting_verified": False}
-        raise
+            return {"price": None, "qty": 0.0, "contract_size": pos.get("contract_size"), "by_exchange": True, "accounting_verified": False, "recovery_required": False, "error": None}
+        return _close_failure(e)
     if float(res.get("qty", 0) or 0) <= 0 or float(res.get("qty", 0)) + 1e-9 < float(exchange_qty):
-        raise RuntimeError("close fill is partial or unverified; recovery required")
+        return _close_failure("close fill is partial or unverified; recovery required")
     remaining = _exchange_position_qty(ex, symbol, side=side, position_idx=pos.get("position_idx"))
     if remaining is None or remaining != 0:
-        raise RuntimeError(f"close accepted but flat state is unconfirmed for {symbol}; remaining={remaining}")
+        return _close_failure(f"close accepted but flat state is unconfirmed for {symbol}; remaining={remaining}")
     ids = pos.get("oco_ids") or {}
     if ids.get("pos_id") or ids.get("sl") or ids.get("tp"):
         from backend.app.oco import cancel_oco_orders
         cancelled = cancel_oco_orders(ex, symbol, pos_id=ids.get("pos_id"), sl_id=ids.get("sl"), tp_id=ids.get("tp"))
         if cancelled is False:
-            raise RuntimeError(f"protective cleanup is unconfirmed for {symbol}")
-    _refresh_fee_evidence(ex, symbol, pos, res.get("raw"))
-    _refresh_funding_evidence(ex, symbol, pos)
-    return {"price": res["price"], "qty": res["qty"], "contract_size": res.get("contract_size", pos.get("contract_size")), "by_exchange": False, "accounting_verified": True}
+            return _close_failure(f"protective cleanup is unconfirmed for {symbol}")
+    try:
+        _refresh_fee_evidence(ex, symbol, pos, res.get("raw"))
+        _refresh_funding_evidence(ex, symbol, pos)
+    except Exception as e:
+        return _close_failure(e)
+    return {"price": res["price"], "qty": res["qty"], "contract_size": res.get("contract_size", pos.get("contract_size")), "by_exchange": False, "accounting_verified": True, "recovery_required": False, "error": None}
+
+def _require_verified_close(result):
+    if not isinstance(result, dict) or result.get("accounting_verified") is not True:
+        raise RuntimeError((result or {}).get("error", "live close accounting is unverified"))
+    return result
 
 def check_sl_tp(state, prices, ex=None):
     closed=[]
@@ -1365,8 +1376,7 @@ def check_sl_tp(state, prices, ex=None):
                 state["history"].append({"symbol":symbol,"side":pos.get("side","long"),"entry":entry,"exit":price,"qty":qty,"pnl":pnl,"pnl_pct":pnl_pct,"reason":reason,"time":datetime.now(timezone.utc).isoformat(),"type":"paper","opened":pos.get("time"),"rank":pos.get("rank")})
             else:
                 res=close_live_position(ex or get_exchange(auth=True)[0], symbol, pos, price)
-                if not res.get("accounting_verified", False):
-                    raise RuntimeError("exchange already flat; fill price unavailable for accounting")
+                _require_verified_close(res)
                 cs = _position_contract_size(pos)
                 if cs is None:
                     raise RuntimeError("missing contract_size for live PnL")
@@ -1599,8 +1609,7 @@ def process_manual_closes(state, ex, prices):
                     try: px = float(ex.fetch_ticker(match)["last"])
                     except Exception: px = pos["entry"]
                 r = close_live_position(ex, match, pos, px)
-                if not r.get("accounting_verified", False):
-                    raise RuntimeError("exchange already flat; fill price unavailable for accounting")
+                _require_verified_close(r)
                 cs = _position_contract_size(pos)
                 if cs is None:
                     raise RuntimeError("missing contract_size for live PnL")
@@ -1732,8 +1741,7 @@ def try_enter_trend(symbol, analysis, state, ex):
         if live:
             try:
                 res = close_live_position(ex, symbol, pos, price)
-                if not res.get("accounting_verified", False):
-                    raise RuntimeError("exchange already flat; fill price unavailable for accounting")
+                _require_verified_close(res)
             except Exception as e:
                 log(f"⚠️ {symbol}: الترند وقف بس القفل فشل — هيحاول تاني الدورة الجاية: {e}")
                 notify(f"⚠️ {symbol}: الترند وقف بس أمر القفل فشل — البوت هيحاول تاني. الوقف لسه على المنصة."); return
@@ -1829,8 +1837,7 @@ def _enter_trend_live(symbol, analysis, state, ex, margin, lev, price):
         notify(f"🚨 {symbol}: أمر الوقف اترفض ({oco.get('sl_error')}) — بيقفل الصفقة فورا")
         try:
             r = close_live_position(ex, symbol, pos, price)
-            if not r.get("accounting_verified", False):
-                raise RuntimeError("exchange already flat; fill price unavailable for accounting")
+            _require_verified_close(r)
             cs = _position_contract_size(pos)
             if cs is None:
                 raise RuntimeError("missing contract_size for live PnL")
@@ -1907,8 +1914,7 @@ def try_enter(symbol, analysis, state, ex):
                     state["history"].append({"symbol":symbol,"side":side,"entry":entry,"exit":price,"qty":qty,"pnl":pnl,"pnl_pct":pct,"reason":"اشارة عكسية قوية","time":datetime.now(timezone.utc).isoformat(),"type":"paper"})
                 else:
                     res=close_live_position(ex, symbol, pos, price)
-                    if not res.get("accounting_verified", False):
-                        raise RuntimeError("exchange already flat; fill price unavailable for accounting")
+                    _require_verified_close(res)
                     cs = _position_contract_size(pos)
                     if cs is None:
                         raise RuntimeError("missing contract_size for live PnL")

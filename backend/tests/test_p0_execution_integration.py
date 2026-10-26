@@ -64,14 +64,20 @@ class P0IntegrationTests(unittest.TestCase):
         reads = iter([[{"symbol": "BTC/USDT", "contracts": 2}], [{"symbol": "BTC/USDT", "contracts": 0}]])
         ex.fetch_positions = lambda symbols=None: next(reads)
         pos = {"side": "long", "qty": 2, "entry": 50000, "contract_size": 0.001, "contract_size_verified": True, "entry_fee_rate": 0.0004}
+        res = bot.close_live_position(ex, "BTC/USDT", pos, 50000)
+        self.assertFalse(res["accounting_verified"])
+        self.assertTrue(res["recovery_required"])
         with self.assertRaises(RuntimeError):
-            bot.close_live_position(ex, "BTC/USDT", pos, 50000)
+            bot._require_verified_close(res)
 
     def test_close_does_not_claim_flat_from_empty_snapshot(self):
         ex = FakeFutureExchange([])
         pos = {"side": "long", "qty": 2, "entry": 50000}
+        res = bot.close_live_position(ex, "BTC/USDT", pos, 50000)
+        self.assertFalse(res["accounting_verified"])
+        self.assertTrue(res["recovery_required"])
         with self.assertRaises(Exception):
-            bot.close_live_position(ex, "BTC/USDT", pos, 50000)
+            bot._require_verified_close(res)
 
     def test_explicit_zero_matching_position_proves_flat(self):
         ex = FakeFutureExchange([{"symbol": "BTC/USDT", "contracts": 0}])
