@@ -2,7 +2,7 @@
 import os, json, asyncio
 from pathlib import Path
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, ConfigDict, field_validator
@@ -1495,6 +1495,83 @@ async def keys_live(user: dict = Depends(require_admin)):
     """Which exchanges are LIVE (for bot)"""
     from app.keys_vault import get_exchanges_for_trading
     return {"live": get_exchanges_for_trading()}
+
+# ── Per-user Keys Vault + Live Enable — any registered user, own account only.
+# Separate from the admin-only /api/keys/* and /api/admin/* paths above, which are
+# untouched. Every endpoint here is scoped by the authenticated user's own id
+# (Depends(require_user)) — never by an id supplied in the request body — so a user
+# can only ever read/write their own key and their own live-enable record.
+USER_LIVE_ACTIVATION_PATH = BOT_DIR / "user_live_activation.sqlite3"
+
+class UserSaveKeyReq(_BM2):
+    exchange: str
+    apiKey: str
+    secret: str
+    passphrase: str = ""
+
+class UserLiveEnableReq(_BM2):
+    exchange: str
+    confirm: str
+    leverage: Optional[int] = None
+    risk_per_trade_pct: Optional[float] = None
+    max_aggregate_risk_pct: Optional[float] = None
+
+@app.get("/api/user/keys/status")
+async def user_keys_status(user: dict = Depends(require_user)):
+    from app.user_keys_vault import user_key_status
+    return user_key_status(user["id"])
+
+@app.post("/api/user/keys/save")
+async def user_keys_save(req: UserSaveKeyReq, user: dict = Depends(require_user)):
+    from app.user_keys_vault import save_user_keys
+    try:
+        save_user_keys(user["id"], req.exchange.lower().strip(), req.apiKey.strip(), req.secret.strip(), req.passphrase.strip())
+        return {"ok": True}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+@app.post("/api/user/keys/delete")
+async def user_keys_delete(body: dict, user: dict = Depends(require_user)):
+    from app.user_keys_vault import delete_user_keys
+    ex = str((body or {}).get("exchange", "")).lower().strip()
+    if not ex:
+        raise HTTPException(400, "exchange required")
+    ok = delete_user_keys(user["id"], ex)
+    return {"ok": bool(ok)}
+
+@app.get("/api/user/live/status")
+async def user_live_status(user: dict = Depends(require_user)):
+    from app.user_live_activation import get_user_live_record
+    rec = get_user_live_record(USER_LIVE_ACTIVATION_PATH, user_id=user["id"])
+    if not rec:
+        return {"enabled": False}
+    return {"enabled": bool(rec["enabled"]), "exchange": rec["exchange"], "leverage": rec["leverage"],
+            "risk_per_trade_pct": rec["risk_per_trade_pct"], "max_aggregate_risk_pct": rec["max_aggregate_risk_pct"],
+            "consented_at": rec["consented_at"]}
+
+@app.post("/api/user/live/enable")
+async def user_live_enable(req: UserLiveEnableReq, request: Request, user: dict = Depends(require_user)):
+    from app.user_keys_vault import has_live_configured_keys
+    from app.user_live_activation import enable_user_live
+    ex = req.exchange.lower().strip()
+    if not has_live_configured_keys(user["id"], ex):
+        raise HTTPException(400, f"save your {ex} API key first — live cannot be enabled without your own keys")
+    try:
+        enable_user_live(USER_LIVE_ACTIVATION_PATH, user_id=user["id"], exchange=ex, confirm=req.confirm,
+                          actor=str(user.get("email") or user["id"]), ip=(request.client.host if request.client else None),
+                          leverage=req.leverage, risk_per_trade_pct=req.risk_per_trade_pct,
+                          max_aggregate_risk_pct=req.max_aggregate_risk_pct)
+    except (PermissionError, ValueError) as e:
+        raise HTTPException(400, str(e))
+    from app.user_keys_vault import set_user_paper
+    set_user_paper(user["id"], ex, False)  # the per-user vault entry itself switches to LIVE too
+    return {"ok": True}
+
+@app.post("/api/user/live/disable")
+async def user_live_disable(user: dict = Depends(require_user)):
+    from app.user_live_activation import disable_user_live
+    disable_user_live(USER_LIVE_ACTIVATION_PATH, user_id=user["id"], reason="user disabled")
+    return {"ok": True}
 
 @app.get("/api/trades")
 async def api_trades(limit: int = 50, user: dict = Depends(require_admin)):
