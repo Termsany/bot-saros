@@ -11,6 +11,7 @@ DEFAULT_CONFIG = {"enabled": True, "mode": "paper", "timeframe": "1h", "symbols"
 def now(): return datetime.now(timezone.utc).isoformat()
 def db_path(root: Path): return root / "admin_control.sqlite3"
 def connect(root: Path):
+    root.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(str(db_path(root)), timeout=5.0, isolation_level=None)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA busy_timeout=5000")
@@ -20,7 +21,21 @@ def connect(root: Path):
         id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, actor TEXT NOT NULL,
         action TEXT NOT NULL, result TEXT NOT NULL, details TEXT NOT NULL
     )""")
+    con.execute("""CREATE TABLE IF NOT EXISTS strategy_desired (
+        strategy TEXT PRIMARY KEY, enabled INTEGER NOT NULL, paused INTEGER NOT NULL,
+        status TEXT NOT NULL, updated_at TEXT NOT NULL
+    )""")
+    con.execute("""CREATE TABLE IF NOT EXISTS strategy_runtime (
+        strategy TEXT PRIMARY KEY, status TEXT NOT NULL, heartbeat TEXT,
+        last_cycle TEXT, error TEXT, task_id TEXT, updated_at TEXT NOT NULL
+    )""")
     return con
+
+def _ensure_strategy_rows(con):
+    stamp = now()
+    for s in STRATEGIES:
+        con.execute("INSERT OR IGNORE INTO strategy_desired(strategy,enabled,paused,status,updated_at) VALUES(?,?,?,?,?)", (s, 0, 0, "stopped", stamp))
+        con.execute("INSERT OR IGNORE INTO strategy_runtime(strategy,status,heartbeat,last_cycle,error,task_id,updated_at) VALUES(?,?,?,?,?,?,?)", (s, "stopped", None, None, None, None, stamp))
 
 def defaults():
     return {"entry_paused": {"paused": False, "reason": None, "at": None, "by": None}, "strategies": {s: dict(DEFAULT_CONFIG) for s in STRATEGIES}}
@@ -28,10 +43,13 @@ def defaults():
 def read_state(root: Path):
     con=connect(root)
     try:
+        _ensure_strategy_rows(con)
         state=defaults()
         for r in con.execute("SELECT key,value FROM admin_state"):
             state[r["key"]]=json.loads(r["value"])
         state["strategies"]={s:{**DEFAULT_CONFIG, **(state.get("strategies",{}).get(s) or {})} for s in STRATEGIES}
+        for r in con.execute("SELECT strategy,enabled,paused FROM strategy_desired"):
+            state["strategies"][r["strategy"]].update(enabled=bool(r["enabled"]), paused=bool(r["paused"]))
         return state
     finally: con.close()
 
@@ -41,6 +59,9 @@ def write_state(root: Path, state: dict):
         con.execute("BEGIN IMMEDIATE")
         for key in ("entry_paused", "strategies"):
             con.execute("INSERT INTO admin_state(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at", (key,json.dumps(state[key]),now()))
+        _ensure_strategy_rows(con)
+        for s, cfg in state["strategies"].items():
+            con.execute("UPDATE strategy_desired SET enabled=?,paused=?,updated_at=? WHERE strategy=?", (int(bool(cfg.get("enabled"))), int(bool(cfg.get("paused"))), now(), s))
         con.execute("COMMIT")
     except Exception:
         con.execute("ROLLBACK"); raise
@@ -63,5 +84,39 @@ def set_entry_pause(root: Path, paused: bool, actor: str, reason: str | None):
 def update_strategy(root: Path, strategy: str, patch: dict, actor: str):
     if strategy not in STRATEGIES: raise KeyError(strategy)
     state=read_state(root); cfg=state["strategies"][strategy]; cfg.update(patch); cfg["mode"]="paper"; state["strategies"][strategy]=cfg; write_state(root,state); audit(root,actor,"strategy_update","ok",{"strategy":strategy,"patch":patch}); return cfg
+
+def set_strategy_lifecycle(root: Path, strategy: str, action: str, actor: str):
+    if strategy not in STRATEGIES: raise KeyError(strategy)
+    if action not in ("start", "stop", "pause", "resume"): raise ValueError(action)
+    state = read_state(root); cfg = state["strategies"][strategy]
+    if action == "start": cfg.update(enabled=True, paused=False)
+    elif action == "stop": cfg.update(enabled=False, paused=False)
+    elif action == "pause": cfg.update(enabled=True, paused=True)
+    else: cfg.update(enabled=True, paused=False)
+    cfg["mode"] = "paper"; state["strategies"][strategy] = cfg; write_state(root, state)
+    audit(root, actor, "strategy_" + action, "ok", {"strategy": strategy})
+    return cfg
+
+def get_runtime(root: Path, strategy: str):
+    if strategy not in STRATEGIES: raise KeyError(strategy)
+    con=connect(root)
+    try:
+        _ensure_strategy_rows(con)
+        return dict(con.execute("SELECT strategy,status,heartbeat,last_cycle,error,task_id,updated_at FROM strategy_runtime WHERE strategy=?", (strategy,)).fetchone())
+    finally: con.close()
+
+def all_runtime(root: Path): return {s: get_runtime(root, s) for s in STRATEGIES}
+
+def mark_runtime(root: Path, strategy: str, *, status: str, heartbeat: str | None = None, last_cycle: str | None = None, error: str | None = None, task_id: str | None = None):
+    old = get_runtime(root, strategy); stamp = now(); con=connect(root)
+    try:
+        _ensure_strategy_rows(con)
+        con.execute("UPDATE strategy_runtime SET status=?,heartbeat=?,last_cycle=?,error=?,task_id=?,updated_at=? WHERE strategy=?", (status, heartbeat or old.get("heartbeat"), last_cycle or old.get("last_cycle"), error, task_id or old.get("task_id"), stamp, strategy))
+    finally: con.close()
+    return get_runtime(root, strategy)
+
+def controls(root: Path, strategy: str):
+    cfg=read_state(root)["strategies"][strategy]
+    return {"enabled": bool(cfg.get("enabled")), "paused": bool(cfg.get("paused")), "active": bool(cfg.get("enabled")) and not bool(cfg.get("paused"))}
 
 def audit_kill(root: Path, actor: str, action: str, result: str, details=None): audit(root,actor,action,result,details)

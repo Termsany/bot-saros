@@ -75,7 +75,9 @@ async def _resume_bot_after_restart():
             # real orders run only as the daily trend's own service; an old config must not bring this loop back live
             await send_telegram("⚠️ API restarted: an old dashboard config asked for real orders — not resumed (real orders run only as the trend service).")
             return
-        bot_task = asyncio.create_task(bot_loop(cfg))
+        global _bot_task_id
+        _bot_task_id = uuid.uuid4().hex
+        bot_task = asyncio.create_task(bot_loop(cfg, task_id=_bot_task_id))
         await send_telegram(f"♻️ API restarted — bot loop resumed ({'paper' if cfg.get('paper', True) else 'LIVE'})")
     except Exception as e:
         print(f"bot resume failed: {e}")
@@ -323,6 +325,46 @@ async def api_chart(file: str, user: dict = Depends(require_user)):
 
 # ── Bot control: status, start/stop (paper), trades
 bot_task = None
+_bot_task_id = None
+_control_wakeup = asyncio.Event()
+
+def _wake_managed_loop():
+    _control_wakeup.set()
+
+async def _sleep_until_wakeup(seconds):
+    try:
+        await asyncio.wait_for(_control_wakeup.wait(), timeout=seconds)
+    except asyncio.TimeoutError:
+        pass
+    _control_wakeup.clear()
+
+def execute_strategy_cycle(root, strategy, protection, entry):
+    """Run protection regardless of desired state; gate only new entries."""
+    protection()
+    active = admin_control.controls(root, strategy)["active"]
+    if active: entry()
+    return {"entries_enabled": active}
+
+async def _wait_strategy_runtime(strategy, *, active: bool, timeout: float = 5.0):
+    deadline = _time.monotonic() + timeout
+    while _time.monotonic() < deadline:
+        runtime = admin_control.get_runtime(BOT_DIR, strategy)
+        if active and runtime["status"] == "running" and runtime.get("heartbeat"):
+            return runtime
+        if not active and runtime["status"] in ("stopped", "paused"):
+            return runtime
+        await asyncio.sleep(0.02)
+    return admin_control.get_runtime(BOT_DIR, strategy)
+
+def _ensure_managed_loop():
+    global bot_task, _bot_task_id
+    if bot_task is None or bot_task.done():
+        cfg_path = BOT_DIR / "api_bot_config.json"
+        cfg = _safe_json_file(cfg_path) or {"paper": True, "running": True}
+        cfg["paper"] = True; cfg["running"] = True
+        _bot_task_id = uuid.uuid4().hex
+        bot_task = asyncio.create_task(bot_loop(cfg, task_id=_bot_task_id))
+    return bot_task
 
 @app.get("/api/bot/status")
 async def bot_status(user: dict = Depends(require_admin)):
@@ -385,7 +427,12 @@ async def bot_start(req: BotStartReq, bg: BackgroundTasks, user: dict = Depends(
     lev = req.leverage or (2 if req.strategies == ["trend_daily"] else 5)
     cfg = {"symbols": req.symbols, "strategies": req.strategies, "timeframe": req.timeframe, "paper": req.paper, "leverage": lev, "running": True}
     (BOT_DIR / "api_bot_config.json").write_text(json.dumps(cfg, ensure_ascii=False), encoding="utf-8")
-    bot_task = asyncio.create_task(bot_loop(cfg))
+    for strategy in (req.strategies or admin_control.STRATEGIES):
+        if strategy in admin_control.STRATEGIES:
+            admin_control.set_strategy_lifecycle(BOT_DIR, strategy, "start", str(user.get("email") or user.get("id") or "admin"))
+    global _bot_task_id
+    _bot_task_id = uuid.uuid4().hex
+    bot_task = asyncio.create_task(bot_loop(cfg, task_id=_bot_task_id))
     return {"ok": True, "msg": "started", "config": cfg}
 
 @app.post("/api/bot/stop")
@@ -427,7 +474,7 @@ def _get_exchange_for_cycle(paper: bool):
         print(f"WARNING: {len(instances)} LIVE exchanges — only {name} will trade")
     return (name, inst, False)
 
-async def bot_loop(cfg):
+async def bot_loop(cfg, task_id=None):
     """يحلل كل poll_seconds ويحفظ في DB + يرسل تليجرام"""
     import strategies_advanced as adv
     import bot as botmod
@@ -444,9 +491,17 @@ async def bot_loop(cfg):
     print(f"Bot loop started {cfg}")
     while True:
         try:
+            controls = {s: admin_control.controls(BOT_DIR, s) for s in admin_control.STRATEGIES}
+            active_strategies = [s for s, c in controls.items() if c["active"]]
+            for strategy, control in controls.items():
+                if control["active"]:
+                    admin_control.mark_runtime(BOT_DIR, strategy, status="running", heartbeat=admin_control.now(), last_cycle=admin_control.now(), task_id=task_id)
+                else:
+                    admin_control.mark_runtime(BOT_DIR, strategy, status="paused" if control["paused"] else "stopped", task_id=task_id)
+            botmod.CONFIG["enabled_strategies"] = active_strategies
             picked = _get_exchange_for_cycle(is_paper)
             if picked is None:
-                await asyncio.sleep(int(botmod.CONFIG.get("poll_seconds",60)))
+                await _sleep_until_wakeup(int(botmod.CONFIG.get("poll_seconds",60)))
                 continue
             ex_name, ex, cycle_paper = picked
             botmod.CONFIG["paper_trading"] = cycle_paper
@@ -603,7 +658,7 @@ async def bot_loop(cfg):
             if state.get("recovery_required"):
                 blocked = f"needs review: {', '.join(state['recovery_required'])}"
             review_before = set(state.get("recovery_required") or {})
-            if blocked:
+            if blocked or not active_strategies:
                 print(f"entries blocked — {blocked}")
             else:
                 for sym,a in analyses.items():
@@ -707,9 +762,17 @@ async def bot_loop(cfg):
             try:
                 (BOT_DIR / "dashboard-data.json").write_text(json.dumps({"analyses":analyses,"state":state,"time":datetime.now(timezone.utc).isoformat()}, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
             except: pass
-        except asyncio.CancelledError: print("bot loop stopped"); break
-        except Exception as e: print(f"loop err {e}")
-        await asyncio.sleep(int(botmod.CONFIG.get("poll_seconds",60)))
+        except asyncio.CancelledError:
+            for strategy in admin_control.STRATEGIES:
+                try: admin_control.mark_runtime(BOT_DIR, strategy, status="paused" if admin_control.controls(BOT_DIR, strategy)["paused"] else "stopped", task_id=task_id)
+                except Exception: pass
+            print("bot loop stopped"); break
+        except Exception as e:
+            for strategy in admin_control.STRATEGIES:
+                try: admin_control.mark_runtime(BOT_DIR, strategy, status="error", error=str(e)[:300], task_id=task_id)
+                except Exception: pass
+            print(f"loop err {e}")
+        await _sleep_until_wakeup(int(botmod.CONFIG.get("poll_seconds",60)))
 
 
 class SettingsReq(BaseModel):
@@ -1158,7 +1221,7 @@ async def admin_overview(user: dict = Depends(require_admin)):
 @app.get("/api/admin/strategies")
 async def admin_strategies(user: dict = Depends(require_admin)):
     st=admin_control.read_state(BOT_DIR)
-    return [{"id":s,"name":s,"status":"enabled" if st["strategies"][s]["enabled"] else "disabled","mode":"paper","config":st["strategies"][s],"lifecycle":"running" if bot_task and not bot_task.done() and st["strategies"][s]["enabled"] else "stopped"} for s in admin_control.STRATEGIES]
+    return [{"id":s,"name":s,"status":"enabled" if st["strategies"][s]["enabled"] else "disabled","mode":"paper","config":st["strategies"][s],"runtime":admin_control.get_runtime(BOT_DIR,s),"lifecycle":admin_control.get_runtime(BOT_DIR,s)["status"]} for s in admin_control.STRATEGIES]
 
 @app.patch("/api/admin/strategies/{strategy}")
 async def admin_strategy(strategy: str, req: StrategyPatch, user: dict = Depends(require_admin)):
@@ -1174,8 +1237,16 @@ async def admin_strategy_lifecycle(strategy: str, req: LifecycleReq, user: dict 
     rate_limit(user["id"], "admin_mutation", 30, 60)
     if strategy not in admin_control.STRATEGIES: raise HTTPException(404,"unknown strategy")
     if req.action in ("start","stop") and not req.confirm: raise HTTPException(400,"confirmation required")
-    result=admin_control.update_strategy(BOT_DIR,strategy,{"enabled":req.action in ("start","resume"),"mode":"paper"},await _admin_actor(user))
-    return {"ok":True,"strategy":strategy,"action":req.action,"config":result,"note":"lifecycle is paper-only; use the existing paper bot controls to start the managed loop"}
+    result=admin_control.set_strategy_lifecycle(BOT_DIR,strategy,req.action,await _admin_actor(user))
+    active = req.action in ("start", "resume")
+    _wake_managed_loop()
+    if active:
+        _ensure_managed_loop()
+    elif bot_task is None or bot_task.done():
+        admin_control.mark_runtime(BOT_DIR, strategy, status="paused" if req.action == "pause" else "stopped")
+    runtime = await _wait_strategy_runtime(strategy, active=active)
+    running = active and runtime["status"] == "running" and bool(runtime.get("heartbeat"))
+    return {"ok":True,"strategy":strategy,"action":req.action,"config":result,"runtime":runtime,"running":running}
 
 @app.get("/api/admin/paper/portfolio")
 async def admin_paper_portfolio(user: dict = Depends(require_admin)):
@@ -1219,8 +1290,27 @@ async def admin_health(user: dict = Depends(require_admin)):
 
 @app.get("/api/admin/readiness")
 async def admin_readiness(user: dict = Depends(require_admin)):
-    risk=risk_manager.load_risk_state(_risk_path()); locked=not live_trading_allowed(); checks={"server_live_flag_locked":locked,"risk_ledger_readable":True,"kill_switch_clear":not risk["kill_switch"].get("tripped"),"paper_mode_only":True,"orders_submitted":0}
-    return {"ready":all(checks.values()),"environment":"testnet" if os.getenv("BINANCE_ENV")=="testnet" else "unavailable","checks":checks}
+    from app.testnet_readiness import build_admin_readiness
+    risk_readable = True
+    try:
+        risk = risk_manager.load_risk_state(_risk_path())
+        kill_clear = not bool((risk.get("kill_switch") or {}).get("tripped"))
+    except Exception:
+        risk_readable = False
+        kill_clear = False
+    evidence = _safe_json_file(BOT_DIR / "readiness_evidence.json") or {}
+    result = build_admin_readiness(strategies=list(admin_control.STRATEGIES), evidence=evidence, live_locked=not live_trading_allowed())
+    result.update({"environment":"testnet" if os.getenv("BINANCE_ENV")=="testnet" else "unavailable", "checks":{"server_live_flag_locked":not live_trading_allowed(), "risk_ledger_readable":risk_readable, "kill_switch_clear":kill_clear}})
+    result["testnet_ready"] = result["testnet_ready"] and risk_readable and kill_clear
+    result["live_ready"] = result["live_ready"] and risk_readable and kill_clear
+    if not risk_readable or not kill_clear:
+        for row in result["strategies"].values():
+            row["testnet_ready"] = False
+            row["live_ready"] = False
+            row["reasons"].append("risk ledger unavailable or kill switch is tripped")
+            row["status"] = "paper-ready" if row["paper_ready"] else "not-ready"
+    result["ready"] = result["paper_ready"]
+    return result
 
 @app.get("/api/admin/activation")
 async def admin_activation(user: dict = Depends(require_admin)):

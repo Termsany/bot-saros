@@ -8,6 +8,29 @@ ALL_STRATEGIES = (
     "vol_breakout", "rsi2_pullback", "trend_breakout", "default",
 )
 
+EVIDENCE_FIELDS = ("adapter_implemented", "recovery_tests", "security_approved", "testnet_validated")
+
+
+def build_admin_readiness(*, strategies, evidence=None, live_locked):
+    """Build fail-closed per-strategy evidence; absent evidence is never inferred."""
+    evidence = evidence or {}
+    rows = {}
+    for strategy in strategies or []:
+        supplied = evidence.get(strategy) or {}
+        row = {field: supplied.get(field) is True for field in EVIDENCE_FIELDS}
+        row["paper_ready"] = row["adapter_implemented"]
+        row["testnet_ready"] = row["paper_ready"] and row["recovery_tests"] and row["security_approved"] and row["testnet_validated"]
+        row["live_ready"] = row["testnet_ready"] and bool(live_locked)
+        row["reasons"] = [f"missing {field.replace('_', ' ')} evidence" for field in EVIDENCE_FIELDS if not row[field]]
+        row["status"] = "live-ready" if row["live_ready"] else ("testnet-ready" if row["testnet_ready"] else ("paper-ready" if row["paper_ready"] else "not-ready"))
+        rows[strategy] = row
+    return {
+        "strategies": rows,
+        "paper_ready": bool(rows) and all(r["paper_ready"] for r in rows.values()),
+        "testnet_ready": bool(rows) and all(r["testnet_ready"] for r in rows.values()),
+        "live_ready": bool(rows) and all(r["live_ready"] for r in rows.values()),
+    }
+
 
 def check_testnet_readiness(exchange, *, strategies, risk_state_loader, environment=None):
     """Return structured readiness evidence without touching order endpoints."""
