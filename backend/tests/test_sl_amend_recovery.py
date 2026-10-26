@@ -7,6 +7,7 @@ subsequent position closure discovers and cleans up both orders. Long and short 
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import bot as botmod
 
@@ -71,8 +72,13 @@ def _seed_old_stop(ex, pos_id, side, qty, price):
 class ReplacementStopDualTrackingTests(unittest.TestCase):
     def setUp(self):
         botmod.CONFIG["paper_trading"] = False
+        self._td = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self._old_state_path = botmod.STATE_PATH
+        botmod.STATE_PATH = Path(self._td.name) / "state.json"
 
     def tearDown(self):
+        botmod.STATE_PATH = self._old_state_path
+        self._td.cleanup()
         botmod.CONFIG["paper_trading"] = True
 
     def _pos(self, side, qty=1.0, sl=49000.0, pos_id="pos-amend-1"):
@@ -85,7 +91,7 @@ class ReplacementStopDualTrackingTests(unittest.TestCase):
 
     def test_long_amend_persists_replacement_and_clears_old(self):
         ex, pos, old_sl_id = self._pos("long")
-        ok = botmod._amend_exchange_sl("BTC/USDT", pos, 49500.0, 49000.0, ex)
+        ok = botmod._amend_exchange_sl("BTC/USDT", pos, 49500.0, 49000.0, ex, {"positions": {"BTC/USDT": pos}, "recovery_required": {}})
         self.assertTrue(ok)
         self.assertNotIn("sl_pending_cancel", pos["oco_ids"])
         self.assertNotEqual(pos["oco_ids"]["sl"], old_sl_id)
@@ -94,7 +100,7 @@ class ReplacementStopDualTrackingTests(unittest.TestCase):
 
     def test_short_amend_persists_replacement_and_clears_old(self):
         ex, pos, old_sl_id = self._pos("short", sl=51000.0)
-        ok = botmod._amend_exchange_sl("BTC/USDT", pos, 50500.0, 51000.0, ex)
+        ok = botmod._amend_exchange_sl("BTC/USDT", pos, 50500.0, 51000.0, ex, {"positions": {"BTC/USDT": pos}, "recovery_required": {}})
         self.assertTrue(ok)
         self.assertNotIn("sl_pending_cancel", pos["oco_ids"])
         self.assertNotEqual(pos["oco_ids"]["sl"], old_sl_id)
@@ -105,7 +111,7 @@ class ReplacementStopDualTrackingTests(unittest.TestCase):
         ex = _AmendExchange(cancel_removes=False)   # cancel "succeeds" but readback still sees it
         old_sl_id = _seed_old_stop(ex, "pos-amend-2", "long", 1.0, 49000.0)
         pos = {"side": "long", "qty": 1.0, "sl": 49000.0, "oco_ids": {"sl": old_sl_id, "pos_id": "pos-amend-2"}}
-        ok = botmod._amend_exchange_sl("BTC/USDT", pos, 49500.0, 49000.0, ex)
+        ok = botmod._amend_exchange_sl("BTC/USDT", pos, 49500.0, 49000.0, ex, {"positions": {"BTC/USDT": pos}, "recovery_required": {}})
         self.assertFalse(ok)
         # The new replacement must already be the authoritative tracked stop ...
         new_sl_id = pos["oco_ids"]["sl"]
@@ -126,7 +132,7 @@ class ReplacementStopDualTrackingTests(unittest.TestCase):
         ex = _AmendExchange(cancel_removes=False)
         old_sl_id = _seed_old_stop(ex, "pos-amend-2s", "short", 1.0, 51000.0)
         pos = {"side": "short", "qty": 1.0, "sl": 51000.0, "oco_ids": {"sl": old_sl_id, "pos_id": "pos-amend-2s"}}
-        ok = botmod._amend_exchange_sl("BTC/USDT", pos, 50500.0, 51000.0, ex)
+        ok = botmod._amend_exchange_sl("BTC/USDT", pos, 50500.0, 51000.0, ex, {"positions": {"BTC/USDT": pos}, "recovery_required": {}})
         self.assertFalse(ok)
         new_sl_id = pos["oco_ids"]["sl"]
         self.assertEqual(pos["oco_ids"]["sl_pending_cancel"]["id"], old_sl_id)
@@ -140,7 +146,7 @@ class ReplacementStopDualTrackingTests(unittest.TestCase):
         old_sl_id = _seed_old_stop(ex, "pos-amend-3", "long", 1.0, 49000.0)
         pos = {"side": "long", "qty": 1.0, "sl": 49000.0, "oco_ids": {"sl": old_sl_id, "pos_id": "pos-amend-3"}}
         ex._readback_incomplete = True
-        ok = botmod._amend_exchange_sl("BTC/USDT", pos, 49500.0, 49000.0, ex)
+        ok = botmod._amend_exchange_sl("BTC/USDT", pos, 49500.0, 49000.0, ex, {"positions": {"BTC/USDT": pos}, "recovery_required": {}})
         self.assertFalse(ok)
         self.assertEqual(pos["oco_ids"]["sl_pending_cancel"]["id"], old_sl_id)
         self.assertNotEqual(pos["oco_ids"]["sl"], old_sl_id)
@@ -156,7 +162,7 @@ class ReplacementStopDualTrackingTests(unittest.TestCase):
             return real_create(symbol, kind, side, qty, price, params)
         ex.create_order = bad_create
 
-        ok = botmod._amend_exchange_sl("BTC/USDT", pos, 49500.0, 49000.0, ex)
+        ok = botmod._amend_exchange_sl("BTC/USDT", pos, 49500.0, 49000.0, ex, {"positions": {"BTC/USDT": pos}, "recovery_required": {}})
         self.assertFalse(ok)
         # The old stop remains the one and only tracked/authoritative id — no bad replacement adopted.
         self.assertEqual(pos["oco_ids"]["sl"], old_sl_id)
@@ -169,7 +175,7 @@ class ReplacementStopDualTrackingTests(unittest.TestCase):
         def short_create(symbol, kind, side, qty, price, params):
             return real_create(symbol, kind, side, 1.0, price, params)   # under-covers the 2.0 position
         ex.create_order = short_create
-        ok = botmod._amend_exchange_sl("BTC/USDT", pos, 49500.0, 49000.0, ex)
+        ok = botmod._amend_exchange_sl("BTC/USDT", pos, 49500.0, 49000.0, ex, {"positions": {"BTC/USDT": pos}, "recovery_required": {}})
         self.assertFalse(ok)
         self.assertEqual(pos["oco_ids"]["sl"], old_sl_id)
 
@@ -240,6 +246,58 @@ class ReplacementStopDualTrackingTests(unittest.TestCase):
         self.assertTrue(res["recovery_required"])
         # The pending replacement must stay tracked for the next attempt — not silently dropped.
         self.assertIn("sl_pending_cancel", pos["oco_ids"])
+
+    def test_replacement_with_missing_authoritative_fields_is_rejected(self):
+        for missing in ("side", "reduceOnly", "amount"):
+            with self.subTest(missing=missing):
+                ex, pos, old_sl_id = self._pos("long")
+                original_fetch = ex.fetch_order
+                def incomplete(oid, symbol, missing=missing, original_fetch=original_fetch):
+                    row = original_fetch(oid, symbol)
+                    row.pop(missing, None)
+                    return row
+                ex.fetch_order = incomplete
+                state = {"positions": {"BTC/USDT": pos}, "recovery_required": {}}
+                ok = botmod._amend_exchange_sl("BTC/USDT", pos, 49500.0, 49000.0, ex, state)
+                self.assertFalse(ok)
+                self.assertEqual(pos["oco_ids"]["sl"], old_sl_id)
+                self.assertNotIn("sl_pending_cleanup", pos["oco_ids"])
+                self.assertIn("BTC/USDT", state["recovery_required"])
+
+    def test_authoritative_readback_error_retains_unverified_replacement(self):
+        ex, pos, old_sl_id = self._pos("short", sl=51000.0)
+        ex._cancel_removes = False
+        ex.fetch_order = lambda oid, symbol: (_ for _ in ()).throw(TimeoutError("fetch timeout"))
+        state = {"positions": {"BTC/USDT": pos}, "recovery_required": {}}
+        ok = botmod._amend_exchange_sl("BTC/USDT", pos, 50500.0, 51000.0, ex, state)
+        self.assertFalse(ok)
+        self.assertEqual(pos["oco_ids"]["sl"], old_sl_id)
+        self.assertIn("sl_pending_cleanup", pos["oco_ids"])
+        self.assertIn("BTC/USDT", state["recovery_required"])
+
+    def test_cleanup_ambiguity_retains_unverified_replacement_id(self):
+        ex, pos, old_sl_id = self._pos("long")
+        ex.fetch_order = lambda oid, symbol: (_ for _ in ()).throw(RuntimeError("readback unavailable"))
+        ex._cancel_removes = False
+        state = {"positions": {"BTC/USDT": pos}, "recovery_required": {}}
+        ok = botmod._amend_exchange_sl("BTC/USDT", pos, 49500.0, 49000.0, ex, state)
+        self.assertFalse(ok)
+        pending = pos["oco_ids"].get("sl_pending_cleanup")
+        self.assertIsNotNone(pending)
+        self.assertIn(pending["id"], {o["clientOrderId"] for o in ex.open_orders})
+        self.assertEqual(state["recovery_required"]["BTC/USDT"]["sl_sync"], "pending_cleanup")
+
+    def test_persistence_failure_blocks_old_stop_cancellation_and_keeps_both_ids(self):
+        ex, pos, old_sl_id = self._pos("short", sl=51000.0)
+        state = {"positions": {"BTC/USDT": pos}, "recovery_required": {}}
+        with patch.object(botmod, "save_state", side_effect=OSError("disk full")):
+            ok = botmod._amend_exchange_sl("BTC/USDT", pos, 50500.0, 51000.0, ex, state)
+        self.assertFalse(ok)
+        self.assertEqual(ex.cancel_calls, [])
+        self.assertNotEqual(pos["oco_ids"]["sl"], old_sl_id)
+        self.assertEqual(pos["oco_ids"]["sl_pending_cancel"]["id"], old_sl_id)
+        self.assertTrue(pos["sl_unverified"])
+        self.assertIn("SL replacement", botmod._ENTRY_BLOCK["reason"])
 
 
 if __name__ == "__main__":

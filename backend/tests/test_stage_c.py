@@ -270,9 +270,10 @@ class BreakevenAmendTests(unittest.TestCase):
             with mock.patch.object(oco_mod, "place_oco_orders", mock.Mock(return_value={"sl_error": "fail"})),                  mock.patch.object(oco_mod, "cancel_oco_orders", mock.Mock()),                  mock.patch.object(botmod, "save_state", lambda s: None):
                 botmod.check_sl_tp(state, {"BTC/USDT": 49600}, ex=ex)
             pos = state["positions"]["BTC/USDT"]
-            self.assertTrue(pos.get("breakeven"))
-            # should be flagged unverified since amend failed
-            self.assertTrue(pos.get("sl_unverified") or pos.get("sl_sync") == "pending")
+            self.assertFalse(pos.get("breakeven"))
+            self.assertEqual(pos.get("sl"), 49000)
+            # Failed amend must block the state transition and remain unverified.
+            self.assertTrue(pos.get("sl_unverified") or pos.get("sl_sync") in ("pending", "recovery"))
         finally:
             botmod.CONFIG["paper_trading"] = orig
 

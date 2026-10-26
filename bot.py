@@ -942,8 +942,79 @@ def _reconcile_fills_by_client_id(ex, symbol, cid):
 
 _SL_AMEND_FAILED = set()   # symbols whose exchange stop couldn't be moved this cycle (check_sl_tp turns them into reviews)
 
-def _amend_exchange_sl(symbol, pos, new_sl, old_sl, ex):
-    # Try to move the exchange SL to new_sl. Returns True if verified, False if unverified (flagged).
+
+def _persist_sl_recovery(state, symbol, pos, reason, *, status="recovery"):
+    """Put the position's protective-order ownership and recovery reason into the state object,
+    then cross a real durable persistence boundary. The caller must treat any exception as a hard
+    stop: no old-stop cancellation or further protection mutation is safe until this succeeds."""
+    if state is None:
+        raise RuntimeError("SL replacement requires a state object for durable recovery")
+    state.setdefault("positions", {})[symbol] = pos
+    state.setdefault("recovery_required", {})[symbol] = {
+        "reason": str(reason), "sl_sync": status,
+        "oco_ids": dict(pos.get("oco_ids") or {}),
+        "at": datetime.now(timezone.utc).isoformat(),
+    }
+    state.setdefault("_entry_block", {})["reason"] = "SL replacement recovery required"
+    _ENTRY_BLOCK["reason"] = "SL replacement recovery required"
+    save_state(state)
+
+
+def _persist_sl_boundary(state, symbol, pos):
+    """Persist ownership before cancellation. No persistence means no destructive next step."""
+    if state is None:
+        raise RuntimeError("SL replacement persistence boundary is unavailable")
+    state.setdefault("positions", {})[symbol] = pos
+    save_state(state)
+
+
+def _mark_sl_recovery(state, symbol, pos, reason, *, status="recovery"):
+    pos["sl_unverified"] = True
+    pos["sl_sync"] = status
+    _SL_AMEND_FAILED.add(symbol)
+    try:
+        _persist_sl_recovery(state, symbol, pos, reason, status=status)
+    except Exception as persist_error:
+        # Keep the complete ownership graph in memory and block changes even if the disk write itself
+        # failed; the caller's state object remains the recovery handoff for the next retry.
+        _ENTRY_BLOCK["reason"] = "SL replacement persistence failed; manual recovery required"
+        log(f"SL recovery persistence failed {symbol}: {persist_error}")
+    return False
+
+
+def _retain_unverified_replacement(state, symbol, pos, replacement_id, reason, ex):
+    """Persist an unverified replacement before trying to clean it up. If cleanup is ambiguous,
+    keep its id in restart-safe recovery tracking rather than orphaning the live order."""
+    if replacement_id:
+        pos.setdefault("oco_ids", {})["sl_pending_cleanup"] = {
+            "id": replacement_id, "pos_id": (pos.get("oco_ids") or {}).get("pos_id"),
+            "role": "sl", "side": pos.get("side", "long"), "status": "pending_cleanup",
+            "since": datetime.now(timezone.utc).isoformat(),
+        }
+    try:
+        _persist_sl_recovery(state, symbol, pos, reason, status="pending_cleanup")
+    except Exception:
+        return _mark_sl_recovery(state, symbol, pos, reason, status="pending_cleanup")
+    if replacement_id:
+        try:
+            from backend.app.oco import cancel_oco_orders
+            cancelled = cancel_oco_orders(ex, symbol, sl_id=replacement_id)
+        except Exception:
+            cancelled = False
+        if cancelled is False:
+            return _mark_sl_recovery(state, symbol, pos, reason, status="pending_cleanup")
+        pos["oco_ids"].pop("sl_pending_cleanup", None)
+        try:
+            state.setdefault("recovery_required", {}).pop(symbol, None)
+            save_state(state)
+        except Exception:
+            return _mark_sl_recovery(state, symbol, pos, reason, status="pending_cleanup")
+    return _mark_sl_recovery(state, symbol, pos, reason, status="recovery")
+
+
+def _amend_exchange_sl(symbol, pos, new_sl, old_sl, ex, state=None):
+    # Try to move the exchange SL to new_sl. Returns True if verified and durably tracked,
+    # False if protection/recovery must remain blocked. state is required for replacement mode.
     if CONFIG.get("paper_trading"):
         return True
     if new_sl is None or old_sl is None or new_sl == old_sl:
@@ -970,36 +1041,57 @@ def _amend_exchange_sl(symbol, pos, new_sl, old_sl, ex):
             side = pos.get("side","long")
             qty = pos.get("qty")
             close_side = "sell" if side == "long" else "buy"
+            # A replacement cannot safely be created without a state object that can durably own it.
+            if state is None:
+                raise RuntimeError("replacement SL requires durable state persistence")
             replacement_id = f"{oco['pos_id']}-amend-{uuid.uuid4().hex[:8]}"
             oco2 = place_oco_orders(ex, symbol, side, qty, new_sl, None, paper=False, pos_id=replacement_id)
-            if not (oco2.get("sl_id") and not oco2.get("sl_error") and not oco2.get("sl_unverified") and not oco2.get("verify_failed")):
-                log(f"SL amend recreate failed {symbol}: {oco2}")
-                raise RuntimeError("replacement stop was not accepted/verified by the exchange")
+            replacement_sl_id = oco2.get("sl_id") if isinstance(oco2, dict) else None
+            if not replacement_sl_id:
+                raise RuntimeError("replacement stop was not accepted by the exchange")
+            if oco2.get("sl_error") or oco2.get("sl_unverified") or oco2.get("verify_failed"):
+                return _retain_unverified_replacement(state, symbol, pos, replacement_sl_id,
+                    "replacement stop exchange readback was incomplete", ex)
             ok, why = _verify_protective_stop(ex, symbol, oco2.get("sl"), new_sl, close_side, qty)
             if not ok:
-                try:
-                    cancel_oco_orders(ex, symbol, sl_id=oco2.get("sl_id"))
-                except Exception:
-                    pass
-                raise RuntimeError(f"replacement stop failed field verification: {why}")
+                return _retain_unverified_replacement(state, symbol, pos, replacement_sl_id,
+                    f"replacement stop failed authoritative field verification: {why}", ex)
             old_sl_id = oco.get("sl")
-            # Durably record the verified replacement BEFORE touching the old stop: a crash, timeout, or
-            # ambiguous cancel of the old leg below must never leave the new (already-live) stop untracked.
-            pos["oco_ids"] = {"sl": oco2.get("sl_id"), "tp": oco.get("tp"), "pos_id": oco.get("pos_id")}
-            if old_sl_id and old_sl_id != oco2.get("sl_id"):
+            # Cross the durable ownership boundary BEFORE touching the old stop. If this write fails,
+            # no cancellation is attempted and both live protections remain active.
+            pos["oco_ids"] = {"sl": replacement_sl_id, "tp": oco.get("tp"), "pos_id": oco.get("pos_id")}
+            if old_sl_id and old_sl_id != replacement_sl_id:
                 pos["oco_ids"]["sl_pending_cancel"] = {
                     "id": old_sl_id, "pos_id": oco.get("pos_id"), "role": "sl", "side": side,
                     "status": "pending_cancel", "since": datetime.now(timezone.utc).isoformat(),
                 }
+            try:
+                _persist_sl_boundary(state, symbol, pos)
+            except Exception as persist_error:
+                return _mark_sl_recovery(state, symbol, pos,
+                    f"replacement SL ownership persistence failed before old-stop cancellation: {persist_error}",
+                    status="awaiting_persistence")
             if old_sl_id:
                 cancelled = cancel_oco_orders(ex, symbol, sl_id=old_sl_id)
                 if cancelled is False:
-                    # Ambiguous/failed cancel of the old leg: both ids stay durably tracked (new as
-                    # authoritative "sl", old as "sl_pending_cancel") for reconcile_live / close to retry.
+                    # Both ids were durably recorded before this attempt; keep the old pending id.
                     pos["sl_unverified"] = True
                     pos["sl_sync"] = "pending_cancel"
+                    try:
+                        _persist_sl_recovery(state, symbol, pos, "old SL cancellation is ambiguous", status="pending_cancel")
+                    except Exception:
+                        pass
                     return False
                 pos["oco_ids"].pop("sl_pending_cancel", None)
+                try:
+                    _persist_sl_boundary(state, symbol, pos)
+                except Exception as persist_error:
+                    # The old stop is already confirmed absent, but durable state still retains the
+                    # conservative pending id from the previous boundary until this write succeeds.
+                    pos["oco_ids"]["sl_pending_cancel"] = {"id": old_sl_id, "pos_id": oco.get("pos_id"),
+                        "role": "sl", "side": side, "status": "cancelled_unpersisted", "since": datetime.now(timezone.utc).isoformat()}
+                    return _mark_sl_recovery(state, symbol, pos,
+                        f"replacement SL final persistence failed: {persist_error}", status="awaiting_persistence")
             pos["sl_sync"] = "amended"
             pos.pop("sl_unverified", None)
             return True
@@ -1014,47 +1106,49 @@ def _amend_exchange_sl(symbol, pos, new_sl, old_sl, ex):
 
 
 def _verify_protective_stop(ex, symbol, order_obj, expected_trigger, close_side, expected_qty):
-    """Confirm a freshly-placed protective stop actually matches what we asked for: trigger price,
-    protective (closing) side, reduce-only semantics, and that it covers the full remaining quantity.
-    order_obj is the raw create_order response from place_oco_orders; we prefer a fresh fetch_order
-    when the exchange gave us a real id, falling back to the create_order response fields."""
-    if not isinstance(order_obj, dict):
-        return False, "no order object returned for the replacement stop"
-    candidate = order_obj
-    oid = order_obj.get("id")
-    if oid:
-        try:
-            fresh = ex.fetch_order(oid, symbol)
-            if isinstance(fresh, dict):
-                candidate = fresh
-        except Exception:
-            pass
+    """Require authoritative exchange readback of every protective field; create-order data alone is
+    never sufficient. Binance hedge mode additionally requires the correct positionSide."""
+    if not isinstance(order_obj, dict) or not order_obj.get("id"):
+        return False, "replacement stop has no authoritative exchange id"
+    oid = order_obj["id"]
+    try:
+        candidate = ex.fetch_order(oid, symbol)
+    except Exception as exc:
+        return False, f"authoritative replacement readback failed: {exc}"
+    if not isinstance(candidate, dict) or candidate.get("id") != oid:
+        return False, "authoritative replacement readback is missing or mismatched"
     info = candidate.get("info") or {}
     trigger = candidate.get("stopLossPrice") or candidate.get("triggerPrice") or info.get("stopLossPrice") or info.get("triggerPrice")
     if trigger is None:
-        return False, "no trigger price on the replacement stop"
+        return False, "no authoritative trigger price"
     try:
         if abs(float(trigger) - float(expected_trigger)) > max(1e-8, abs(float(expected_trigger)) * 1e-6):
             return False, f"trigger price mismatch (got {trigger}, expected {expected_trigger})"
     except (TypeError, ValueError):
-        return False, "trigger price is not numeric"
+        return False, "authoritative trigger price is not numeric"
     order_side = candidate.get("side") or info.get("side")
-    if order_side is not None and str(order_side).lower() != close_side:
-        return False, f"protective side mismatch (got {order_side}, expected {close_side})"
+    if order_side is None or str(order_side).lower() != close_side:
+        return False, f"protective side missing or mismatch (got {order_side}, expected {close_side})"
     reduce_only = candidate.get("reduceOnly")
     if reduce_only is None:
         reduce_only = info.get("reduceOnly")
-    if reduce_only is False:
-        return False, "replacement stop is not reduceOnly"
+    if reduce_only is not True and str(reduce_only).lower() != "true":
+        return False, "authoritative reduceOnly evidence is missing or false"
     amount = candidate.get("amount")
     if amount is None:
         amount = info.get("origQty") or info.get("qty")
-    if amount is not None:
-        try:
-            if float(amount) + 1e-9 < float(expected_qty):
-                return False, f"replacement stop covers {amount}, less than remaining qty {expected_qty}"
-        except (TypeError, ValueError):
-            pass
+    if amount is None:
+        return False, "authoritative covered quantity is missing"
+    try:
+        if float(amount) + 1e-9 < float(expected_qty):
+            return False, f"replacement stop covers {amount}, less than remaining qty {expected_qty}"
+    except (TypeError, ValueError):
+        return False, "authoritative covered quantity is not numeric"
+    if str(getattr(ex, "id", "")).lower().startswith("binance") and bool(getattr(ex, "options", {}).get("hedgeMode")):
+        expected_position_side = "LONG" if close_side == "sell" else "SHORT"
+        position_side = candidate.get("positionSide") or info.get("positionSide")
+        if position_side is None or str(position_side).upper() != expected_position_side:
+            return False, f"Binance hedge positionSide missing or mismatch (got {position_side}, expected {expected_position_side})"
     return True, None
 
 
@@ -1075,6 +1169,12 @@ def _cancel_all_protective_orders(ex, symbol, pos):
             ok = False
         else:
             ids.pop("sl_pending_cancel", None)
+    pending_cleanup = ids.get("sl_pending_cleanup")
+    if pending_cleanup and pending_cleanup.get("id"):
+        if cancel_oco_orders(ex, symbol, sl_id=pending_cleanup["id"]) is False:
+            ok = False
+        else:
+            ids.pop("sl_pending_cleanup", None)
     return ok
 
 def log(msg):
@@ -1369,7 +1469,7 @@ def close_live_position(ex, symbol, pos, price):
     if remaining is None or remaining != 0:
         return _close_failure(f"close accepted but flat state is unconfirmed for {symbol}; remaining={remaining}")
     ids = pos.get("oco_ids") or {}
-    if ids.get("pos_id") or ids.get("sl") or ids.get("tp") or ids.get("sl_pending_cancel"):
+    if ids.get("pos_id") or ids.get("sl") or ids.get("tp") or ids.get("sl_pending_cancel") or ids.get("sl_pending_cleanup"):
         if _cancel_all_protective_orders(ex, symbol, pos) is False:
             return _close_failure(f"protective cleanup is unconfirmed for {symbol}")
     try:
@@ -1403,7 +1503,10 @@ def check_sl_tp(state, prices, ex=None):
                 old_sl_w = sl
                 new_sl_w = entry
                 if not CONFIG.get("paper_trading"):
-                    _amend_exchange_sl(symbol, pos, new_sl_w, old_sl_w, ex)
+                    if not _amend_exchange_sl(symbol, pos, new_sl_w, old_sl_w, ex, state):
+                        pos["sl_unverified"] = True
+                        pos["sl_sync"] = pos.get("sl_sync", "recovery")
+                        continue
                 pos["sl"]=sl=new_sl_w; pos["breakeven"]=True; save_state(state)
                 tag_w = " (UNVERIFIED - exchange SL not moved)" if pos.get("sl_unverified") else " (exchange verified)" if not CONFIG.get("paper_trading") else ""
                 log(f"♻️ {symbol} {side} كسر قمة التصحيح {wave['be']:.6g} — الوقف لنقطة الدخول {entry:.6g}")
@@ -1426,7 +1529,10 @@ def check_sl_tp(state, prices, ex=None):
                 if do_be:
                     old_sl = sl
                     if not CONFIG.get("paper_trading"):
-                        _amend_exchange_sl(symbol, pos, be_sl, old_sl, ex)
+                        if not _amend_exchange_sl(symbol, pos, be_sl, old_sl, ex, state):
+                            pos["sl_unverified"] = True
+                            pos["sl_sync"] = pos.get("sl_sync", "recovery")
+                            continue
                     pos["sl"] = be_sl
                     sl = pos["sl"]
                     pos["breakeven"] = True
@@ -1544,12 +1650,13 @@ def reconcile_live(state, ex):
             # Position is still open on the exchange: opportunistically retry cancelling any stale
             # replacement stop left over from a prior SL amendment whose old-leg cancel was ambiguous
             # (covers restart recovery too, since this is durably persisted in pos["oco_ids"]).
-            pending = (pos.get("oco_ids") or {}).get("sl_pending_cancel")
+            pending = (pos.get("oco_ids") or {}).get("sl_pending_cancel") or (pos.get("oco_ids") or {}).get("sl_pending_cleanup")
+            pending_key = "sl_pending_cancel" if (pos.get("oco_ids") or {}).get("sl_pending_cancel") else "sl_pending_cleanup"
             if pending and pending.get("id"):
                 try:
                     from backend.app.oco import cancel_oco_orders
                     if cancel_oco_orders(ex, sym, sl_id=pending["id"]) is True:
-                        pos["oco_ids"].pop("sl_pending_cancel", None)
+                        pos["oco_ids"].pop(pending_key, None)
                         save_state(state)
                 except Exception:
                     pass
@@ -1610,7 +1717,7 @@ def reconcile_live(state, ex):
             notify(f"🔒 قفل {sym} — {why}\nدخول {pos['entry']:.6g} → خروج {exit_px:.6g}\nPnL {pnl:+.2f}$ ({_live_label()})")
             ids = pos.get("oco_ids") or {}
             try:
-                cleanup_ok = _cancel_all_protective_orders(ex, sym, pos) if (ids.get("pos_id") or ids.get("sl") or ids.get("tp") or ids.get("sl_pending_cancel")) else True
+                cleanup_ok = _cancel_all_protective_orders(ex, sym, pos) if (ids.get("pos_id") or ids.get("sl") or ids.get("tp") or ids.get("sl_pending_cancel") or ids.get("sl_pending_cleanup")) else True
             except Exception:
                 cleanup_ok = False
             if not cleanup_ok:
