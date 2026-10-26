@@ -20,6 +20,7 @@ def _mock_ex_for_place(ex_id="binance", hedge=False, fail_sl=False, fail_tp=Fals
     ex = mock.Mock()
     ex.id = ex_id
     ex.options = {"hedgeMode": hedge} if hedge else {}
+    ex.market.return_value = {"contract": True, "linear": True, "inverse": False, "contractSize": 1.0}
     ex.amount_to_precision.side_effect = lambda s, q: str(round(float(q),6))
     ex.price_to_precision.side_effect = lambda s, p: str(float(p))
     ex._last_calls_list = []
@@ -60,6 +61,7 @@ class A_EmergencyCloseFailureTests(unittest.TestCase):
             p = Path(td) / "state.json"
             botmod.STATE_PATH = p
             botmod.LOG_PATH = Path(td) / "trades.log"
+            botmod.RISK_PATH = Path(td) / "risk_state.json"
             botmod.CONFIG["paper_trading"] = False
             botmod.CONFIG["market"] = "future"
             ex = _mock_ex_for_place(ex_id="binance", fail_sl=True, fail_tp=True)
@@ -102,6 +104,7 @@ class B_AmbiguousTimeoutTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             botmod.STATE_PATH = Path(td)/"state.json"
             botmod.LOG_PATH = Path(td)/"trades.log"
+            botmod.RISK_PATH = Path(td)/"risk_state.json"
             botmod.CONFIG["paper_trading"]=False
             botmod.CONFIG["market"]="future"
             cid = "raqm-abc123timeout"
@@ -147,6 +150,7 @@ class C_MissingProtectiveOrdersTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             botmod.STATE_PATH = Path(td)/"state.json"
             botmod.LOG_PATH = Path(td)/"trades.log"
+            botmod.RISK_PATH = Path(td)/"risk_state.json"
             botmod.CONFIG["paper_trading"]=False
             botmod.CONFIG["market"]="future"
             ex2 = _mock_ex_for_place(ex_id="binance", fail_sl=False, fail_tp=False, open_orders=[])
@@ -175,6 +179,7 @@ class D_PartialFillsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             botmod.STATE_PATH = Path(td)/"state.json"
             botmod.LOG_PATH = Path(td)/"trades.log"
+            botmod.RISK_PATH = Path(td)/"risk_state.json"
             botmod.CONFIG["paper_trading"]=False
             botmod.CONFIG["market"]="future"
             # Provide open_orders that match created OCO ids so verify passes; test focuses on partial entry qty handling
@@ -215,6 +220,7 @@ class E_RestartRecoveryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             botmod.STATE_PATH = Path(td)/"state.json"
             botmod.LOG_PATH = Path(td)/"trades.log"
+            botmod.RISK_PATH = Path(td)/"risk_state.json"
             botmod.CONFIG["paper_trading"]=False
             botmod.CONFIG["market"]="future"
             state = botmod.load_state()

@@ -56,6 +56,30 @@ def _leg_on_exchange(ex, symbol, order, cid):
     return False
 
 
+def _protective_params(ex, side, cid):
+    ex_id = str(getattr(ex, "id", "")).lower()
+    hedge = bool(getattr(ex, "options", {}).get("hedgeMode"))
+    params = {"clientOrderId": cid}
+    if ex_id == "bybit":
+        params["orderLinkId"] = cid
+        params["reduceOnly"] = True
+        if hedge:
+            params["positionIdx"] = 1 if side == "long" else 2
+    elif ex_id.startswith("binance"):
+        if hedge:
+            params["positionSide"] = "LONG" if side == "long" else "SHORT"
+        else:
+            params["reduceOnly"] = True
+    elif ex_id == "okx":
+        params["tdMode"] = getattr(ex, "options", {}).get("marginMode", "isolated")
+        if hedge:
+            params["posSide"] = "long" if side == "long" else "short"
+        params["reduceOnly"] = True
+    else:
+        params["reduceOnly"] = True
+    return params
+
+
 def place_oco_orders(ex, symbol, side, qty, sl_price, tp_price, paper: bool = True, pos_id: str = None, position_idx=None):
     """Places the stop and the target as reduceOnly orders tagged with our own ids.
 
@@ -82,7 +106,7 @@ def place_oco_orders(ex, symbol, side, qty, sl_price, tp_price, paper: bool = Tr
         if price is None:   # stop only (the daily trend exits on its signal, not at a target)
             continue
         try:
-            params = {**base_params, key: float(ex.price_to_precision(symbol, price)), "clientOrderId": cid}
+            params = {**_protective_params(ex, side, cid), key: float(ex.price_to_precision(symbol, price))}
             if idx is not None:
                 params["orderLinkId"] = cid
             results[leg] = ex.create_order(symbol, "market", close_side, qty, None, params)
@@ -111,27 +135,64 @@ def place_oco_orders(ex, symbol, side, qty, sl_price, tp_price, paper: bool = Tr
     return results
 
 
+def _order_views(ex, symbol):
+    """Enumerate unified and exchange-specific protective-order readback views."""
+    views = [("plain", lambda: ex.fetch_open_orders(symbol)),
+             ("trigger", lambda: ex.fetch_open_orders(symbol, None, None, {"trigger": True})),
+             ("stop", lambda: ex.fetch_open_orders(symbol, None, None, {"stop": True}))]
+    for view, method_name in (("algo", "fetch_open_algo_orders"), ("conditional", "fetch_open_conditional_orders"), ("trigger_api", "fetch_open_trigger_orders")):
+        fn = getattr(ex, method_name, None)
+        if callable(fn) and (method_name in dir(type(ex)) or method_name in getattr(ex, "__dict__", {})):
+            views.append((view, lambda fn=fn: fn(symbol)))
+    return views
+
+
+def _owned_orders(ex, symbol, ids):
+    """Read owned orders from plain and trigger/algo views; errors are inconclusive."""
+    found = {}
+    complete = True
+    for view, fetch_view in _order_views(ex, symbol):
+        try:
+            opens = fetch_view()
+        except Exception:
+            complete = False
+            continue
+        if not isinstance(opens, list):
+            complete = False
+            continue
+        for order in opens:
+            if not isinstance(order, dict):
+                continue
+            if _order_cid(order) in ids or order.get("id") in ids:
+                found.setdefault(order.get("id"), {"order": order, "view": view})
+    return found, complete
+
+
 def cancel_oco_orders(ex, symbol, pos_id: str = None, sl_id: str = None, tp_id: str = None):
-    """Cancels only our own protective orders (by their ids) — plain and conditional (trigger) open orders both,
-    since Binance/Bybit keep stop/take-profit orders apart. Never a broad cancel: manual orders stay."""
+    """Cancel owned protection and verify absence across plain and trigger/algo views."""
     ids = {x for x in (sl_id, tp_id) if x}
     if pos_id:
         ids |= {_oco_id(pos_id, "sl"), _oco_id(pos_id, "tp")}
     if not ids:
-        return
-    seen = set()
-    for params in ({}, {"trigger": True}, {"stop": True}):
+        return False
+    found, complete = _owned_orders(ex, symbol, ids)
+    if not complete:
+        return False
+    ok = True
+    for oid, meta in found.items():
         try:
-            opens = ex.fetch_open_orders(symbol, None, None, params) if params else ex.fetch_open_orders(symbol)
+            view = meta.get("view")
+            cancel_name = {"algo": "cancel_algo_order", "conditional": "cancel_conditional_order", "trigger_api": "cancel_trigger_order"}.get(view)
+            cancel_fn = getattr(ex, cancel_name, None) if cancel_name else None
+            if not callable(cancel_fn) or (cancel_name and cancel_name not in dir(ex)):
+                cancel_fn = ex.cancel_order
+            cancel_fn(oid, symbol)
         except Exception:
-            continue
-        for o in opens if isinstance(opens, list) else []:
-            if not isinstance(o, dict) or o.get("id") in seen:
-                continue
-            if _order_cid(o) in ids or o.get("id") in ids:
-                seen.add(o.get("id"))
-                try: ex.cancel_order(o["id"], symbol, params) if params else ex.cancel_order(o["id"], symbol)
-                except Exception: pass
+            ok = False
+    if not ok:
+        return False
+    remaining, complete = _owned_orders(ex, symbol, ids)
+    return bool(complete and not remaining)
 
 
 def place_order_idempotent(ex, symbol, side, qty, params=None, client_order_id: str = None):

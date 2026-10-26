@@ -15,10 +15,12 @@ from backend.app.oco import place_oco_orders, cancel_oco_orders
 def _ex(open_plain=(), open_trigger=()):
     ex = mock.Mock()
     ex.id = "binance"; ex.options = {}
+    ex.market.return_value = {"contract": True, "linear": True, "inverse": False, "contractSize": 1.0}
     ex.price_to_precision.side_effect = lambda s, p: str(float(p))
     ex.create_order.side_effect = lambda sym, typ, side, qty, price, params: {"id": "x-" + params["clientOrderId"], "clientOrderId": params["clientOrderId"]}
     ex.fetch_order.side_effect = Exception("not found")
     ex.fetch_open_orders.side_effect = lambda sym, *a: list(open_trigger if (len(a) == 3 and a[2]) else open_plain)
+    ex.fetch_funding_history = lambda symbol, since=None: []
     ex.cancel_order = mock.Mock()
     return ex
 
@@ -54,6 +56,27 @@ class ProtectiveIdTests(unittest.TestCase):
         self.assertNotEqual(a, b)
         self.assertLessEqual(len(a), 36)
         self.assertTrue(a.startswith("raqm-") and a.endswith("-sl"))
+
+    def test_cancel_requires_readback_absence(self):
+        ex = mock.Mock()
+        owned = [{"id": "sl-1", "clientOrderId": "raqm-pos-sl"}]
+        active = list(owned)
+        ex.fetch_open_orders.side_effect = lambda sym, *a: list(active)
+        ex.cancel_order.side_effect = lambda oid, *a: active.clear()
+        self.assertTrue(cancel_oco_orders(ex, "BTC/USDT", sl_id="raqm-pos-sl"))
+
+    def test_cancel_ambiguous_readback_stays_unconfirmed(self):
+        ex = mock.Mock()
+        ex.fetch_open_orders.return_value = [{"id": "sl-1", "clientOrderId": "raqm-pos-sl"}]
+        self.assertFalse(cancel_oco_orders(ex, "BTC/USDT", sl_id="raqm-pos-sl"))
+
+    def test_algo_endpoint_is_read_and_cancelled(self):
+        ex = mock.Mock()
+        active = [{"id": "algo-1", "clientOrderId": "raqm-pos-sl"}]
+        ex.fetch_open_orders.return_value = []
+        ex.fetch_open_algo_orders = lambda symbol: list(active)
+        ex.cancel_algo_order = lambda oid, symbol: active.clear()
+        self.assertTrue(cancel_oco_orders(ex, "BTC/USDT", sl_id="raqm-pos-sl"))
 
     def test_cancel_leaves_the_other_positions_stop(self):
         mine, other = "raqm-0e8b777212da", "raqm-0e8f00000000"
@@ -129,16 +152,25 @@ class CloseLivePositionTests(unittest.TestCase):
 
     def _ex(self):
         ex = mock.Mock(); ex.id = "binance"; ex.options = {}
+        ex.market.return_value = {"contract": True, "linear": True, "inverse": False, "contractSize": 1.0}
         ex.amount_to_precision.side_effect = lambda s, q: str(q)
-        ex.create_order.side_effect = lambda sym, typ, side, qty, price, params: {"id": "c1", "filled": qty, "average": 100.0}
+        ex.create_order.side_effect = lambda sym, typ, side, qty, price, params: {"id": "c1", "filled": qty, "average": 100.0, "fee": {"cost": abs(float(qty)) * 100.0 * 0.0004}}
         ex.fetch_open_orders.return_value = []
+        ex.fetch_funding_history = lambda symbol, since=None: [{"amount": 0.0, "timestamp": 1}]
+        ex.fetch_positions.side_effect = [[{"symbol": "SOL/USDT:USDT", "contracts": 0.37}], [{"symbol": "SOL/USDT:USDT", "contracts": 0}]]
         return ex
 
     def test_closes_the_exact_size_and_cancels_own_orders(self):
         ex = self._ex()
-        pos = {"side": "long", "qty": 0.37, "oco_ids": {"pos_id": "raqm-aaaabbbbcccc"}}
+        pos = {"side": "long", "entry": 100.0, "qty": 0.37, "contract_size": 1.0, "contract_size_verified": True, "oco_ids": {"pos_id": "raqm-aaaabbbbcccc"}, "entry_fee_rate": 0.0004, "entry_fee_cost": 0.37 * 100.0 * 0.0004}
         sl = oco_mod._oco_id("raqm-aaaabbbbcccc", "sl")
         ex.fetch_open_orders.return_value = [{"id": "9", "clientOrderId": sl}, {"id": "8", "clientOrderId": "manual"}]
+        orders = list(ex.fetch_open_orders.return_value)
+        cancelled = set()
+        def active_remove(oid):
+            orders[:] = [o for o in orders if o["id"] != oid]
+        ex.fetch_open_orders.side_effect = lambda sym, *a: [o for o in orders if o["id"] not in cancelled]
+        ex.cancel_order.side_effect = lambda oid, *a: (cancelled.add(oid), active_remove(oid))[1]
         res = botmod.close_live_position(ex, "SOL/USDT", pos, 100.0)
         args = ex.create_order.call_args[0]
         self.assertEqual(args[2], "sell"); self.assertAlmostEqual(float(args[3]), 0.37)   # not 0.37 x leverage
@@ -156,10 +188,14 @@ class CloseLivePositionTests(unittest.TestCase):
 
     def test_still_open_after_a_failed_close_raises(self):
         ex = self._ex()
+        ex.fetch_positions.side_effect = None
         ex.create_order.side_effect = Exception("network down")
         ex.fetch_positions.return_value = [{"symbol": "SOL/USDT:USDT", "contracts": 1.0}]
+        res = botmod.close_live_position(ex, "SOL/USDT", {"side": "long", "qty": 1.0}, 90.0)
+        self.assertFalse(res["accounting_verified"])
+        self.assertTrue(res["recovery_required"])
         with self.assertRaises(Exception):
-            botmod.close_live_position(ex, "SOL/USDT", {"side": "long", "qty": 1.0}, 90.0)
+            botmod._require_verified_close(res)
 
 
 class LiveExchangeTests(unittest.TestCase):

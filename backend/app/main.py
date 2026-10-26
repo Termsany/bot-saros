@@ -15,15 +15,19 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.db import init_db, async_session, Trade, BacktestRun, UserSetting, UserClose
 from app.auth import require_user, require_admin, require_admin_or_cron, is_admin
+from app import live_activation
 from sqlalchemy import select, desc
 import ccxt, pandas as pd, numpy as np
 from datetime import datetime, timezone
+from . import admin_control
+from app import risk_manager
 
 try:
     from dotenv import load_dotenv; load_dotenv()
 except: pass
 
 BOT_DIR = Path(__file__).parent.parent.parent
+LIVE_ACTIVATION_PATH = BOT_DIR / "live_activation.sqlite3"
 
 def _supabase_key_kind(key: str) -> str:
     """'service', 'public' or 'unknown' — from the key's own format, without calling Supabase."""
@@ -71,7 +75,9 @@ async def _resume_bot_after_restart():
             # real orders run only as the daily trend's own service; an old config must not bring this loop back live
             await send_telegram("⚠️ API restarted: an old dashboard config asked for real orders — not resumed (real orders run only as the trend service).")
             return
-        bot_task = asyncio.create_task(bot_loop(cfg))
+        global _bot_task_id
+        _bot_task_id = uuid.uuid4().hex
+        bot_task = asyncio.create_task(bot_loop(cfg, task_id=_bot_task_id))
         await send_telegram(f"♻️ API restarted — bot loop resumed ({'paper' if cfg.get('paper', True) else 'LIVE'})")
     except Exception as e:
         print(f"bot resume failed: {e}")
@@ -150,7 +156,7 @@ _tier_cache: dict = {}
 async def get_tier(user: dict) -> str:
     """Tier from Supabase profiles (service key). Fails closed to 'free'; admins get everything."""
     from app.auth import _admin_emails
-    if user.get("email") in _admin_emails() and user.get("email_confirmed"):
+    if is_admin(user):
         return "elite"
     hit = _tier_cache.get(user["id"])
     if hit and hit[0] > _time.monotonic():
@@ -319,6 +325,54 @@ async def api_chart(file: str, user: dict = Depends(require_user)):
 
 # ── Bot control: status, start/stop (paper), trades
 bot_task = None
+_bot_task_id = None
+_control_wakeup = asyncio.Event()
+
+def _wake_managed_loop():
+    _control_wakeup.set()
+
+async def _sleep_until_wakeup(seconds):
+    try:
+        await asyncio.wait_for(_control_wakeup.wait(), timeout=seconds)
+    except asyncio.TimeoutError:
+        pass
+    _control_wakeup.clear()
+
+def execute_strategy_cycle(root, strategy, protection, entry):
+    """Run protection regardless of desired state; gate only new entries."""
+    protection()
+    active = admin_control.controls(root, strategy)["active"]
+    if active: entry()
+    return {"entries_enabled": active}
+
+async def _wait_strategy_runtime(strategy, *, active: bool, expected_task_id=None, action_at=None, timeout: float = 5.0):
+    deadline = _time.monotonic() + timeout
+    while _time.monotonic() < deadline:
+        runtime = admin_control.get_runtime(BOT_DIR, strategy)
+        if active and runtime["status"] == "running" and runtime.get("heartbeat"):
+            task_matches = expected_task_id is None or runtime.get("task_id") == expected_task_id
+            heartbeat_fresh = True
+            if action_at:
+                try:
+                    heartbeat_fresh = datetime.fromisoformat(runtime["heartbeat"]) >= datetime.fromisoformat(action_at)
+                except (TypeError, ValueError):
+                    heartbeat_fresh = False
+            if task_matches and heartbeat_fresh:
+                return runtime
+        if not active and runtime["status"] in ("stopped", "paused"):
+            return runtime
+        await asyncio.sleep(0.02)
+    return admin_control.get_runtime(BOT_DIR, strategy)
+
+def _ensure_managed_loop():
+    global bot_task, _bot_task_id
+    if bot_task is None or bot_task.done():
+        cfg_path = BOT_DIR / "api_bot_config.json"
+        cfg = _safe_json_file(cfg_path) or {"paper": True, "running": True}
+        cfg["paper"] = True; cfg["running"] = True
+        _bot_task_id = uuid.uuid4().hex
+        bot_task = asyncio.create_task(bot_loop(cfg, task_id=_bot_task_id))
+    return bot_task
 
 @app.get("/api/bot/status")
 async def bot_status(user: dict = Depends(require_admin)):
@@ -381,7 +435,12 @@ async def bot_start(req: BotStartReq, bg: BackgroundTasks, user: dict = Depends(
     lev = req.leverage or (2 if req.strategies == ["trend_daily"] else 5)
     cfg = {"symbols": req.symbols, "strategies": req.strategies, "timeframe": req.timeframe, "paper": req.paper, "leverage": lev, "running": True}
     (BOT_DIR / "api_bot_config.json").write_text(json.dumps(cfg, ensure_ascii=False), encoding="utf-8")
-    bot_task = asyncio.create_task(bot_loop(cfg))
+    for strategy in (req.strategies or admin_control.STRATEGIES):
+        if strategy in admin_control.STRATEGIES:
+            admin_control.set_strategy_lifecycle(BOT_DIR, strategy, "start", str(user.get("email") or user.get("id") or "admin"))
+    global _bot_task_id
+    _bot_task_id = uuid.uuid4().hex
+    bot_task = asyncio.create_task(bot_loop(cfg, task_id=_bot_task_id))
     return {"ok": True, "msg": "started", "config": cfg}
 
 @app.post("/api/bot/stop")
@@ -423,7 +482,7 @@ def _get_exchange_for_cycle(paper: bool):
         print(f"WARNING: {len(instances)} LIVE exchanges — only {name} will trade")
     return (name, inst, False)
 
-async def bot_loop(cfg):
+async def bot_loop(cfg, task_id=None):
     """يحلل كل poll_seconds ويحفظ في DB + يرسل تليجرام"""
     import strategies_advanced as adv
     import bot as botmod
@@ -440,9 +499,17 @@ async def bot_loop(cfg):
     print(f"Bot loop started {cfg}")
     while True:
         try:
+            controls = {s: admin_control.controls(BOT_DIR, s) for s in admin_control.STRATEGIES}
+            active_strategies = [s for s, c in controls.items() if c["active"]]
+            for strategy, control in controls.items():
+                if control["active"]:
+                    admin_control.mark_runtime(BOT_DIR, strategy, status="running", heartbeat=admin_control.now(), last_cycle=admin_control.now(), task_id=task_id)
+                else:
+                    admin_control.mark_runtime(BOT_DIR, strategy, status="paused" if control["paused"] else "stopped", task_id=task_id)
+            botmod.CONFIG["enabled_strategies"] = active_strategies
             picked = _get_exchange_for_cycle(is_paper)
             if picked is None:
-                await asyncio.sleep(int(botmod.CONFIG.get("poll_seconds",60)))
+                await _sleep_until_wakeup(int(botmod.CONFIG.get("poll_seconds",60)))
                 continue
             ex_name, ex, cycle_paper = picked
             botmod.CONFIG["paper_trading"] = cycle_paper
@@ -591,12 +658,15 @@ async def bot_loop(cfg):
             if prices: botmod.check_sl_tp(state, prices, ex)
             # no new position while the exchange and our record disagree, or a position needs a human
             blocked = None
+            admin_state = admin_control.read_state(BOT_DIR)
+            if admin_state.get("entry_paused", {}).get("paused"):
+                blocked = f"entries paused: {admin_state['entry_paused'].get('reason') or 'operator pause'}"
             if not cycle_paper and (state.get("_reconcile") or {}).get("state") == "reconciling":
                 blocked = "reconciling with the exchange"
             if state.get("recovery_required"):
                 blocked = f"needs review: {', '.join(state['recovery_required'])}"
             review_before = set(state.get("recovery_required") or {})
-            if blocked:
+            if blocked or not active_strategies:
                 print(f"entries blocked — {blocked}")
             else:
                 for sym,a in analyses.items():
@@ -700,9 +770,17 @@ async def bot_loop(cfg):
             try:
                 (BOT_DIR / "dashboard-data.json").write_text(json.dumps({"analyses":analyses,"state":state,"time":datetime.now(timezone.utc).isoformat()}, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
             except: pass
-        except asyncio.CancelledError: print("bot loop stopped"); break
-        except Exception as e: print(f"loop err {e}")
-        await asyncio.sleep(int(botmod.CONFIG.get("poll_seconds",60)))
+        except asyncio.CancelledError:
+            for strategy in admin_control.STRATEGIES:
+                try: admin_control.mark_runtime(BOT_DIR, strategy, status="paused" if admin_control.controls(BOT_DIR, strategy)["paused"] else "stopped", task_id=task_id)
+                except Exception: pass
+            print("bot loop stopped"); break
+        except Exception as e:
+            for strategy in admin_control.STRATEGIES:
+                try: admin_control.mark_runtime(BOT_DIR, strategy, status="error", error=str(e)[:300], task_id=task_id)
+                except Exception: pass
+            print(f"loop err {e}")
+        await _sleep_until_wakeup(int(botmod.CONFIG.get("poll_seconds",60)))
 
 
 class SettingsReq(BaseModel):
@@ -832,6 +910,7 @@ async def user_tier(user: dict = Depends(require_user)):
 @app.post("/api/optimizer/run")
 async def optimizer_run(symbol: str = "BTC/USDT", timeframe: str = "4h", limit: int = 200, user: dict = Depends(require_admin)):
     """يشغل Auto-Optimizer ويرجع البطل — يحدث ai_weights.json"""
+    rate_limit(user["id"], "optimizer", 2, 300)
     import json as js
     if not SYMBOL_RE.match(symbol) or timeframe not in TIMEFRAMES: raise HTTPException(400, "bad symbol/timeframe")
     limit = max(50, min(int(limit), 1000))
@@ -869,6 +948,7 @@ async def telegram_status(user: dict = Depends(require_admin)):
 @app.post("/api/evolve")
 async def evolve(user: dict = Depends(require_admin_or_cron)):
     """Self-evolution: يعيد تقييم الـ 15 استراتيجية ويطفي الخسرانة + يحدث الأوزان"""
+    rate_limit(user["id"], "evolve", 1, 300)
     import json as js
     if not (BOT_DIR / "auto_optimizer.py").exists():
         return {"ok": False, "error": "auto_optimizer.py is missing from the repo"}
@@ -913,6 +993,7 @@ async def evolve(user: dict = Depends(require_admin_or_cron)):
 async def llm_generate(prompt: str = "RSI + volume divergence on 4h", symbol: str = "BTC/USDT", timeframe: str = "4h", user: dict = Depends(require_admin)):
     """LLM يخترع استراتيجية + باك تست فوري (الكود بيتشغل في sandbox — شوف llm_sandbox.py)"""
     _require_llm_lab()
+    rate_limit(user["id"], "llm_generate", 3, 300)
     if not SYMBOL_RE.match(symbol) or timeframe not in TIMEFRAMES: raise HTTPException(400, "bad symbol/timeframe")
     prompt = prompt[:500]
     from app.llm_generator import generate_strategy, save_strategy, backtest_llm
@@ -953,6 +1034,7 @@ async def llm_evolve(prompt: str = "innovative crypto futures strategy combining
     """يولد n استراتيجيات، يباك تست كل واحدة، ويضيف الفائزة (WR>=60%) تلقائياً — admin only: the cron secret must not
     choose what code gets generated and run"""
     _require_llm_lab()
+    rate_limit(user["id"], "llm_evolve", 1, 600)
     prompt = prompt[:500]
     from app.llm_generator import generate_strategy, save_strategy, backtest_llm, auto_promote_if_winner
     results = []
@@ -1001,6 +1083,14 @@ LIVE_SYMBOL_RE = re.compile(r"^[A-Z0-9]{1,20}/USDT(:USDT)?$")
 class LiveCloseReq(BaseModel):
     symbol: str
 
+
+class LiveActivationReq(BaseModel):
+    environment: str
+    account: str = Field(min_length=1, max_length=120)
+    strategies: List[str] = Field(min_length=1, max_length=20)
+    risk_allocation: dict
+    readiness: dict
+
 @app.get("/api/live/status")
 async def live_status(user: dict = Depends(require_admin)):
     f = IPC_DIR / "live_status.json"
@@ -1012,6 +1102,35 @@ async def live_status(user: dict = Depends(require_admin)):
         return {"running": False, "error": "status unreadable"}
     data["running"] = (datetime.now(timezone.utc) - datetime.fromisoformat(data["updated"])).total_seconds() < 300
     return data
+
+
+@app.get("/api/live/activation")
+async def live_activation_status(user: dict = Depends(require_admin)):
+    record = live_activation.active_record(LIVE_ACTIVATION_PATH)
+    return {"enabled": live_trading_allowed(), "active": bool(record), "record": record}
+
+
+@app.post("/api/live/activation")
+async def live_activation_create(req: LiveActivationReq, user: dict = Depends(require_admin)):
+    if req.environment != "live":
+        raise HTTPException(400, "activation requires the explicit live environment")
+    if not all(re.fullmatch(r"[a-z0-9_]{1,30}", s) for s in req.strategies):
+        raise HTTPException(400, "bad strategy name")
+    try:
+        aid = live_activation.activate(LIVE_ACTIVATION_PATH, environment=req.environment, account=req.account,
+            approved_by=str(user.get("email") or user.get("id")), strategies=req.strategies,
+            risk_allocation=req.risk_allocation, readiness=req.readiness)
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    return {"ok": True, "activation_id": aid, "approved_by": user.get("email") or user.get("id")}
+
+
+@app.post("/api/live/activation/revoke")
+async def live_activation_revoke(user: dict = Depends(require_admin)):
+    live_activation.revoke(LIVE_ACTIVATION_PATH, reason=f"revoked by {user.get('email') or user.get('id')}")
+    return {"ok": True}
 
 @app.post("/api/live/close")
 async def live_close(req: LiveCloseReq, user: dict = Depends(require_admin)):
@@ -1056,6 +1175,160 @@ async def llm_promoted(user: dict = Depends(require_admin)):
     try: return _js.loads(reg.read_text(encoding="utf-8"))
     except: return []
 
+
+# ── Admin Control Center: authenticated, persistent, paper-only controls
+class AdminModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+class StrategyPatch(AdminModel):
+    enabled: Optional[bool] = None
+    timeframe: Optional[str] = Field(None, pattern=r"^(1m|5m|15m|30m|1h|2h|4h|1d)$")
+    symbols: Optional[List[str]] = Field(None, max_length=30)
+
+class LifecycleReq(AdminModel):
+    action: str = Field(pattern=r"^(start|stop|pause|resume)$")
+    confirm: bool = False
+
+class PauseReq(AdminModel):
+    paused: bool
+    reason: Optional[str] = Field(None, max_length=240)
+    confirm: bool = False
+
+class RiskLimitsReq(AdminModel):
+    risk_per_trade_pct: Optional[float] = Field(None, ge=0, le=100)
+    max_aggregate_risk_pct: Optional[float] = Field(None, ge=0, le=100)
+    max_correlated_risk_pct: Optional[float] = Field(None, ge=0, le=100)
+    max_daily_loss_pct: Optional[float] = Field(None, ge=0, le=100)
+    max_drawdown_pct: Optional[float] = Field(None, ge=0, le=100)
+    leverage: Optional[int] = Field(None, ge=1, le=20)
+    margin_mode: Optional[str] = Field(None, pattern=r"^(isolated|cross)$")
+
+class KillSwitchReq(AdminModel):
+    action: str = Field(pattern=r"^(trip|reset)$")
+    reason: Optional[str] = Field(None, min_length=3, max_length=240)
+    confirm: bool = False
+
+async def _admin_actor(user): return str(user.get("email") or user.get("id") or "admin")
+def _risk_path(): return BOT_DIR / "risk_state.json"
+def _safe_json_file(path):
+    try: return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+    except Exception: return None
+
+def _health_snapshot():
+    cfg=_safe_json_file(BOT_DIR / "api_bot_config.json") or {}
+    return {"api":"healthy", "paper_bot":"healthy" if bot_task and not bot_task.done() else "stopped", "live_trading":"locked" if not live_trading_allowed() else "requires_activation", "config":"available" if cfg else "unavailable"}
+
+@app.get("/api/admin/overview")
+async def admin_overview(user: dict = Depends(require_admin)):
+    rate_limit(user["id"], "admin_overview", 30, 60)
+    st=admin_control.read_state(BOT_DIR); risk=risk_manager.load_risk_state(_risk_path())
+    async with async_session() as sess:
+        trades=(await sess.execute(select(Trade))).scalars().all()
+    return {"ok":True,"mode":"paper","strategies":len(admin_control.STRATEGIES),"running":bool(bot_task and not bot_task.done()),"entry_paused":st["entry_paused"],"kill_switch":risk["kill_switch"],"paper":{"open":sum(t.status=="open" for t in trades),"trades":len(trades),"pnl":round(sum(t.pnl or 0 for t in trades),2)},"health":_health_snapshot(),"live_enabled":live_trading_allowed()}
+
+@app.get("/api/admin/strategies")
+async def admin_strategies(user: dict = Depends(require_admin)):
+    st=admin_control.read_state(BOT_DIR)
+    return [{"id":s,"name":s,"status":"enabled" if st["strategies"][s]["enabled"] else "disabled","mode":"paper","config":st["strategies"][s],"runtime":admin_control.get_runtime(BOT_DIR,s),"lifecycle":admin_control.get_runtime(BOT_DIR,s)["status"]} for s in admin_control.STRATEGIES]
+
+@app.patch("/api/admin/strategies/{strategy}")
+async def admin_strategy(strategy: str, req: StrategyPatch, user: dict = Depends(require_admin)):
+    rate_limit(user["id"], "admin_mutation", 30, 60)
+    patch={k:v for k,v in req.model_dump().items() if v is not None}
+    if req.symbols is not None and not all(SYMBOL_RE.match(s.upper()) for s in req.symbols): raise HTTPException(422,"bad symbol")
+    try: result=admin_control.update_strategy(BOT_DIR,strategy,patch,await _admin_actor(user))
+    except KeyError: raise HTTPException(404,"unknown strategy")
+    return {"ok":True,"strategy":strategy,"config":result}
+
+@app.post("/api/admin/strategies/{strategy}/lifecycle")
+async def admin_strategy_lifecycle(strategy: str, req: LifecycleReq, user: dict = Depends(require_admin)):
+    rate_limit(user["id"], "admin_mutation", 30, 60)
+    if strategy not in admin_control.STRATEGIES: raise HTTPException(404,"unknown strategy")
+    if req.action in ("start","stop") and not req.confirm: raise HTTPException(400,"confirmation required")
+    action_at = admin_control.now()
+    admin_control.invalidate_runtime(BOT_DIR, strategy)
+    result=admin_control.set_strategy_lifecycle(BOT_DIR,strategy,req.action,await _admin_actor(user))
+    active = req.action in ("start", "resume")
+    _wake_managed_loop()
+    if active:
+        _ensure_managed_loop()
+    elif bot_task is None or bot_task.done():
+        admin_control.mark_runtime(BOT_DIR, strategy, status="paused" if req.action == "pause" else "stopped")
+    runtime = await _wait_strategy_runtime(strategy, active=active, expected_task_id=_bot_task_id, action_at=action_at)
+    running = active and runtime["status"] == "running" and runtime.get("task_id") == _bot_task_id and bool(runtime.get("heartbeat"))
+    return {"ok":True,"strategy":strategy,"action":req.action,"config":result,"runtime":runtime,"running":running}
+
+@app.get("/api/admin/paper/portfolio")
+async def admin_paper_portfolio(user: dict = Depends(require_admin)):
+    async with async_session() as sess:
+        rows=(await sess.execute(select(Trade).order_by(desc(Trade.id)).limit(200))).scalars().all()
+    return {"mode":"paper","positions":[{"id":t.id,"symbol":t.symbol,"side":t.side,"entry":t.entry,"qty":t.qty,"sl":t.sl,"tp":t.tp,"pnl":t.pnl,"status":t.status} for t in rows if t.status=="open"],"history":[{"id":t.id,"symbol":t.symbol,"side":t.side,"entry":t.entry,"exit":t.exit,"pnl":t.pnl,"status":t.status,"entry_ts":t.entry_ts,"exit_ts":t.exit_ts} for t in rows]}
+
+@app.get("/api/admin/risk")
+async def admin_risk(user: dict = Depends(require_admin)):
+    st=risk_manager.load_risk_state(_risk_path()); return {"available":True,"state":st}
+
+@app.patch("/api/admin/risk/limits")
+async def admin_risk_limits(req: RiskLimitsReq, user: dict = Depends(require_admin)):
+    rate_limit(user["id"], "admin_mutation", 30, 60)
+    st=risk_manager.load_risk_state(_risk_path()); patch={k:v for k,v in req.model_dump().items() if v is not None}; st["limits"].update(patch); risk_manager.save_risk_state(_risk_path(),st); admin_control.audit(BOT_DIR,await _admin_actor(user),"risk_limits_update","ok",patch); return {"ok":True,"limits":st["limits"]}
+
+@app.post("/api/admin/risk/kill-switch")
+async def admin_kill_switch(req: KillSwitchReq, user: dict = Depends(require_admin)):
+    rate_limit(user["id"], "admin_mutation", 30, 60)
+    if not req.confirm: raise HTTPException(400,"confirmation required")
+    actor=await _admin_actor(user)
+    if req.action=="trip": risk_manager.trip_kill_switch(_risk_path(),req.reason or "manual operator trip",by=actor)
+    else: risk_manager.reset_kill_switch(_risk_path(),operator=actor)
+    admin_control.audit_kill(BOT_DIR,actor,"kill_switch_"+req.action,"ok",{"reason":req.reason})
+    return {"ok":True,"state":risk_manager.load_risk_state(_risk_path())["kill_switch"]}
+
+@app.post("/api/admin/controls/entry-pause")
+async def admin_entry_pause(req: PauseReq, user: dict = Depends(require_admin)):
+    rate_limit(user["id"], "admin_mutation", 30, 60)
+    if not req.confirm: raise HTTPException(400,"confirmation required")
+    return {"ok":True,"entry_pause":admin_control.set_entry_pause(BOT_DIR,req.paused,await _admin_actor(user),req.reason)}
+
+@app.get("/api/admin/recovery")
+async def admin_recovery(user: dict = Depends(require_admin)):
+    st=risk_manager.load_risk_state(_risk_path()); dash=_safe_json_file(BOT_DIR/"dashboard-data.json") or {}; state=dash.get("state") or {}
+    return {"available":True,"recovery_required":state.get("recovery_required",{}),"reconciliation":state.get("_reconcile",{}),"risk_reservations":st.get("open_risk",{})}
+
+@app.get("/api/admin/health")
+async def admin_health(user: dict = Depends(require_admin)):
+    return {"available":True,"at":datetime.now(timezone.utc).isoformat(),"components":_health_snapshot()}
+
+@app.get("/api/admin/readiness")
+async def admin_readiness(user: dict = Depends(require_admin)):
+    from app.testnet_readiness import build_admin_readiness
+    risk_readable = True
+    try:
+        risk = risk_manager.load_risk_state(_risk_path())
+        kill_clear = not bool((risk.get("kill_switch") or {}).get("tripped"))
+    except Exception:
+        risk_readable = False
+        kill_clear = False
+    evidence = _safe_json_file(BOT_DIR / "readiness_evidence.json") or {}
+    result = build_admin_readiness(strategies=list(admin_control.STRATEGIES), evidence=evidence, live_locked=not live_trading_allowed(), environment=os.getenv("BINANCE_ENV", ""))
+    result.update({"environment":"testnet" if os.getenv("BINANCE_ENV")=="testnet" else "unavailable", "checks":{"server_live_flag_locked":not live_trading_allowed(), "risk_ledger_readable":risk_readable, "kill_switch_clear":kill_clear}})
+    result["testnet_ready"] = result["testnet_ready"] and risk_readable and kill_clear
+    result["live_ready"] = result["live_ready"] and risk_readable and kill_clear
+    if not risk_readable or not kill_clear:
+        for row in result["strategies"].values():
+            row["testnet_ready"] = False
+            row["live_ready"] = False
+            row["reasons"].append("risk ledger unavailable or kill switch is tripped")
+            row["status"] = "paper-ready" if row["paper_ready"] else "not-ready"
+    result["ready"] = result["paper_ready"]
+    return result
+
+@app.get("/api/admin/activation")
+async def admin_activation(user: dict = Depends(require_admin)):
+    return {"enabled":live_trading_allowed(),"active":bool(live_activation.active_record(LIVE_ACTIVATION_PATH)),"creation_from_ui":False,"record":live_activation.active_record(LIVE_ACTIVATION_PATH)}
+
+@app.get("/api/admin/audit")
+async def admin_audit(limit: int=100, user: dict = Depends(require_admin)):
+    return {"items":admin_control.list_audit(BOT_DIR,max(1,min(limit,200)))}
 
 # ── Keys Vault — Multi-Exchange (encrypted, never expose secrets)
 from pydantic import BaseModel as _BM2
