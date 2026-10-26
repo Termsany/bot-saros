@@ -1,118 +1,28 @@
 "use client"
+import { useEffect, useState } from "react"
 import { Logo } from "@/components/Logo"
-import { useState } from "react"
-import { STRATEGIES, TIERS } from "@/lib/strategies"
+import { TIERS } from "@/lib/strategies"
 import { authHeaders } from "@/lib/supabase"
-import { LivePositions } from "@/components/LivePositions"
 
+type Json = Record<string, any>
+const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+const sections = [["overview","نظرة عامة"],["strategies","الاستراتيجيات"],["paper","المحفظة الورقية"],["risk","المخاطر والأمان"],["readiness","جاهزية التشغيل"],["health","صحة النظام"],["audit","سجل التدقيق"],["settings","الإعدادات"]]
 export default function AdminPage(){
-  const [tiers, setTiers] = useState(TIERS)
-  const [strategies, setStrategies] = useState(STRATEGIES)
-  const [saved, setSaved] = useState("")
-
-  function updateTier(idx:number, field:string, val:any){
-    setTiers(t=> t.map((x,i)=> i===idx ? {...x, [field]: val} : x))
-  }
-  function updateStrat(idx:number, field:string, val:any){
-    setStrategies(s=> s.map((x,i)=> i===idx ? {...x, [field]: val} : x))
-  }
-
-  return (
-    <div className="min-h-screen bg-void text-ink p-4" dir="rtl">
-      <div className="max-w-[1200px] mx-auto">
-        <div className="flex justify-between items-center">
-          <div className="flex items-center gap-3"><Logo size="sm" /><h1 className="text-lg font-black">لوحة تحكم الأدمن</h1></div>
-          <div className="flex items-center gap-2">
-            <a href="/dashboard" className="text-xs px-3 py-1.5 rounded border border-line hover:bg-surface">المنصة</a>
-            <a href="/" className="text-xs px-3 py-1.5 rounded-xl border border-line">الرئيسية</a>
-          </div>
-        </div>
-        <LivePositions/>
-
-        <p className="text-xs text-muted mt-6">عدّل التسعير وأسماء البوتات للمعاينة — احفظها في lib/strategies.ts للنشر. أرقام الأداء بتيجي من research/bots_stats.py ومش بتتعدّل بإيدك.</p>
-
-        <div className="mt-6">
-          <h2 className="text-sm font-black">الباقات — التسعير</h2>
-          <div className="grid md:grid-cols-4 gap-3 mt-3">
-            {tiers.map((t,i)=>(
-              <div key={t.id} className="rounded-2xl border border-line bg-surface p-3">
-                <input value={t.name} onChange={e=>updateTier(i,"name",e.target.value)} className="w-full bg-surface border border-line rounded-lg px-2 py-1 text-sm font-bold" />
-                <div className="grid grid-cols-2 gap-2 mt-2">
-                  <input value={t.price} onChange={e=>updateTier(i,"price",e.target.value)} placeholder="29$" className="bg-surface border border-line rounded-lg px-2 py-1 text-xs" />
-                  <input value={t.count} onChange={e=>updateTier(i,"count",parseInt(e.target.value)||0)} type="number" className="bg-surface border border-line rounded-lg px-2 py-1 text-xs" />
-                </div>
-                <div className="text-[11px] text-muted mt-1">{t.count} استراتيجية</div>
-                <div className="text-[11px] mt-2 space-y-1">
-                  {t.features.map((f,fi)=>(
-                    <input key={fi} value={f} onChange={e=>{
-                      const nf=[...t.features]; nf[fi]=e.target.value; updateTier(i,"features",nf)
-                    }} className="w-full bg-surface border border-line rounded-lg px-2 py-1 text-[11px]" />
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="mt-6">
-          <h2 className="text-sm font-black">الـ 4 بوتات — WR و PF</h2>
-          <div className="overflow-auto rounded-xl border border-line mt-3">
-            <table className="w-full text-xs">
-              <thead className="bg-surface text-muted"><tr><th className="p-2 text-right">الاسم</th><th className="p-2">التاير</th><th className="p-2">WR%</th><th className="p-2">PF</th><th className="p-2">الأيقونة</th></tr></thead>
-              <tbody>
-                {strategies.map((s,i)=>(
-                  <tr key={s.id} className="border-t border-line">
-                    <td className="p-1"><input value={s.nameAr} onChange={e=>updateStrat(i,"nameAr",e.target.value)} className="w-full bg-surface border border-line rounded px-1 py-1 text-xs" /></td>
-                    <td className="p-1">
-                      <select value={s.tier} onChange={e=>updateStrat(i,"tier",e.target.value)} className="bg-surface border border-line rounded px-1 py-1 text-xs">
-                        <option value="free">free</option><option value="starter">starter</option><option value="pro">pro</option><option value="elite">elite</option>
-                      </select>
-                    </td>
-                    <td className="p-1"><input type="number" value={s.winRate} onChange={e=>updateStrat(i,"winRate",parseFloat(e.target.value)||0)} className="w-16 bg-surface border border-line rounded px-1 py-1 text-xs" /></td>
-                    <td className="p-1"><input type="number" step="0.1" value={s.pf} onChange={e=>updateStrat(i,"pf",parseFloat(e.target.value)||0)} className="w-16 bg-surface border border-line rounded px-1 py-1 text-xs" /></td>
-                    <td className="p-1"><input value={s.icon} onChange={e=>updateStrat(i,"icon",e.target.value)} className="w-10 bg-surface border border-line rounded px-1 py-1 text-xs text-center" /></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div className="mt-3 flex gap-2">
-            <button onClick={()=>{
-              const code = `export const TIERS = ${JSON.stringify(tiers, null, 2)}\nexport const STRATEGIES = ${JSON.stringify(strategies, null, 2)}`
-              navigator.clipboard.writeText(code); setSaved("تم النسخ — الصق في lib/strategies.ts")
-              setTimeout(()=>setSaved(""), 3000)
-            }} className="px-4 py-2 rounded-xl bg-corona text-void text-xs font-bold">نسخ الكود</button>
-            {saved && <span className="text-xs text-corona py-2">{saved}</span>}
-          </div>
-          <div className="text-[11px] text-muted mt-2">ملاحظة: التعديل هنا للمعاينة فقط. للنشر انسخ الكود والصقه في <code>lib/strategies.ts</code> ثم <code>npm run build</code></div>
-        </div>
-
-        <div className="mt-6 grid md:grid-cols-2 gap-4">
-          <div className="rounded-2xl border border-line bg-surface p-4">
-            <h3 className="text-sm font-black">📱 تنبيهات تليجرام</h3>
-            <p className="text-xs text-muted mt-1">كل صفقة دخول/خروج توصلك فورا</p>
-            <div className="flex gap-2 mt-3">
-              <button onClick={async()=>{
-                const b=document.getElementById("tg-status") as HTMLElement
-                if(b) b.textContent="جاري الاختبار..."
-                try{
-                  const r=await fetch((process.env.NEXT_PUBLIC_API_URL||"http://localhost:8000")+"/api/telegram/test",{method:"POST", headers: await authHeaders()})
-                  const j=await r.json()
-                  if(b) b.textContent=j.ok ? "✅ وصلت الرسالة لتليجرام!" : "❌ "+(j.msg||j.detail||"فشل — ضع التوكن في backend/.env")
-                }catch(e:any){ const b2=document.getElementById("tg-status"); if(b2) b2.textContent="خطأ: "+String(e.message||e) }
-              }} className="px-4 py-2 rounded-xl bg-[#229ED9] text-white text-xs font-bold">اختبر التليجرام</button>
-              <button onClick={async()=>{
-                const r=await fetch((process.env.NEXT_PUBLIC_API_URL||"http://localhost:8000")+"/api/telegram/status", { headers: await authHeaders() })
-                const j=await r.json()
-                const b=document.getElementById("tg-status")
-                if(b) b.textContent=j.configured ? "✅ مربوط" : "⚠️ غير مربوط — ضع TELEGRAM_BOT_TOKEN و CHAT_ID في backend/.env"
-              }} className="px-3 py-2 rounded-xl border border-line text-xs">الحالة</button>
-            </div>
-            <div id="tg-status" className="mt-2 text-[11px] text-muted">اضغط الحالة للتحقق</div>
-            <div className="text-[11px] text-muted mt-2">من <a href="https://t.me/BotFather" target="_blank" className="text-[#229ED9] underline">@BotFather</a> اعمل بوت وخذ التوكن، ثم من <a href="https://t.me/userinfobot" target="_blank" className="text-[#229ED9] underline">@userinfobot</a> خذ الـ Chat ID</div>
-          </div>
-        </div>
-      </div>
-    </div>
-  )
+  const [section,setSection]=useState("overview"),[data,setData]=useState<Json>({}),[error,setError]=useState(""),[busy,setBusy]=useState(false)
+  const load=async()=>{try{const h=await authHeaders();const ps=["overview","strategies","paper/portfolio","risk","readiness","health","activation","audit"].map(x=>fetch(`${API}/api/admin/${x}`,{headers:h}));const rs=await Promise.all(ps);if(rs.some(r=>r.status===401||r.status===403))throw Error("ليس لديك صلاحية أدمن");const js=await Promise.all(rs.map(r=>r.json()));setData({overview:js[0],strategies:js[1],paper:js[2],risk:js[3],readiness:js[4],health:js[5],activation:js[6],audit:js[7]});setError("")}catch(e:any){setError(e.message||"تعذر الاتصال")}}
+  useEffect(()=>{load()},[])
+  const action=async(path:string,method:string,body:Json)=>{setBusy(true);try{const r=await fetch(API+path,{method,headers:{...(await authHeaders()),"Content-Type":"application/json"},body:JSON.stringify(body)});const j=await r.json();if(!r.ok)throw Error(j.detail||"فشل الإجراء");await load()}catch(e:any){setError(e.message)}finally{setBusy(false)}}
+  const confirmAction=(m:string,fn:()=>void)=>{if(window.confirm(m))fn()};const o=data.overview||{},risk=data.risk?.state||{}
+  return <div dir="rtl" className="min-h-screen bg-void text-ink p-4"><div className="max-w-[1400px] mx-auto"><header className="flex flex-wrap gap-3 justify-between items-center mb-5"><div className="flex items-center gap-3"><Logo size="sm"/><div><h1 className="text-xl font-black">مركز تحكم الإدارة</h1><p className="text-xs text-muted">بيانات حية · وصول مصادق · التداول الحقيقي مقفول</p></div></div><div className="flex gap-2"><a href="/dashboard" className="px-3 py-2 rounded-xl border border-line text-xs">المنصة</a><button onClick={load} className="px-3 py-2 rounded-xl bg-corona text-void text-xs font-bold">تحديث</button></div></header>{error&&<div className="mb-4 rounded-xl border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-300">{error}</div>}<nav className="flex gap-2 overflow-auto pb-3">{sections.map(([id,label])=><button key={id} onClick={()=>setSection(id)} className={`whitespace-nowrap px-3 py-2 rounded-xl text-xs ${section===id?"bg-corona text-void font-bold":"border border-line text-muted"}`}>{label}</button>)}</nav>
+  {section==="overview"&&<div className="grid md:grid-cols-4 gap-3">{[["الحالة",o.health?.api||"unavailable"],["المحفظة الورقية",`${o.paper?.open??"—"} مراكز مفتوحة`],["الاستراتيجيات",o.strategies??"—"],["صافي PnL",o.paper?.pnl??"—"],["الإدخالات",o.entry_paused?.paused?"متوقفة":"مسموحة"],["Kill switch",o.kill_switch?.tripped?"مفعل":"غير مفعل"]].map(([k,v])=><Card key={k} title={k} value={String(v)}/>)}</div>}
+  {section==="strategies"&&<Panel title="تسع استراتيجيات · Paper only"><div className="overflow-auto"><table className="w-full text-xs"><thead><tr className="text-muted"><th className="p-2 text-right">الاستراتيجية</th><th>الحالة</th><th>النمط</th><th>إجراء</th></tr></thead><tbody>{(data.strategies||[]).map((x:any)=><tr key={x.id} className="border-t border-line"><td className="p-2 font-bold">{x.name}</td><td>{x.status}</td><td>{x.mode}</td><td><button disabled={busy} onClick={()=>action(`/api/admin/strategies/${x.id}/lifecycle`,"POST",{action:x.status==="enabled"?"stop":"start",confirm:true})} className="px-2 py-1 rounded-lg border border-line">{x.status==="enabled"?"إيقاف":"تشغيل"}</button></td></tr>)}</tbody></table></div></Panel>}
+  {section==="paper"&&<Panel title="المحفظة الورقية"><div className="flex gap-2 mb-3"><button disabled={busy} onClick={()=>action("/api/bot/start","POST",{paper:true})} className="px-3 py-2 rounded-xl bg-corona text-void text-xs font-bold">تشغيل البوت الورقي</button><button disabled={busy} onClick={()=>action("/api/bot/stop","POST",{})} className="px-3 py-2 rounded-xl border border-line text-xs">إيقاف</button></div><pre className="text-xs whitespace-pre-wrap text-muted">{JSON.stringify(data.paper||{},null,2)}</pre></Panel>}
+  {section==="risk"&&<div className="grid md:grid-cols-2 gap-3"><Panel title="حدود المخاطر"><pre className="text-xs whitespace-pre-wrap text-muted">{JSON.stringify(risk.limits||{},null,2)}</pre><p className="text-xs mt-3">Kill switch: <b>{risk.kill_switch?.tripped?"مفعل":"غير مفعل"}</b></p><button disabled={busy} onClick={()=>confirmAction("تأكيد تغيير Kill switch؟",()=>action("/api/admin/risk/kill-switch","POST",{action:risk.kill_switch?.tripped?"reset":"trip",reason:"operator action",confirm:true}))} className="mt-3 px-3 py-2 rounded-xl border border-red-400 text-red-300 text-xs">{risk.kill_switch?.tripped?"إعادة الضبط":"تفعيل Kill switch"}</button></Panel><Panel title="إيقاف الإدخالات"><p className="text-xs text-muted mb-3">الإيقاف يمنع الإدخالات الجديدة ولا يغلق المراكز تلقائياً.</p><button disabled={busy} onClick={()=>confirmAction("تأكيد تغيير إيقاف الإدخالات؟",()=>action("/api/admin/controls/entry-pause","POST",{paused:!o.entry_paused?.paused,reason:"operator action",confirm:true}))} className="px-3 py-2 rounded-xl border border-line text-xs">{o.entry_paused?.paused?"استئناف الإدخالات":"إيقاف الإدخالات"}</button></Panel></div>}
+  {section==="readiness"&&<Panel title="مصفوفة الجاهزية"><p className="text-xs mb-3">البيئة: {data.readiness?.environment||"unavailable"} · Ready: {String(data.readiness?.ready)}</p><pre className="text-xs whitespace-pre-wrap text-muted">{JSON.stringify(data.readiness?.checks||{},null,2)}</pre><p className="text-xs text-muted mt-3">لا يوجد زر تفعيل مباشر للتداول الحقيقي.</p></Panel>}
+  {section==="health"&&<Panel title="صحة النظام"><pre className="text-xs whitespace-pre-wrap text-muted">{JSON.stringify({health:data.health,activation:data.activation},null,2)}</pre></Panel>}
+  {section==="audit"&&<Panel title="سجل التدقيق"><div className="space-y-2">{(data.audit?.items||[]).map((x:any)=><div key={x.id} className="border-b border-line pb-2 text-xs"><b>{x.action}</b> · {x.actor} · {x.result}<div className="text-muted">{x.at}</div></div>)}</div></Panel>}
+  {section==="settings"&&<div className="grid md:grid-cols-2 gap-3"><Panel title="التسعير الحالي"><pre className="text-xs whitespace-pre-wrap text-muted">{JSON.stringify(TIERS,null,2)}</pre></Panel><Panel title="التكاملات"><p className="text-xs text-muted">الأسرار لا تُعرض في الواجهة. حالة المفاتيح تُدار عبر API المصادق.</p><div className="flex gap-2 mt-3"><button onClick={()=>action("/api/telegram/test","POST",{})} className="px-3 py-2 rounded-xl bg-[#229ED9] text-white text-xs">اختبار تليجرام</button><button onClick={async()=>{try{const r=await fetch(API+"/api/telegram/status",{headers:await authHeaders()});const j=await r.json();setError(j.configured?"تليجرام مربوط":"تليجرام غير مربوط")}catch(e:any){setError(e.message)}}} className="px-3 py-2 rounded-xl border border-line text-xs">حالة تليجرام</button></div></Panel></div>}
+  </div></div>
 }
+function Card({title,value}:{title:string,value:string}){return <div className="rounded-2xl border border-line bg-surface p-4"><div className="text-xs text-muted">{title}</div><div className="text-xl font-black mt-2">{value}</div></div>}
+function Panel({title,children}:{title:string,children:any}){return <section className="rounded-2xl border border-line bg-surface p-4"><h2 className="font-black text-sm mb-4">{title}</h2>{children}</section>}

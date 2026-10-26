@@ -19,6 +19,8 @@ from app import live_activation
 from sqlalchemy import select, desc
 import ccxt, pandas as pd, numpy as np
 from datetime import datetime, timezone
+from . import admin_control
+from app import risk_manager
 
 try:
     from dotenv import load_dotenv; load_dotenv()
@@ -593,6 +595,9 @@ async def bot_loop(cfg):
             if prices: botmod.check_sl_tp(state, prices, ex)
             # no new position while the exchange and our record disagree, or a position needs a human
             blocked = None
+            admin_state = admin_control.read_state(BOT_DIR)
+            if admin_state.get("entry_paused", {}).get("paused"):
+                blocked = f"entries paused: {admin_state['entry_paused'].get('reason') or 'operator pause'}"
             if not cycle_paper and (state.get("_reconcile") or {}).get("state") == "reconciling":
                 blocked = "reconciling with the exchange"
             if state.get("recovery_required"):
@@ -1099,6 +1104,131 @@ async def llm_promoted(user: dict = Depends(require_admin)):
     try: return _js.loads(reg.read_text(encoding="utf-8"))
     except: return []
 
+
+# ── Admin Control Center: authenticated, persistent, paper-only controls
+class AdminModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+class StrategyPatch(AdminModel):
+    enabled: Optional[bool] = None
+    timeframe: Optional[str] = Field(None, pattern=r"^(1m|5m|15m|30m|1h|2h|4h|1d)$")
+    symbols: Optional[List[str]] = Field(None, max_length=30)
+
+class LifecycleReq(AdminModel):
+    action: str = Field(pattern=r"^(start|stop|pause|resume)$")
+    confirm: bool = False
+
+class PauseReq(AdminModel):
+    paused: bool
+    reason: Optional[str] = Field(None, max_length=240)
+    confirm: bool = False
+
+class RiskLimitsReq(AdminModel):
+    risk_per_trade_pct: Optional[float] = Field(None, ge=0, le=100)
+    max_aggregate_risk_pct: Optional[float] = Field(None, ge=0, le=100)
+    max_correlated_risk_pct: Optional[float] = Field(None, ge=0, le=100)
+    max_daily_loss_pct: Optional[float] = Field(None, ge=0, le=100)
+    max_drawdown_pct: Optional[float] = Field(None, ge=0, le=100)
+    leverage: Optional[int] = Field(None, ge=1, le=20)
+    margin_mode: Optional[str] = Field(None, pattern=r"^(isolated|cross)$")
+
+class KillSwitchReq(AdminModel):
+    action: str = Field(pattern=r"^(trip|reset)$")
+    reason: Optional[str] = Field(None, min_length=3, max_length=240)
+    confirm: bool = False
+
+async def _admin_actor(user): return str(user.get("email") or user.get("id") or "admin")
+def _risk_path(): return BOT_DIR / "risk_state.json"
+def _safe_json_file(path):
+    try: return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+    except Exception: return None
+
+def _health_snapshot():
+    cfg=_safe_json_file(BOT_DIR / "api_bot_config.json") or {}
+    return {"api":"healthy", "paper_bot":"healthy" if bot_task and not bot_task.done() else "stopped", "live_trading":"locked" if not live_trading_allowed() else "requires_activation", "config":"available" if cfg else "unavailable"}
+
+@app.get("/api/admin/overview")
+async def admin_overview(user: dict = Depends(require_admin)):
+    rate_limit(user["id"], "admin_overview", 30, 60)
+    st=admin_control.read_state(BOT_DIR); risk=risk_manager.load_risk_state(_risk_path())
+    async with async_session() as sess:
+        trades=(await sess.execute(select(Trade))).scalars().all()
+    return {"ok":True,"mode":"paper","strategies":len(admin_control.STRATEGIES),"running":bool(bot_task and not bot_task.done()),"entry_paused":st["entry_paused"],"kill_switch":risk["kill_switch"],"paper":{"open":sum(t.status=="open" for t in trades),"trades":len(trades),"pnl":round(sum(t.pnl or 0 for t in trades),2)},"health":_health_snapshot(),"live_enabled":live_trading_allowed()}
+
+@app.get("/api/admin/strategies")
+async def admin_strategies(user: dict = Depends(require_admin)):
+    st=admin_control.read_state(BOT_DIR)
+    return [{"id":s,"name":s,"status":"enabled" if st["strategies"][s]["enabled"] else "disabled","mode":"paper","config":st["strategies"][s],"lifecycle":"running" if bot_task and not bot_task.done() and st["strategies"][s]["enabled"] else "stopped"} for s in admin_control.STRATEGIES]
+
+@app.patch("/api/admin/strategies/{strategy}")
+async def admin_strategy(strategy: str, req: StrategyPatch, user: dict = Depends(require_admin)):
+    rate_limit(user["id"], "admin_mutation", 30, 60)
+    patch={k:v for k,v in req.model_dump().items() if v is not None}
+    if req.symbols is not None and not all(SYMBOL_RE.match(s.upper()) for s in req.symbols): raise HTTPException(422,"bad symbol")
+    try: result=admin_control.update_strategy(BOT_DIR,strategy,patch,await _admin_actor(user))
+    except KeyError: raise HTTPException(404,"unknown strategy")
+    return {"ok":True,"strategy":strategy,"config":result}
+
+@app.post("/api/admin/strategies/{strategy}/lifecycle")
+async def admin_strategy_lifecycle(strategy: str, req: LifecycleReq, user: dict = Depends(require_admin)):
+    rate_limit(user["id"], "admin_mutation", 30, 60)
+    if strategy not in admin_control.STRATEGIES: raise HTTPException(404,"unknown strategy")
+    if req.action in ("start","stop") and not req.confirm: raise HTTPException(400,"confirmation required")
+    result=admin_control.update_strategy(BOT_DIR,strategy,{"enabled":req.action in ("start","resume"),"mode":"paper"},await _admin_actor(user))
+    return {"ok":True,"strategy":strategy,"action":req.action,"config":result,"note":"lifecycle is paper-only; use the existing paper bot controls to start the managed loop"}
+
+@app.get("/api/admin/paper/portfolio")
+async def admin_paper_portfolio(user: dict = Depends(require_admin)):
+    async with async_session() as sess:
+        rows=(await sess.execute(select(Trade).order_by(desc(Trade.id)).limit(200))).scalars().all()
+    return {"mode":"paper","positions":[{"id":t.id,"symbol":t.symbol,"side":t.side,"entry":t.entry,"qty":t.qty,"sl":t.sl,"tp":t.tp,"pnl":t.pnl,"status":t.status} for t in rows if t.status=="open"],"history":[{"id":t.id,"symbol":t.symbol,"side":t.side,"entry":t.entry,"exit":t.exit,"pnl":t.pnl,"status":t.status,"entry_ts":t.entry_ts,"exit_ts":t.exit_ts} for t in rows]}
+
+@app.get("/api/admin/risk")
+async def admin_risk(user: dict = Depends(require_admin)):
+    st=risk_manager.load_risk_state(_risk_path()); return {"available":True,"state":st}
+
+@app.patch("/api/admin/risk/limits")
+async def admin_risk_limits(req: RiskLimitsReq, user: dict = Depends(require_admin)):
+    rate_limit(user["id"], "admin_mutation", 30, 60)
+    st=risk_manager.load_risk_state(_risk_path()); patch={k:v for k,v in req.model_dump().items() if v is not None}; st["limits"].update(patch); risk_manager.save_risk_state(_risk_path(),st); admin_control.audit(BOT_DIR,await _admin_actor(user),"risk_limits_update","ok",patch); return {"ok":True,"limits":st["limits"]}
+
+@app.post("/api/admin/risk/kill-switch")
+async def admin_kill_switch(req: KillSwitchReq, user: dict = Depends(require_admin)):
+    rate_limit(user["id"], "admin_mutation", 30, 60)
+    if not req.confirm: raise HTTPException(400,"confirmation required")
+    actor=await _admin_actor(user)
+    if req.action=="trip": risk_manager.trip_kill_switch(_risk_path(),req.reason or "manual operator trip",by=actor)
+    else: risk_manager.reset_kill_switch(_risk_path(),operator=actor)
+    admin_control.audit_kill(BOT_DIR,actor,"kill_switch_"+req.action,"ok",{"reason":req.reason})
+    return {"ok":True,"state":risk_manager.load_risk_state(_risk_path())["kill_switch"]}
+
+@app.post("/api/admin/controls/entry-pause")
+async def admin_entry_pause(req: PauseReq, user: dict = Depends(require_admin)):
+    rate_limit(user["id"], "admin_mutation", 30, 60)
+    if not req.confirm: raise HTTPException(400,"confirmation required")
+    return {"ok":True,"entry_pause":admin_control.set_entry_pause(BOT_DIR,req.paused,await _admin_actor(user),req.reason)}
+
+@app.get("/api/admin/recovery")
+async def admin_recovery(user: dict = Depends(require_admin)):
+    st=risk_manager.load_risk_state(_risk_path()); dash=_safe_json_file(BOT_DIR/"dashboard-data.json") or {}; state=dash.get("state") or {}
+    return {"available":True,"recovery_required":state.get("recovery_required",{}),"reconciliation":state.get("_reconcile",{}),"risk_reservations":st.get("open_risk",{})}
+
+@app.get("/api/admin/health")
+async def admin_health(user: dict = Depends(require_admin)):
+    return {"available":True,"at":datetime.now(timezone.utc).isoformat(),"components":_health_snapshot()}
+
+@app.get("/api/admin/readiness")
+async def admin_readiness(user: dict = Depends(require_admin)):
+    risk=risk_manager.load_risk_state(_risk_path()); locked=not live_trading_allowed(); checks={"server_live_flag_locked":locked,"risk_ledger_readable":True,"kill_switch_clear":not risk["kill_switch"].get("tripped"),"paper_mode_only":True,"orders_submitted":0}
+    return {"ready":all(checks.values()),"environment":"testnet" if os.getenv("BINANCE_ENV")=="testnet" else "unavailable","checks":checks}
+
+@app.get("/api/admin/activation")
+async def admin_activation(user: dict = Depends(require_admin)):
+    return {"enabled":live_trading_allowed(),"active":bool(live_activation.active_record(LIVE_ACTIVATION_PATH)),"creation_from_ui":False,"record":live_activation.active_record(LIVE_ACTIVATION_PATH)}
+
+@app.get("/api/admin/audit")
+async def admin_audit(limit: int=100, user: dict = Depends(require_admin)):
+    return {"items":admin_control.list_audit(BOT_DIR,max(1,min(limit,200)))}
 
 # ── Keys Vault — Multi-Exchange (encrypted, never expose secrets)
 from pydantic import BaseModel as _BM2
