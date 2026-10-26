@@ -1727,8 +1727,18 @@ def try_enter_wave(symbol, analysis, state, ex):
     seen=state.setdefault("wave_seen",{})
     if seen.get(symbol)==sig["ts"]: return   # one entry per signal candle (the loop polls every minute)
     seen[symbol]=sig["ts"]; save_state(state)
+    side="long" if sig["dir"]==1 else "short"; price=analysis["price"]
+    tp=sig["tgt2"] if sig["two"] else sig["tgt1"]
+    if len(state["positions"])>=CONFIG["max_open_positions"] or not daily_pnl_ok(state): return
+    if (side=="long" and price<=sig["stop"]) or (side=="short" and price>=sig["stop"]):
+        log(f"⏸️ {symbol} {sig['kind']} — السعر عدّى الوقف قبل الدخول"); return
     if not CONFIG["paper_trading"]:
-        log(f"⏸️ {symbol} Wave Flats شغالة Paper بس — مفيش أوامر حقيقية"); return
+        pos = _single_leg_live_entry(ex, state, symbol, side, position_size(price, ex, stop_price=sig["stop"]),
+            price, sig["stop"], tp, "wave_flats", {"wave": {"kind": sig["kind"], "tp1": sig["tgt1"] if sig["two"] else None,
+            "tp1_done": False, "be": sig["be"]}})
+        if pos:
+            state["last_trade"][symbol]=datetime.now(timezone.utc).isoformat(); save_state(state)
+        return
     if len(state["positions"])>=CONFIG["max_open_positions"] or not daily_pnl_ok(state): return
     side="long" if sig["dir"]==1 else "short"; price=analysis["price"]
     if (side=="long" and price<=sig["stop"]) or (side=="short" and price>=sig["stop"]):
@@ -2542,21 +2552,139 @@ def _paper_open(state, sym, price, now, extra):
     state["positions"][sym] = {"side": "long", "entry": price, "qty": q, "leverage": lev, "time": now.isoformat(), "tp": None, **extra}
     return q
 
+
+def _single_leg_live_entry(ex, state, symbol, side, margin, price, sl, tp, strategy, extra=None):
+    """Fail-closed single-leg live entry shared by the Phase 1 adapters."""
+    if CONFIG.get("paper_trading"):
+        raise RuntimeError("live adapter called while paper trading is enabled")
+    if binance_env() == "live" and os.getenv("ALLOW_LIVE_TRADING", "").strip().lower() != "true":
+        _ENTRY_BLOCK["reason"] = "ALLOW_LIVE_TRADING is not enabled"
+        return None
+    if _ENTRY_BLOCK.get("reason") or state.get("recovery_required"):
+        return None
+    equity = _fetch_equity_usdt(ex)
+    if equity is None:
+        _ENTRY_BLOCK["reason"] = "account equity unavailable — blocking new entries"
+        return None
+    try:
+        tripped, reason = riskmgr.update_equity_and_check_kill_switch(RISK_PATH, equity)
+    except Exception as exc:
+        _ENTRY_BLOCK["reason"] = f"risk ledger unavailable — blocking new entries: {exc}"
+        return None
+    if tripped:
+        _ENTRY_BLOCK["reason"] = f"Central Risk Manager kill switch is tripped — {reason}"
+        return None
+    leverage = int(CONFIG.get("leverage", 1))
+    risk_usdt = _estimate_trade_risk_usdt(margin, leverage, price, sl)
+    allowed, reason = riskmgr.pre_trade_gate(
+        RISK_PATH, strategy=strategy, symbol=symbol, side=side,
+        risk_usdt=risk_usdt, notional_usdt=margin * leverage,
+        equity_usdt=equity, correlation_group=_correlation_group(symbol))
+    if not allowed:
+        log(f"⛔ {symbol} رفض بوابة المخاطر المركزية — {reason}")
+        return None
+    cid = f"raqm-{uuid.uuid4().hex[:12]}"[:36]
+    state.setdefault("pending_orders", {})[symbol] = cid
+    save_state(state)
+    try:
+        res = place_order(ex, symbol, side, margin, price, client_order_id=cid)
+        if float(res.get("qty", 0) or 0) <= 0:
+            raise RuntimeError("entry returned no filled quantity")
+    except Exception as exc:
+        try:
+            q = _exchange_position_qty(ex, symbol, side=side)
+            if q == 0:
+                riskmgr.rollback_reservation(RISK_PATH, strategy=strategy, symbol=symbol)
+                state["pending_orders"].pop(symbol, None); save_state(state)
+                return None
+            riskmgr.mark_reservation_recovery(RISK_PATH, strategy=strategy, symbol=symbol, reason="entry outcome unknown")
+        except Exception:
+            pass
+        state.setdefault("recovery_required", {})[symbol] = {"cid": cid, "reason": f"entry outcome unknown: {exc}", "at": datetime.now(timezone.utc).isoformat()}
+        _ENTRY_BLOCK["reason"] = "live entry outcome requires recovery"
+        state["pending_orders"].pop(symbol, None); save_state(state)
+        return None
+    pos = {"side": side, "entry": res["price"], "qty": res["qty"], "cost": res["cost"],
+           "notional": res.get("notional"), "contract_size": res.get("contract_size"),
+           "contract_size_verified": res.get("contract_size_verified", False),
+           "entry_fee_rate": res.get("entry_fee_rate"), "entry_fee_cost": res.get("entry_fee_cost"),
+           "leverage": res.get("leverage", leverage), "time": datetime.now(timezone.utc).isoformat(),
+           "sl": sl, "tp": tp, "breakeven": False, "clientOrderId": cid,
+           "oco_ids": {"pos_id": cid}, "strategy": strategy, **(extra or {})}
+    try:
+        from backend.app.oco import place_oco_orders
+        oco = place_oco_orders(ex, symbol, side, res["qty"], sl, tp, paper=False, pos_id=cid)
+    except Exception as exc:
+        oco = {"protection_missing": True, "sl_error": str(exc)}
+    pos["oco_ids"].update({"sl": oco.get("sl_id"), "tp": oco.get("tp_id")})
+    state["pending_orders"].pop(symbol, None)
+    if oco.get("protection_missing"):
+        try:
+            close_live_position(ex, symbol, pos, price)
+        except Exception:
+            pass
+        pos["unprotected"] = True
+        state["positions"][symbol] = pos
+        state.setdefault("recovery_required", {})[symbol] = {"cid": cid, "reason": "protective stop missing", "at": datetime.now(timezone.utc).isoformat()}
+        _ENTRY_BLOCK["reason"] = "protective stop requires recovery"
+        save_state(state)
+        return None
+    state["positions"][symbol] = pos
+    if oco.get("verify_failed"):
+        pos["sl_unverified"] = True
+        state.setdefault("recovery_required", {})[symbol] = {"cid": cid, "reason": oco.get("verify_warn"), "at": datetime.now(timezone.utc).isoformat()}
+        _ENTRY_BLOCK["reason"] = "protective order verification requires recovery"
+    riskmgr.register_open_risk(RISK_PATH, strategy=strategy, symbol=symbol, side=side,
+        risk_usdt=risk_usdt or 0, notional_usdt=margin * leverage, correlation_group=_correlation_group(symbol))
+    save_state(state)
+    return pos
+
+
+def _single_leg_live_exit(ex, state, symbol, price, reason):
+    pos = state["positions"].get(symbol)
+    if not pos:
+        return False
+    try:
+        result = close_live_position(ex, symbol, pos, price)
+        _require_verified_close(result)
+        cs = _position_contract_size(pos)
+        pnl = futures_net_pnl(pos["entry"], result["price"], result["qty"], cs, pos.get("side", "long"),
+            fee_rate=_fee_rate(pos, required=True), funding_pnl=_funding_pnl(pos, required=True))
+        state["history"].append({"symbol": symbol, "side": pos.get("side", "long"), "entry": pos["entry"],
+            "exit": result["price"], "qty": result["qty"], "pnl": pnl, "reason": reason,
+            "time": datetime.now(timezone.utc).isoformat(), "type": "live", "opened": pos.get("time")})
+        state["stats"]["trades"] += 1; state["stats"]["pnl"] += float(pnl)
+        state["stats"]["wins" if pnl > 0 else "losses"] += 1
+        state["positions"].pop(symbol, None); state["last_trade"][symbol] = datetime.now(timezone.utc).isoformat()
+        save_state(state)
+        return True
+    except Exception as exc:
+        state.setdefault("recovery_required", {})[symbol] = {"reason": f"live exit requires recovery: {exc}", "at": datetime.now(timezone.utc).isoformat()}
+        _ENTRY_BLOCK["reason"] = "live exit requires recovery"
+        save_state(state)
+        return False
+
+
 def _guard_stops(ex, state, prices, label):
     """The 40% protective stop (before liquidation at x2) between the bot's own exits."""
     for sym, pos in list(state["positions"].items()):
         try:
             price = float(ex.fetch_ticker(sym)["last"]); prices[sym] = price
             if price <= pos["sl"]:
-                pnl = _paper_close(ex, state, sym, price, f"وقف {pos['sl']:.6g}"); save_state(state)
-                log(f"🔒 {label}: وقف {sym} @ {price:.6g} PnL {pnl:+.4f}")
-                notify(f"🔒 {label}: وقف {sym.split(':')[0]} @ {price:.6g}\nPnL {pnl:+.2f}$ · Paper")
+                reason = f"وقف {pos['sl']:.6g}"
+                if CONFIG.get("paper_trading"):
+                    pnl = _paper_close(ex, state, sym, price, reason); save_state(state)
+                    log(f"🔒 {label}: وقف {sym} @ {price:.6g} PnL {pnl:+.4f}")
+                    notify(f"🔒 {label}: وقف {sym.split(':')[0]} @ {price:.6g}\nPnL {pnl:+.2f}$ · Paper")
+                else:
+                    _single_leg_live_exit(ex, state, sym, price, reason)
         except Exception as e: log(f"{label} {sym}: {e}")
 
 def run_once_breakout(ex):
     V = VB; state = load_state(); now = datetime.now(timezone.utc); day = _utc_day(now); prices = {}
     process_paper_closes(state, ex, "breakout")
-    if not CONFIG["paper_trading"]: log("⏸️ البريك أوت Paper بس"); return
+    if not CONFIG["paper_trading"] and _ENTRY_BLOCK.get("reason"):
+        _guard_stops(ex, state, prices, "بريك أوت")
     if state.get("vb_day") != day.isoformat():
         # a new UTC day: yesterday's trades close at today's open, then today's triggers
         day_ms = int(day.timestamp() * 1000); closed = 0.0; n = 0
@@ -2564,7 +2692,11 @@ def run_once_breakout(ex):
             try:
                 k = ex.fetch_ohlcv(sym, "1d", limit=2)
                 px_open = float(k[-1][1]) if k and k[-1][0] == day_ms else float(ex.fetch_ticker(sym)["last"])
-                closed += _paper_close(ex, state, sym, px_open, "خروج افتتاح اليوم"); n += 1
+                if CONFIG.get("paper_trading"):
+                    closed += _paper_close(ex, state, sym, px_open, "خروج افتتاح اليوم")
+                    n += 1
+                elif _single_leg_live_exit(ex, state, sym, px_open, "خروج افتتاح اليوم"):
+                    closed += 1.0; n += 1
             except Exception as e: log(f"بريك أوت قفل {sym}: {e}")
         plan = {}
         for sym in volume_universe(ex, V["top"]):
@@ -2588,9 +2720,16 @@ def run_once_breakout(ex):
             price = prices.get(sym) or float(ex.fetch_ticker(sym)["last"]); prices[sym] = price
             if price < p["trigger"]: continue
             fill = price * (1 + V["slip"])
-            _paper_open(state, sym, fill, now, {"sl": fill * (1 - V["stop"]), "trigger": p["trigger"],
-                                                "exit_at": (day + pd.Timedelta(days=1)).isoformat()})
-            state.setdefault("vb_done", []).append(sym); save_state(state)
+            if CONFIG.get("paper_trading"):
+                _paper_open(state, sym, fill, now, {"sl": fill * (1 - V["stop"]), "trigger": p["trigger"],
+                                                    "exit_at": (day + pd.Timedelta(days=1)).isoformat()})
+                state.setdefault("vb_done", []).append(sym); save_state(state)
+            else:
+                pos = _single_leg_live_entry(ex, state, sym, "long", position_size(price, ex) * int(CONFIG.get("leverage", 2)),
+                    fill, fill * (1 - V["stop"]), None, "vol_breakout",
+                    {"trigger": p["trigger"], "exit_at": (day + pd.Timedelta(days=1)).isoformat()})
+                if pos:
+                    state.setdefault("vb_done", []).append(sym); save_state(state)
             log(f"✅ 🟢 بريك أوت {sym} @ {fill:.6g} (الاختراق {p['trigger']:.6g})")
             notify(f"🟢 بريك أوت {sym.split(':')[0]} (Paper)\nاخترق {p['trigger']:.6g} — دخول {fill:.6g}\nخروج: افتتاح بكرة 00:00 UTC · وقف أمان {fill * (1 - V['stop']):.6g}")
         except Exception as e: log(f"بريك أوت دخول {sym}: {e}")
@@ -2602,7 +2741,6 @@ def run_once_breakout(ex):
 def run_once_rsi2(ex):
     R = RSI2; state = load_state(); now = datetime.now(timezone.utc); day = _utc_day(now); prices = {}
     process_paper_closes(state, ex, "rsi2")
-    if not CONFIG["paper_trading"]: log("⏸️ RSI-2 Paper بس"); return
     _guard_stops(ex, state, prices, "RSI-2")
     if state.get("rsi2_day") != day.isoformat():
         # once per closed daily candle: exits first, then new entries at about today's open
@@ -2618,17 +2756,27 @@ def run_once_rsi2(ex):
                     held = (day - _utc_day(datetime.fromisoformat(pos["time"]))).days
                     if c[-1] > sum(c[-R["exit_ma"]:]) / R["exit_ma"] or held >= R["max_days"]:
                         why = f"قفل فوق متوسط {R['exit_ma']} يوم" if c[-1] > sum(c[-R["exit_ma"]:]) / R["exit_ma"] else f"{R['max_days']} أيام"
-                        pnl = _paper_close(ex, state, sym, price, why)
-                        log(f"📉 RSI-2: قفل {sym} @ {price:.6g} ({why}) PnL {pnl:+.4f}")
-                        notify(f"📉 RSI-2: قفل {sym.split(':')[0]} @ {price:.6g}\n{why} · PnL {pnl:+.2f}$ · Paper")
+                        if CONFIG.get("paper_trading"):
+                            pnl = _paper_close(ex, state, sym, price, why)
+                        else:
+                            _single_leg_live_exit(ex, state, sym, price, why)
+                        if sym in state["positions"]:
+                            continue
+                        log(f"📉 RSI-2: قفل {sym} @ {price:.6g} ({why}) PnL {pnl:+.4f}" if CONFIG.get("paper_trading") else f"📉 RSI-2: قفل {sym} @ {price:.6g} ({why})")
                     continue
                 if sym not in universe or len(c) < R["trend_ma"]: continue
                 r2 = rsi_wilder(c, 2); ma = sum(c[-R["trend_ma"]:]) / R["trend_ma"]
                 watch.append({"symbol": sym.split(":")[0], "rsi2": round(r2, 1), "above_200": c[-1] > ma, "price": price})
                 if r2 < R["below"] and c[-1] > ma:
-                    _paper_open(state, sym, price, now, {"sl": price * (1 - R["stop"]), "rsi2": round(r2, 1),
-                                                         "exit_at": (day + pd.Timedelta(days=R["max_days"])).isoformat()})
-                    log(f"✅ 🟢 RSI-2 {sym} @ {price:.6g} (RSI-2 {r2:.1f} في ترند صاعد)")
+                    sl = price * (1 - R["stop"])
+                    if CONFIG.get("paper_trading"):
+                        _paper_open(state, sym, price, now, {"sl": sl, "rsi2": round(r2, 1),
+                                                             "exit_at": (day + pd.Timedelta(days=R["max_days"])).isoformat()})
+                    else:
+                        _single_leg_live_entry(ex, state, sym, "long", position_size(price, ex) * int(CONFIG.get("leverage", 2)),
+                            price, sl, None, "rsi2_pullback", {"rsi2": round(r2, 1),
+                            "exit_at": (day + pd.Timedelta(days=R["max_days"])).isoformat()})
+                    log(f"✅ 🟢 RSI-2 {sym} @ {price} (RSI-2 {r2:.1f} في ترند صاعد)")
                     notify(f"🟢 RSI-2 {sym.split(':')[0]} (Paper)\nRSI-2 {r2:.1f} وفوق متوسط 200 يوم — دخول {price:.6g}\nخروج: أول قفل يومي فوق متوسط 5 أيام (أقصى {R['max_days']} أيام) · وقف {price * (1 - R['stop']):.6g}")
             except Exception as e: log(f"RSI-2 {sym}: {e}")
         state.update(rsi2_day=day.isoformat(), rsi2_watch=watch); save_state(state)
@@ -2652,7 +2800,6 @@ def tbreak_mode():
 def run_once_tbreak(ex):
     T = TB; state = load_state(); now = datetime.now(timezone.utc); day = _utc_day(now); prices = {}
     process_paper_closes(state, ex, "tbreak")
-    if not CONFIG["paper_trading"]: log("⏸️ اختراق الترند Paper بس"); return
     _guard_stops(ex, state, prices, "اختراق الترند")
     if state.get("tb_day") != day.isoformat():
         universe = volume_universe(ex, T["top"]); watch = []; opened = []
@@ -2665,9 +2812,14 @@ def run_once_tbreak(ex):
                 if sym in state["positions"]:
                     if c[-1] < sma(c, T["exit_ma"]):
                         price = float(ex.fetch_ticker(sym)["last"]); prices[sym] = price
-                        pnl = _paper_close(ex, state, sym, price, f"قفل تحت متوسط {T['exit_ma']} يوم")
-                        log(f"📉 اختراق الترند: قفل {sym} @ {price:.6g} PnL {pnl:+.4f}")
-                        notify(f"📉 اختراق الترند: قفل {sym.split(':')[0]} @ {price:.6g}\nقفل يومي تحت متوسط {T['exit_ma']} يوم · PnL {pnl:+.2f}$ · Paper")
+                        if CONFIG.get("paper_trading"):
+                            pnl = _paper_close(ex, state, sym, price, f"قفل تحت متوسط {T['exit_ma']} يوم")
+                            log(f"📉 اختراق الترند: قفل {sym} @ {price:.6g} PnL {pnl:+.4f}")
+                        else:
+                            _single_leg_live_exit(ex, state, sym, price, f"قفل تحت متوسط {T['exit_ma']} يوم")
+                        if sym in state["positions"]:
+                            continue
+                        log(f"📉 اختراق الترند: قفل {sym} @ {price:.6g}" if not CONFIG.get("paper_trading") else "")
                     continue
                 if sym not in universe or len(c) < 201: continue
                 m50, m150, m200 = sma(c, 50), sma(c, 150), sma(c, 200); hi = max(h[-T["L"] - 1:-1])
@@ -2675,7 +2827,11 @@ def run_once_tbreak(ex):
                 watch.append({"symbol": sym.split(":")[0], "close": c[-1], "high": hi, "gap_pct": round((hi / c[-1] - 1) * 100, 1)})
                 if c[-1] > hi:
                     price = float(ex.fetch_ticker(sym)["last"]) * (1 + T["slip"]); prices[sym] = price
-                    _paper_open(state, sym, price, now, {"sl": price * (1 - T["stop"]), "breakout": hi})
+                    if CONFIG.get("paper_trading"):
+                        _paper_open(state, sym, price, now, {"sl": price * (1 - T["stop"]), "breakout": hi})
+                    else:
+                        _single_leg_live_entry(ex, state, sym, "long", position_size(price, ex) * int(CONFIG.get("leverage", 2)),
+                            price, price * (1 - T["stop"]), None, "trend_breakout", {"breakout": hi})
                     opened.append(f"{sym.split('/')[0]} {price:.6g}")
                     log(f"✅ 🟢 اختراق الترند {sym} @ {price:.6g} (قفل {c[-1]:.6g} فوق أعلى {T['L']} يوم {hi:.6g})")
             except Exception as e: log(f"اختراق الترند {sym}: {e}")
