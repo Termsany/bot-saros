@@ -2640,9 +2640,11 @@ def _phase2_live_basket(ex, state, strategy, intent, legs, *, reserve=True):
         raise RuntimeError("Phase 2 live adapter called while paper trading is enabled")
     if binance_env() == "live" and os.getenv("ALLOW_LIVE_TRADING", "").strip().lower() != "true":
         _ENTRY_BLOCK["reason"] = "ALLOW_LIVE_TRADING is not enabled"; return None
-    if _ENTRY_BLOCK.get("reason") or state.get("recovery_required"):
-        return None
     is_exit = bool(legs) and all(leg.get("action", "entry") == "exit" for leg in legs)
+    if _ENTRY_BLOCK.get("reason") and not is_exit:
+        return None
+    if state.get("recovery_required") and not is_exit:
+        return None
     equity = _fetch_equity_usdt(ex)
     if equity is None and not is_exit:
         _ENTRY_BLOCK["reason"] = "account equity unavailable — blocking new entries"; return None
