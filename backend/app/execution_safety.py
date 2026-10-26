@@ -5,8 +5,10 @@ class AmbiguousFill(RuntimeError):
     """The exchange response cannot prove a positive executed quantity."""
 
 
-def futures_net_pnl(entry_price, exit_price, contracts, contract_size, side, fee_rate=0.0004, funding_pnl=None):
-    """Net linear-futures PnL; funding evidence is mandatory, never silently zeroed."""
+def futures_net_pnl(entry_price, exit_price, contracts, contract_size, side, fee_rate=None, funding_pnl=None):
+    """Net linear-futures PnL; verified fee and funding evidence are mandatory."""
+    if fee_rate is None:
+        raise ValueError("fee_rate evidence is required")
     if funding_pnl is None:
         raise ValueError("funding_pnl evidence is required")
     base_qty = float(contracts) * float(contract_size)

@@ -23,7 +23,7 @@ class FakeFutureExchange:
 
     def create_order(self, symbol, kind, side, qty, price, params):
         self.created.append((symbol, side, qty, params))
-        return {"id": "exchange-1", "filled": qty, "average": 50000, "status": "closed"}
+        return {"id": "exchange-1", "filled": qty, "average": 50000, "status": "closed", "fee": {"cost": abs(float(qty)) * 50000 * 0.0004}}
 
     def fetch_positions(self, symbols=None):
         return self.positions
@@ -58,6 +58,15 @@ class P0IntegrationTests(unittest.TestCase):
         bot.place_order(ex, "BTC/USDT", "long", 20, 50000)
         self.assertAlmostEqual(ex.created[0][2], 0.12)
 
+    def test_partial_close_fill_is_not_verified(self):
+        ex = FakeFutureExchange([{"symbol": "BTC/USDT", "contracts": 2}])
+        ex.create_order = lambda *args: {"id": "partial", "filled": 1.0, "average": 50000, "fee": {"cost": 0.02}}
+        reads = iter([[{"symbol": "BTC/USDT", "contracts": 2}], [{"symbol": "BTC/USDT", "contracts": 0}]])
+        ex.fetch_positions = lambda symbols=None: next(reads)
+        pos = {"side": "long", "qty": 2, "entry": 50000, "contract_size": 0.001, "contract_size_verified": True, "entry_fee_rate": 0.0004}
+        with self.assertRaises(RuntimeError):
+            bot.close_live_position(ex, "BTC/USDT", pos, 50000)
+
     def test_close_does_not_claim_flat_from_empty_snapshot(self):
         ex = FakeFutureExchange([])
         pos = {"side": "long", "qty": 2, "entry": 50000}
@@ -76,7 +85,7 @@ class P0IntegrationTests(unittest.TestCase):
         ex = FakeFutureExchange([{"symbol": "BTC/USDT", "contracts": 2}])
         reads = iter([[{"symbol": "BTC/USDT", "contracts": 2}], [{"symbol": "BTC/USDT", "contracts": 0}]])
         ex.fetch_positions = lambda symbols=None: next(reads)
-        pos = {"side": "long", "qty": 2, "entry": 50000, "contract_size": 0.001}
+        pos = {"side": "long", "qty": 2, "entry": 50000, "contract_size": 0.001, "contract_size_verified": True, "entry_fee_rate": 0.0004}
         result = bot.close_live_position(ex, "BTC/USDT", pos, 50000)
         self.assertTrue(result["accounting_verified"])
         self.assertTrue(result["by_exchange"] is False)

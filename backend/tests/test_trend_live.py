@@ -34,9 +34,9 @@ class FakeBinance:
         if params.get("reduceOnly"):
             if self.fail_close: raise Exception("network down")
             self.positions[base] = max(0.0, self.positions.get(base, 0.0) - float(qty))
-            return {"id": "c", "filled": float(qty), "average": 110.0}
+            return {"id": "c", "filled": float(qty), "average": 110.0, "fee": {"cost": abs(float(qty)) * 110.0 * 0.0004}}
         self.positions[base] = self.positions.get(base, 0.0) + float(qty)
-        return {"id": "e", "clientOrderId": params.get("clientOrderId"), "filled": float(qty), "average": 100.0}
+        return {"id": "e", "clientOrderId": params.get("clientOrderId"), "filled": float(qty), "average": 100.0, "fee": {"cost": abs(float(qty)) * 100.0 * 0.0004}}
 
     def fetch_order(self, oid, sym):
         o = next((o for o in self.orders if "stopLossPrice" in o["params"] and "stop-" + o["params"]["clientOrderId"] == oid), None)
@@ -50,7 +50,7 @@ class FakeBinance:
     def cancel_order(self, oid, sym, *a): self.cancelled.append(oid)
     def fetch_positions(self, syms=None):
         return [{"symbol": f"{b}:USDT", "contracts": q} for b, q in self.positions.items() if not syms or b in [s.split(":")[0] for s in syms]]
-    def fetch_my_trades(self, sym, since=None, limit=20): return [{"side": "sell", "price": 82.0, "amount": 5.0}]
+    def fetch_my_trades(self, sym, since=None, limit=20): return [{"side": "sell", "price": 82.0, "amount": 5.0, "fee": {"cost": 5.0 * 82.0 * 0.0004}}]
     def fetch_funding_history(self, sym, since=None): return []
 
 

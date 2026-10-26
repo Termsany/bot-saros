@@ -154,15 +154,15 @@ class CloseLivePositionTests(unittest.TestCase):
         ex = mock.Mock(); ex.id = "binance"; ex.options = {}
         ex.market.return_value = {"contract": True, "linear": True, "inverse": False, "contractSize": 1.0}
         ex.amount_to_precision.side_effect = lambda s, q: str(q)
-        ex.create_order.side_effect = lambda sym, typ, side, qty, price, params: {"id": "c1", "filled": qty, "average": 100.0}
+        ex.create_order.side_effect = lambda sym, typ, side, qty, price, params: {"id": "c1", "filled": qty, "average": 100.0, "fee": {"cost": abs(float(qty)) * 100.0 * 0.0004}}
         ex.fetch_open_orders.return_value = []
-        ex.fetch_funding_history = lambda symbol, since=None: []
+        ex.fetch_funding_history = lambda symbol, since=None: [{"amount": 0.0, "timestamp": 1}]
         ex.fetch_positions.side_effect = [[{"symbol": "SOL/USDT:USDT", "contracts": 0.37}], [{"symbol": "SOL/USDT:USDT", "contracts": 0}]]
         return ex
 
     def test_closes_the_exact_size_and_cancels_own_orders(self):
         ex = self._ex()
-        pos = {"side": "long", "qty": 0.37, "oco_ids": {"pos_id": "raqm-aaaabbbbcccc"}}
+        pos = {"side": "long", "entry": 100.0, "qty": 0.37, "contract_size": 1.0, "contract_size_verified": True, "oco_ids": {"pos_id": "raqm-aaaabbbbcccc"}, "entry_fee_rate": 0.0004, "entry_fee_cost": 0.37 * 100.0 * 0.0004}
         sl = oco_mod._oco_id("raqm-aaaabbbbcccc", "sl")
         ex.fetch_open_orders.return_value = [{"id": "9", "clientOrderId": sl}, {"id": "8", "clientOrderId": "manual"}]
         orders = list(ex.fetch_open_orders.return_value)
