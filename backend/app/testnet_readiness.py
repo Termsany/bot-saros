@@ -11,17 +11,34 @@ ALL_STRATEGIES = (
 EVIDENCE_FIELDS = ("adapter_implemented", "recovery_tests", "security_approved", "testnet_validated")
 
 
-def build_admin_readiness(*, strategies, evidence=None, live_locked):
-    """Build fail-closed per-strategy evidence; absent evidence is never inferred."""
-    evidence = evidence or {}
+def build_admin_readiness(*, strategies, evidence=None, live_locked, environment=None):
+    """Build readiness only from a versioned, provenance-bearing evidence document."""
+    evidence = evidence if isinstance(evidence, dict) else {}
+    provenance = evidence.get("provenance")
+    valid_document = (
+        evidence.get("schema_version") == 1
+        and isinstance(provenance, dict)
+        and provenance.get("source") == "trusted-readiness"
+        and provenance.get("verified") is True
+        and isinstance(evidence.get("strategies"), dict)
+        and set(evidence) == {"schema_version", "provenance", "strategies"}
+        and set(provenance) == {"source", "verified"}
+    )
+    env = environment if environment is not None else os.getenv("BINANCE_ENV", "")
     rows = {}
     for strategy in strategies or []:
-        supplied = evidence.get(strategy) or {}
-        row = {field: supplied.get(field) is True for field in EVIDENCE_FIELDS}
+        supplied = (evidence.get("strategies", {}).get(strategy) or {}) if valid_document else {}
+        row = {field: bool(valid_document and set(supplied) == set(EVIDENCE_FIELDS) and isinstance(supplied.get(field), dict) and set(supplied[field]) == {"value", "verified"} and supplied[field].get("value") is True and supplied[field].get("verified") is True) for field in EVIDENCE_FIELDS}
         row["paper_ready"] = row["adapter_implemented"]
-        row["testnet_ready"] = row["paper_ready"] and row["recovery_tests"] and row["security_approved"] and row["testnet_validated"]
-        row["live_ready"] = row["testnet_ready"] and bool(live_locked)
+        row["testnet_ready"] = env == "testnet" and row["paper_ready"] and row["recovery_tests"] and row["security_approved"] and row["testnet_validated"]
+        row["live_ready"] = row["testnet_ready"] and not bool(live_locked)
         row["reasons"] = [f"missing {field.replace('_', ' ')} evidence" for field in EVIDENCE_FIELDS if not row[field]]
+        if not valid_document:
+            row["reasons"].append("unverified readiness evidence")
+        if env != "testnet":
+            row["reasons"].append("testnet environment is unavailable")
+        if row["testnet_ready"] and live_locked:
+            row["reasons"].append("live trading remains locked")
         row["status"] = "live-ready" if row["live_ready"] else ("testnet-ready" if row["testnet_ready"] else ("paper-ready" if row["paper_ready"] else "not-ready"))
         rows[strategy] = row
     return {

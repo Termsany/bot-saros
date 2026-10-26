@@ -345,12 +345,20 @@ def execute_strategy_cycle(root, strategy, protection, entry):
     if active: entry()
     return {"entries_enabled": active}
 
-async def _wait_strategy_runtime(strategy, *, active: bool, timeout: float = 5.0):
+async def _wait_strategy_runtime(strategy, *, active: bool, expected_task_id=None, action_at=None, timeout: float = 5.0):
     deadline = _time.monotonic() + timeout
     while _time.monotonic() < deadline:
         runtime = admin_control.get_runtime(BOT_DIR, strategy)
         if active and runtime["status"] == "running" and runtime.get("heartbeat"):
-            return runtime
+            task_matches = expected_task_id is None or runtime.get("task_id") == expected_task_id
+            heartbeat_fresh = True
+            if action_at:
+                try:
+                    heartbeat_fresh = datetime.fromisoformat(runtime["heartbeat"]) >= datetime.fromisoformat(action_at)
+                except (TypeError, ValueError):
+                    heartbeat_fresh = False
+            if task_matches and heartbeat_fresh:
+                return runtime
         if not active and runtime["status"] in ("stopped", "paused"):
             return runtime
         await asyncio.sleep(0.02)
@@ -1237,6 +1245,8 @@ async def admin_strategy_lifecycle(strategy: str, req: LifecycleReq, user: dict 
     rate_limit(user["id"], "admin_mutation", 30, 60)
     if strategy not in admin_control.STRATEGIES: raise HTTPException(404,"unknown strategy")
     if req.action in ("start","stop") and not req.confirm: raise HTTPException(400,"confirmation required")
+    action_at = admin_control.now()
+    admin_control.invalidate_runtime(BOT_DIR, strategy)
     result=admin_control.set_strategy_lifecycle(BOT_DIR,strategy,req.action,await _admin_actor(user))
     active = req.action in ("start", "resume")
     _wake_managed_loop()
@@ -1244,8 +1254,8 @@ async def admin_strategy_lifecycle(strategy: str, req: LifecycleReq, user: dict 
         _ensure_managed_loop()
     elif bot_task is None or bot_task.done():
         admin_control.mark_runtime(BOT_DIR, strategy, status="paused" if req.action == "pause" else "stopped")
-    runtime = await _wait_strategy_runtime(strategy, active=active)
-    running = active and runtime["status"] == "running" and bool(runtime.get("heartbeat"))
+    runtime = await _wait_strategy_runtime(strategy, active=active, expected_task_id=_bot_task_id, action_at=action_at)
+    running = active and runtime["status"] == "running" and runtime.get("task_id") == _bot_task_id and bool(runtime.get("heartbeat"))
     return {"ok":True,"strategy":strategy,"action":req.action,"config":result,"runtime":runtime,"running":running}
 
 @app.get("/api/admin/paper/portfolio")
@@ -1299,7 +1309,7 @@ async def admin_readiness(user: dict = Depends(require_admin)):
         risk_readable = False
         kill_clear = False
     evidence = _safe_json_file(BOT_DIR / "readiness_evidence.json") or {}
-    result = build_admin_readiness(strategies=list(admin_control.STRATEGIES), evidence=evidence, live_locked=not live_trading_allowed())
+    result = build_admin_readiness(strategies=list(admin_control.STRATEGIES), evidence=evidence, live_locked=not live_trading_allowed(), environment=os.getenv("BINANCE_ENV", ""))
     result.update({"environment":"testnet" if os.getenv("BINANCE_ENV")=="testnet" else "unavailable", "checks":{"server_live_flag_locked":not live_trading_allowed(), "risk_ledger_readable":risk_readable, "kill_switch_clear":kill_clear}})
     result["testnet_ready"] = result["testnet_ready"] and risk_readable and kill_clear
     result["live_ready"] = result["live_ready"] and risk_readable and kill_clear

@@ -107,13 +107,22 @@ def get_runtime(root: Path, strategy: str):
 
 def all_runtime(root: Path): return {s: get_runtime(root, s) for s in STRATEGIES}
 
-def mark_runtime(root: Path, strategy: str, *, status: str, heartbeat: str | None = None, last_cycle: str | None = None, error: str | None = None, task_id: str | None = None):
+_UNSET = object()
+
+def mark_runtime(root: Path, strategy: str, *, status: str, heartbeat=_UNSET, last_cycle=_UNSET, error: str | None = None, task_id=_UNSET):
     old = get_runtime(root, strategy); stamp = now(); con=connect(root)
+    heartbeat_value = old.get("heartbeat") if heartbeat is _UNSET else heartbeat
+    task_id_value = old.get("task_id") if task_id is _UNSET else task_id
+    last_cycle_value = old.get("last_cycle") if last_cycle is _UNSET else last_cycle
     try:
         _ensure_strategy_rows(con)
-        con.execute("UPDATE strategy_runtime SET status=?,heartbeat=?,last_cycle=?,error=?,task_id=?,updated_at=? WHERE strategy=?", (status, heartbeat or old.get("heartbeat"), last_cycle or old.get("last_cycle"), error, task_id or old.get("task_id"), stamp, strategy))
+        con.execute("UPDATE strategy_runtime SET status=?,heartbeat=?,last_cycle=?,error=?,task_id=?,updated_at=? WHERE strategy=?", (status, heartbeat_value, last_cycle_value, error, task_id_value, stamp, strategy))
     finally: con.close()
     return get_runtime(root, strategy)
+
+def invalidate_runtime(root: Path, strategy: str):
+    """Invalidate persisted liveness before a lifecycle action can await it."""
+    return mark_runtime(root, strategy, status="stopped", heartbeat=None, last_cycle=None, error=None, task_id=None)
 
 def controls(root: Path, strategy: str):
     cfg=read_state(root)["strategies"][strategy]

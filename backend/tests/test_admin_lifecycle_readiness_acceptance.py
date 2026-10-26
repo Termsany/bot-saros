@@ -37,9 +37,13 @@ class LifecycleAcceptanceTests(unittest.IsolatedAsyncioTestCase):
         self.tmp.cleanup()
 
     async def test_start_waits_for_real_heartbeat_before_running(self):
+        admin_control.mark_runtime(
+            self.root, "trend_daily", status="running",
+            heartbeat=admin_control.now(), task_id="stale-task",
+        )
         async def fake_loop(cfg, task_id=None):
             await asyncio.sleep(0.05)
-            admin_control.mark_runtime(self.root, "trend_daily", status="running", heartbeat=admin_control.now(), task_id="task-1")
+            admin_control.mark_runtime(self.root, "trend_daily", status="running", heartbeat=admin_control.now(), task_id=task_id)
             await asyncio.Event().wait()
 
         with mock.patch.object(main, "bot_loop", fake_loop):
@@ -47,8 +51,19 @@ class LifecycleAcceptanceTests(unittest.IsolatedAsyncioTestCase):
                 "trend_daily", main.LifecycleReq(action="start", confirm=True), ADMIN
             )
         self.assertEqual(result["runtime"]["status"], "running")
-        self.assertEqual(result["runtime"]["task_id"], "task-1")
+        self.assertNotEqual(result["runtime"]["task_id"], "stale-task")
+        self.assertTrue(result["runtime"]["task_id"])
         self.assertTrue(result["running"])
+
+    async def test_stale_runtime_is_invalidated_before_start(self):
+        admin_control.mark_runtime(
+            self.root, "trend_daily", status="running",
+            heartbeat="2020-01-01T00:00:00+00:00", task_id="old-task",
+        )
+        runtime = admin_control.invalidate_runtime(self.root, "trend_daily")
+        self.assertIsNone(runtime["heartbeat"])
+        self.assertIsNone(runtime["task_id"])
+        self.assertEqual(runtime["status"], "stopped")
 
     async def test_stop_and_pause_block_entries_but_protection_runs(self):
         admin_control.set_strategy_lifecycle(self.root, "trend_daily", "pause", "admin")
@@ -71,6 +86,38 @@ class LifecycleAcceptanceTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ReadinessAcceptanceTests(unittest.TestCase):
+    def test_forged_unvalidated_json_flags_do_not_count(self):
+        result = build_admin_readiness(
+            strategies=["trend_daily"],
+            evidence={"trend_daily": {
+                "adapter_implemented": True,
+                "recovery_tests": True,
+                "security_approved": True,
+                "testnet_validated": True,
+            }},
+            live_locked=False,
+            environment="testnet",
+        )
+        self.assertFalse(result["paper_ready"])
+        self.assertFalse(result["testnet_ready"])
+        self.assertIn("unverified", " ".join(result["strategies"]["trend_daily"]["reasons"]).lower())
+
+    def test_environment_must_be_testnet_for_testnet_and_live(self):
+        evidence = {"schema_version": 1, "provenance": {"source": "trusted-readiness", "verified": True}, "strategies": {"trend_daily": {
+            field: {"value": True, "verified": True} for field in ("adapter_implemented", "recovery_tests", "security_approved", "testnet_validated")
+        }}}
+        result = build_admin_readiness(strategies=["trend_daily"], evidence=evidence, live_locked=False, environment="live")
+        self.assertFalse(result["testnet_ready"])
+        self.assertFalse(result["live_ready"])
+        self.assertIn("testnet environment", " ".join(result["strategies"]["trend_daily"]["reasons"]).lower())
+
+    def test_live_ready_requires_unlocked_live_gate(self):
+        evidence = {"schema_version": 1, "provenance": {"source": "trusted-readiness", "verified": True}, "strategies": {"trend_daily": {
+            field: {"value": True, "verified": True} for field in ("adapter_implemented", "recovery_tests", "security_approved", "testnet_validated")
+        }}}
+        result = build_admin_readiness(strategies=["trend_daily"], evidence=evidence, live_locked=True, environment="testnet")
+        self.assertTrue(result["testnet_ready"])
+        self.assertFalse(result["live_ready"])
     def test_incomplete_evidence_never_live_ready_and_aggregates_are_distinct(self):
         result = build_admin_readiness(
             strategies=["trend_daily", "ratio_trend"],
