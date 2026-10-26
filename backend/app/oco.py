@@ -56,6 +56,30 @@ def _leg_on_exchange(ex, symbol, order, cid):
     return False
 
 
+def _protective_params(ex, side, cid):
+    ex_id = str(getattr(ex, "id", "")).lower()
+    hedge = bool(getattr(ex, "options", {}).get("hedgeMode"))
+    params = {"clientOrderId": cid}
+    if ex_id == "bybit":
+        params["orderLinkId"] = cid
+        params["reduceOnly"] = True
+        if hedge:
+            params["positionIdx"] = 1 if side == "long" else 2
+    elif ex_id.startswith("binance"):
+        if hedge:
+            params["positionSide"] = "LONG" if side == "long" else "SHORT"
+        else:
+            params["reduceOnly"] = True
+    elif ex_id == "okx":
+        params["tdMode"] = getattr(ex, "options", {}).get("marginMode", "isolated")
+        if hedge:
+            params["posSide"] = "long" if side == "long" else "short"
+        params["reduceOnly"] = True
+    else:
+        params["reduceOnly"] = True
+    return params
+
+
 def place_oco_orders(ex, symbol, side, qty, sl_price, tp_price, paper: bool = True, pos_id: str = None, position_idx=None):
     """Places the stop and the target as reduceOnly orders tagged with our own ids.
 
@@ -82,7 +106,7 @@ def place_oco_orders(ex, symbol, side, qty, sl_price, tp_price, paper: bool = Tr
         if price is None:   # stop only (the daily trend exits on its signal, not at a target)
             continue
         try:
-            params = {**base_params, key: float(ex.price_to_precision(symbol, price)), "clientOrderId": cid}
+            params = {**_protective_params(ex, side, cid), key: float(ex.price_to_precision(symbol, price))}
             if idx is not None:
                 params["orderLinkId"] = cid
             results[leg] = ex.create_order(symbol, "market", close_side, qty, None, params)
@@ -118,20 +142,25 @@ def cancel_oco_orders(ex, symbol, pos_id: str = None, sl_id: str = None, tp_id: 
     if pos_id:
         ids |= {_oco_id(pos_id, "sl"), _oco_id(pos_id, "tp")}
     if not ids:
-        return
+        return False
     seen = set()
+    ok = True
     for params in ({}, {"trigger": True}, {"stop": True}):
         try:
             opens = ex.fetch_open_orders(symbol, None, None, params) if params else ex.fetch_open_orders(symbol)
         except Exception:
+            ok = False
             continue
         for o in opens if isinstance(opens, list) else []:
             if not isinstance(o, dict) or o.get("id") in seen:
                 continue
             if _order_cid(o) in ids or o.get("id") in ids:
                 seen.add(o.get("id"))
-                try: ex.cancel_order(o["id"], symbol, params) if params else ex.cancel_order(o["id"], symbol)
-                except Exception: pass
+                try:
+                    ex.cancel_order(o["id"], symbol, params) if params else ex.cancel_order(o["id"], symbol)
+                except Exception:
+                    ok = False
+    return ok
 
 
 def place_order_idempotent(ex, symbol, side, qty, params=None, client_order_id: str = None):

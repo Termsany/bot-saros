@@ -20,6 +20,7 @@ def _mock_ex_for_place(ex_id="binance", hedge=False, fail_sl=False, fail_tp=Fals
     ex = mock.Mock()
     ex.id = ex_id
     ex.options = {"hedgeMode": hedge} if hedge else {}
+    ex.market.return_value = {"contract": True, "linear": True, "inverse": False, "contractSize": 1.0}
     ex.amount_to_precision.side_effect = lambda s, q: str(round(float(q),6))
     ex.price_to_precision.side_effect = lambda s, p: str(float(p))
     ex._last_calls_list = []

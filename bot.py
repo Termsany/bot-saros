@@ -9,6 +9,7 @@ import ccxt, pandas as pd, numpy as np, time, json, os, re, uuid, threading, htt
 from datetime import datetime, timezone
 from pathlib import Path
 import strategies_advanced as adv
+from backend.app.execution_safety import AmbiguousFill, authoritative_position_state, linear_contracts_from_margin, normalize_filled_contracts
 
 try:
     from dotenv import load_dotenv; load_dotenv()
@@ -933,7 +934,13 @@ def _amend_exchange_sl(symbol, pos, new_sl, old_sl, ex):
     oco = pos.get("oco_ids") or {}
     if ex is not None and hasattr(ex, "edit_order") and oco.get("sl"):
         try:
-            ex.edit_order(oco["sl"], symbol, "market", "sell" if pos.get("side","long")=="long" else "buy", pos.get("qty"), price=None, params={"stopLossPrice": float(new_sl)})
+            edited = ex.edit_order(oco["sl"], symbol, "market", "sell" if pos.get("side","long")=="long" else "buy", pos.get("qty"), price=None, params={"stopLossPrice": float(new_sl)})
+            oid = (edited or {}).get("id") or oco["sl"]
+            verified = ex.fetch_order(oid, symbol)
+            info = verified.get("info") or {}
+            actual_trigger = verified.get("stopLossPrice") or verified.get("triggerPrice") or info.get("stopLossPrice") or info.get("triggerPrice")
+            if (verified.get("status") or "open") not in ("open", "new") or actual_trigger is None or abs(float(actual_trigger) - float(new_sl)) > max(1e-8, abs(float(new_sl)) * 1e-8):
+                raise RuntimeError("exchange returned an unverified stop amendment")
             pos["sl_sync"] = "amended"
             pos.pop("sl_unverified", None)
             return True
@@ -942,16 +949,19 @@ def _amend_exchange_sl(symbol, pos, new_sl, old_sl, ex):
     if ex is not None and oco.get("pos_id"):
         try:
             from backend.app.oco import cancel_oco_orders, place_oco_orders
-            try:
-                cancel_oco_orders(ex, symbol, pos_id=oco["pos_id"])
-            except Exception:
-                pass
+            # Old protection remains active until the replacement is verified.
             tp_price = pos.get("tp")
             side = pos.get("side","long")
             qty = pos.get("qty")
-            oco2 = place_oco_orders(ex, symbol, side, qty, new_sl, tp_price, paper=False, pos_id=oco["pos_id"])
-            if not oco2.get("sl_error") and not oco2.get("tp_error"):
-                pos["oco_ids"] = {"sl": oco2.get("sl_id"), "tp": oco2.get("tp_id"), "pos_id": oco["pos_id"]}
+            replacement_id = f"{oco['pos_id']}-amend-{uuid.uuid4().hex[:8]}"
+            oco2 = place_oco_orders(ex, symbol, side, qty, new_sl, None, paper=False, pos_id=replacement_id)
+            if oco2.get("sl_id") and not oco2.get("sl_error") and not oco2.get("sl_unverified") and not oco2.get("verify_failed"):
+                cancelled = cancel_oco_orders(ex, symbol, sl_id=oco.get("sl"))
+                if cancelled is False:
+                    pos["sl_unverified"] = True
+                    pos["sl_sync"] = "pending_cancel"
+                    return False
+                pos["oco_ids"] = {"sl": oco2.get("sl_id"), "tp": oco.get("tp"), "pos_id": oco.get("pos_id")}
                 pos["sl_sync"] = "amended"
                 pos.pop("sl_unverified", None)
                 return True
@@ -1031,6 +1041,22 @@ def ensure_futures_setup(ex, symbol):
     except RuntimeError: raise
     except Exception: pass
 
+def _contract_meta(ex, symbol):
+    """Return explicit linear-contract metadata; reject inverse/unknown semantics."""
+    try:
+        market = ex.market(symbol)
+    except Exception as exc:
+        raise RuntimeError(f"market metadata unavailable for {symbol}: {exc}") from exc
+    if not isinstance(market, dict) or not market.get("contract") or market.get("linear") is not True:
+        raise RuntimeError(f"incomplete or non-linear futures contract metadata for {symbol}")
+    if market.get("inverse"):
+        raise RuntimeError(f"inverse contract is unsupported for {symbol}")
+    contract_size = float(market.get("contractSize") or 0)
+    if contract_size <= 0:
+        raise RuntimeError(f"invalid contractSize for {symbol}")
+    return {"contract": True, "contract_size": contract_size, "inverse": False}
+
+
 def place_order(ex,symbol,side,amount_usdt,price, client_order_id=None, close_qty=None):
     """side = long/short/close_long/close_short — يحسب الكمية من USDT * leverage.
     client_order_id: stable id for idempotent retry (P0-05). If None, generated; returned in result.
@@ -1039,9 +1065,14 @@ def place_order(ex,symbol,side,amount_usdt,price, client_order_id=None, close_qt
     """
     is_future = CONFIG.get("market","future")=="future"
     lev = int(CONFIG.get("leverage",5)) if is_future else 1
+    meta = _contract_meta(ex, symbol) if is_future and not CONFIG["paper_trading"] else {"contract": False, "contract_size": 1.0, "inverse": False}
     notional = amount_usdt * lev if is_future else amount_usdt
-    # a close sends the position's own quantity — recomputing it from USDT applied the leverage a second time (5x size)
-    qty = float(close_qty) if close_qty is not None else notional / price
+    if close_qty is not None:
+        qty = float(close_qty)
+    elif is_future and meta["contract"]:
+        qty = linear_contracts_from_margin(amount_usdt, lev, price, meta["contract_size"])
+    else:
+        qty = notional / price
     try: qty=float(ex.amount_to_precision(symbol, qty))
     except: qty=round(qty,6)
     if CONFIG["paper_trading"]:
@@ -1076,51 +1107,78 @@ def place_order(ex,symbol,side,amount_usdt,price, client_order_id=None, close_qt
             try:
                 found = _reconcile_fills_by_client_id(ex, symbol, cid)
                 if found:
-                    fq=float(found.get("filled",qty) or found.get("amount",qty) or qty)
+                    fq=normalize_filled_contracts(found)
                     ap=float(found.get("average",price) or found.get("price",price) or price)
-                    # if returned order has filled>0 or status closed, treat as success
-                    if fq and fq>0:
-                        return {"id":str(found.get("id","")),"qty":fq,"price":ap,"cost":fq*ap,"notional":notional,"leverage":lev,"raw":found,"clientOrderId": cid, "reconciled": True}
+                    return {"id":str(found.get("id","")),"qty":fq,"price":ap,"cost":fq*ap,"notional":notional,"leverage":lev,"raw":found,"clientOrderId": cid, "reconciled": True}
             except Exception:
                 pass
         raise
-    fq=float(order.get("filled",qty) or qty); ap=float(order.get("average",price) or price)
+    fq=normalize_filled_contracts(order)
+    ap=float(order.get("average",price) or order.get("price",price) or price)
     return {"id":str(order.get("id","")),"qty":fq,"price":ap,"cost":fq*ap,"notional":notional,"leverage":lev,"raw":order,"clientOrderId": cid}
 
-def _exchange_position_qty(ex, symbol):
-    """Open size on the exchange (0 = flat), or None if it can't be read."""
+def _exchange_position_qty(ex, symbol, *, side=None, position_idx=None):
+    """Return authoritative matching position contracts; None means inconclusive."""
     try:
-        for p in ex.fetch_positions([symbol]) or []:
-            s_ = p.get("symbol") or (p.get("info") or {}).get("symbol", "")
-            if s_ == symbol or s_.split(":")[0] == symbol:
-                c = p.get("contracts") if p.get("contracts") is not None else (p.get("info") or {}).get("size")
-                return abs(float(c or 0))
-        return 0.0
+        positions = ex.fetch_positions([symbol])
+        if position_idx is None and side in ("long", "short") and bool(getattr(ex, "options", {}).get("hedgeMode")):
+            position_idx = 1 if side == "long" else 2
+        status = authoritative_position_state(positions, symbol, position_idx=position_idx, side=side)
+        if status == "inconclusive":
+            return None
+        if status == "flat":
+            return 0.0
+        wanted = symbol.split(":")[0]
+        for position in positions:
+            actual = position.get("symbol") or (position.get("info") or {}).get("symbol")
+            if not isinstance(actual, str) or actual.split(":")[0] != wanted:
+                continue
+            info = position.get("info") or {}
+            actual_idx = position.get("positionIdx", info.get("positionIdx"))
+            actual_side = str(position.get("side", info.get("positionSide", ""))).lower()
+            if position_idx is not None and str(actual_idx) != str(position_idx):
+                continue
+            if side and actual_side not in ("", side, "buy" if side == "long" else "sell", "long" if side == "long" else "short"):
+                continue
+            raw = position.get("contracts")
+            if raw is None:
+                raw = info.get("size")
+            return abs(float(raw))
+        return None
     except Exception:
         return None
 
 def close_live_position(ex, symbol, pos, price):
-    """Close a real position with its exact size (reduceOnly), then cancel only its own stop/target orders.
-    If the exchange is already flat (its stop or target filled), that is the close — no order is sent.
-    Returns {"price", "qty", "by_exchange"}; raises if it can't close."""
+    """Close exact authoritative contracts and verify an authoritative flat readback."""
     side = pos.get("side", "long")
+    exchange_qty = _exchange_position_qty(ex, symbol, side=side, position_idx=pos.get("position_idx"))
+    if exchange_qty is None:
+        raise RuntimeError(f"cannot confirm current exchange position for {symbol}")
+    if exchange_qty == 0:
+        ids = pos.get("oco_ids") or {}
+        if ids.get("pos_id") or ids.get("sl") or ids.get("tp"):
+            from backend.app.oco import cancel_oco_orders
+            if cancel_oco_orders(ex, symbol, pos_id=ids.get("pos_id"), sl_id=ids.get("sl"), tp_id=ids.get("tp")) is False:
+                raise RuntimeError(f"protective cleanup is unconfirmed for {symbol}")
+        return {"price": None, "qty": 0.0, "by_exchange": True, "accounting_verified": False}
     try:
-        res = place_order(ex, symbol, "close_long" if side == "long" else "close_short", 0, price, close_qty=pos["qty"])
-        out = {"price": res["price"], "qty": res["qty"], "by_exchange": False}
+        res = place_order(ex, symbol, "close_long" if side == "long" else "close_short", 0, price, close_qty=exchange_qty)
     except Exception as e:
-        if _exchange_position_qty(ex, symbol) != 0.0:
-            raise
-        log(f"{symbol}: المنصة قفلت الصفقة بالفعل (وقف/هدف) — {e}")
-        out = {"price": price, "qty": pos["qty"], "by_exchange": True}
+        remaining = _exchange_position_qty(ex, symbol, side=side, position_idx=pos.get("position_idx"))
+        if remaining == 0:
+            log(f"{symbol}: المنصة قفلت الصفقة بالفعل (وقف/هدف) — {e}")
+            return {"price": None, "qty": 0.0, "by_exchange": True, "accounting_verified": False}
+        raise
+    remaining = _exchange_position_qty(ex, symbol, side=side, position_idx=pos.get("position_idx"))
+    if remaining is None or remaining != 0:
+        raise RuntimeError(f"close accepted but flat state is unconfirmed for {symbol}; remaining={remaining}")
     ids = pos.get("oco_ids") or {}
     if ids.get("pos_id") or ids.get("sl") or ids.get("tp"):
-        try:
-            from backend.app.oco import cancel_oco_orders
-            cancel_oco_orders(ex, symbol, pos_id=ids.get("pos_id"), sl_id=ids.get("sl"), tp_id=ids.get("tp"))
-        except Exception as e:
-            log(f"{symbol}: إلغاء أوامر الحماية القديمة فشل: {e}")
-            notify(f"⚠️ {symbol}: الصفقة اتقفلت بس أوامر الوقف/الهدف القديمة ممكن تكون لسه على المنصة — راجعها")
-    return out
+        from backend.app.oco import cancel_oco_orders
+        cancelled = cancel_oco_orders(ex, symbol, pos_id=ids.get("pos_id"), sl_id=ids.get("sl"), tp_id=ids.get("tp"))
+        if cancelled is False:
+            raise RuntimeError(f"protective cleanup is unconfirmed for {symbol}")
+    return {"price": res["price"], "qty": res["qty"], "by_exchange": False}
 
 def check_sl_tp(state, prices, ex=None):
     closed=[]
@@ -1194,6 +1252,8 @@ def check_sl_tp(state, prices, ex=None):
                 state["history"].append({"symbol":symbol,"side":pos.get("side","long"),"entry":entry,"exit":price,"qty":qty,"pnl":pnl,"pnl_pct":pnl_pct,"reason":reason,"time":datetime.now(timezone.utc).isoformat(),"type":"paper","opened":pos.get("time"),"rank":pos.get("rank")})
             else:
                 res=close_live_position(ex or get_exchange(auth=True)[0], symbol, pos, price)
+                if not res.get("accounting_verified", True):
+                    raise RuntimeError("exchange already flat; fill price unavailable for accounting")
                 pnl=(res["price"]-entry)*res["qty"] if pos.get("side","long")=="long" else (entry-res["price"])*res["qty"]
                 log(f"🔒 اغلاق حقيقي {symbol} @ {res['price']:.4f} PnL {pnl:+.4f}")
                 notify(f"🔒 قفل {symbol} — {reason}\nدخول {entry:.6g} → خروج {res['price']:.6g}\nPnL {pnl:+.2f}$ (حقيقي)")
@@ -1254,7 +1314,13 @@ def reconcile_live(state, ex):
     _ENTRY_BLOCK["reason"] = ""
     try:
         live = {}
-        for p in ex.fetch_positions() or []:
+        positions = ex.fetch_positions()
+        if not isinstance(positions, list) or not positions:
+            _ENTRY_BLOCK["reason"] = "exchange position snapshot is empty or incomplete"
+            log(f"⚠️ {_ENTRY_BLOCK['reason']}")
+            save_state(state)
+            return
+        for p in positions:
             c = p.get("contracts") if p.get("contracts") is not None else (p.get("info") or {}).get("positionAmt")
             if c and abs(float(c)) > 0: live[(p.get("symbol") or "").split(":")[0]] = abs(float(c))
     except Exception as e:
@@ -1368,6 +1434,8 @@ def process_manual_closes(state, ex, prices):
                     try: px = float(ex.fetch_ticker(match)["last"])
                     except Exception: px = pos["entry"]
                 r = close_live_position(ex, match, pos, px)
+                if not r.get("accounting_verified", True):
+                    raise RuntimeError("exchange already flat; fill price unavailable for accounting")
                 pnl = (r["price"] - pos["entry"]) * r["qty"]
                 state["history"].append({"symbol": match, "side": "long", "entry": pos["entry"], "exit": r["price"], "qty": r["qty"], "pnl": pnl,
                     "pnl_pct": pnl / (pos["entry"] * r["qty"]) * 100, "reason": "قفل يدوي من الموقع", "time": datetime.now(timezone.utc).isoformat(),
@@ -1489,6 +1557,8 @@ def try_enter_trend(symbol, analysis, state, ex):
         if live:
             try:
                 res = close_live_position(ex, symbol, pos, price)
+                if not res.get("accounting_verified", True):
+                    raise RuntimeError("exchange already flat; fill price unavailable for accounting")
             except Exception as e:
                 log(f"⚠️ {symbol}: الترند وقف بس القفل فشل — هيحاول تاني الدورة الجاية: {e}")
                 notify(f"⚠️ {symbol}: الترند وقف بس أمر القفل فشل — البوت هيحاول تاني. الوقف لسه على المنصة."); return
@@ -1573,6 +1643,8 @@ def _enter_trend_live(symbol, analysis, state, ex, margin, lev, price):
         notify(f"🚨 {symbol}: أمر الوقف اترفض ({oco.get('sl_error')}) — بيقفل الصفقة فورا")
         try:
             r = close_live_position(ex, symbol, pos, price)
+            if not r.get("accounting_verified", True):
+                raise RuntimeError("exchange already flat; fill price unavailable for accounting")
             pnl = (r["price"] - pos["entry"]) * r["qty"]
             state["history"].append({"symbol":symbol,"side":"long","entry":pos["entry"],"exit":r["price"],"qty":r["qty"],"pnl":pnl,"pnl_pct":pnl/(pos["entry"]*r["qty"])*100,
                 "reason":"الوقف اترفض — قفل فوري","time":datetime.now(timezone.utc).isoformat(),"type":"live","opened":pos["time"],"rank":pos.get("rank")})
@@ -1594,6 +1666,9 @@ def _enter_trend_live(symbol, analysis, state, ex, margin, lev, price):
 
 def try_enter(symbol, analysis, state, ex):
     """فيوتشر: لونج لو سكور > buy_threshold، شورت لو سكور < sell_threshold"""
+    if not CONFIG.get("paper_trading") and _ENTRY_BLOCK["reason"] and not in_position(state, symbol):
+        log(f"⛔ {symbol} دخول متوقف — {_ENTRY_BLOCK['reason']}")
+        return
     # Block every new entry while any position needs a human (unprotected / unverified / ambiguous order)
     if state.get("recovery_required"):
         if trend_mode() and in_position(state, symbol):
@@ -1607,7 +1682,7 @@ def try_enter(symbol, analysis, state, ex):
             if not CONFIG.get("paper_trading"):
                 found = _reconcile_fills_by_client_id(ex, symbol, cid_pending)
                 if found:
-                    fq = float(found.get("filled",0) or found.get("amount",0) or 0)
+                    fq = normalize_filled_contracts(found)
                     if fq and fq>0:
                         log(f"♻️ {symbol} reconcile: pending {cid_pending} found fill {fq} — completing")
                         # complete as if order succeeded: create pos if needed (caller handles); just clear pending
@@ -1643,6 +1718,8 @@ def try_enter(symbol, analysis, state, ex):
                     state["history"].append({"symbol":symbol,"side":side,"entry":entry,"exit":price,"qty":qty,"pnl":pnl,"pnl_pct":pct,"reason":"اشارة عكسية قوية","time":datetime.now(timezone.utc).isoformat(),"type":"paper"})
                 else:
                     res=close_live_position(ex, symbol, pos, price)
+                    if not res.get("accounting_verified", True):
+                        raise RuntimeError("exchange already flat; fill price unavailable for accounting")
                     pnl=(res["price"]-entry)*res["qty"] if side=="long" else (entry-res["price"])*res["qty"]
                     pct=(pnl/(entry*res["qty"])*100) if entry*res["qty"] else 0
                     log(f"📉 اغلاق حقيقي {side} {symbol} @ {res['price']:.4f} PnL {pnl:+.4f}")

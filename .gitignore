@@ -33,6 +33,7 @@ trades.log
 # exchange keys live in a plain .env next to bot.py; bot state and logs hold positions
 .env
 *.env
+.env.*
 !*.env.example
 !.env.example
 state*.json

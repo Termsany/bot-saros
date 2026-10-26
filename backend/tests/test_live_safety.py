@@ -15,6 +15,7 @@ from backend.app.oco import place_oco_orders, cancel_oco_orders
 def _ex(open_plain=(), open_trigger=()):
     ex = mock.Mock()
     ex.id = "binance"; ex.options = {}
+    ex.market.return_value = {"contract": True, "linear": True, "inverse": False, "contractSize": 1.0}
     ex.price_to_precision.side_effect = lambda s, p: str(float(p))
     ex.create_order.side_effect = lambda sym, typ, side, qty, price, params: {"id": "x-" + params["clientOrderId"], "clientOrderId": params["clientOrderId"]}
     ex.fetch_order.side_effect = Exception("not found")
@@ -129,9 +130,11 @@ class CloseLivePositionTests(unittest.TestCase):
 
     def _ex(self):
         ex = mock.Mock(); ex.id = "binance"; ex.options = {}
+        ex.market.return_value = {"contract": True, "linear": True, "inverse": False, "contractSize": 1.0}
         ex.amount_to_precision.side_effect = lambda s, q: str(q)
         ex.create_order.side_effect = lambda sym, typ, side, qty, price, params: {"id": "c1", "filled": qty, "average": 100.0}
         ex.fetch_open_orders.return_value = []
+        ex.fetch_positions.side_effect = [[{"symbol": "SOL/USDT:USDT", "contracts": 0.37}], [{"symbol": "SOL/USDT:USDT", "contracts": 0}]]
         return ex
 
     def test_closes_the_exact_size_and_cancels_own_orders(self):
@@ -156,6 +159,7 @@ class CloseLivePositionTests(unittest.TestCase):
 
     def test_still_open_after_a_failed_close_raises(self):
         ex = self._ex()
+        ex.fetch_positions.side_effect = None
         ex.create_order.side_effect = Exception("network down")
         ex.fetch_positions.return_value = [{"symbol": "SOL/USDT:USDT", "contracts": 1.0}]
         with self.assertRaises(Exception):

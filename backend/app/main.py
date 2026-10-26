@@ -150,7 +150,7 @@ _tier_cache: dict = {}
 async def get_tier(user: dict) -> str:
     """Tier from Supabase profiles (service key). Fails closed to 'free'; admins get everything."""
     from app.auth import _admin_emails
-    if user.get("email") in _admin_emails() and user.get("email_confirmed"):
+    if is_admin(user):
         return "elite"
     hit = _tier_cache.get(user["id"])
     if hit and hit[0] > _time.monotonic():
@@ -832,6 +832,7 @@ async def user_tier(user: dict = Depends(require_user)):
 @app.post("/api/optimizer/run")
 async def optimizer_run(symbol: str = "BTC/USDT", timeframe: str = "4h", limit: int = 200, user: dict = Depends(require_admin)):
     """يشغل Auto-Optimizer ويرجع البطل — يحدث ai_weights.json"""
+    rate_limit(user["id"], "optimizer", 2, 300)
     import json as js
     if not SYMBOL_RE.match(symbol) or timeframe not in TIMEFRAMES: raise HTTPException(400, "bad symbol/timeframe")
     limit = max(50, min(int(limit), 1000))
@@ -869,6 +870,7 @@ async def telegram_status(user: dict = Depends(require_admin)):
 @app.post("/api/evolve")
 async def evolve(user: dict = Depends(require_admin_or_cron)):
     """Self-evolution: يعيد تقييم الـ 15 استراتيجية ويطفي الخسرانة + يحدث الأوزان"""
+    rate_limit(user["id"], "evolve", 1, 300)
     import json as js
     if not (BOT_DIR / "auto_optimizer.py").exists():
         return {"ok": False, "error": "auto_optimizer.py is missing from the repo"}
@@ -913,6 +915,7 @@ async def evolve(user: dict = Depends(require_admin_or_cron)):
 async def llm_generate(prompt: str = "RSI + volume divergence on 4h", symbol: str = "BTC/USDT", timeframe: str = "4h", user: dict = Depends(require_admin)):
     """LLM يخترع استراتيجية + باك تست فوري (الكود بيتشغل في sandbox — شوف llm_sandbox.py)"""
     _require_llm_lab()
+    rate_limit(user["id"], "llm_generate", 3, 300)
     if not SYMBOL_RE.match(symbol) or timeframe not in TIMEFRAMES: raise HTTPException(400, "bad symbol/timeframe")
     prompt = prompt[:500]
     from app.llm_generator import generate_strategy, save_strategy, backtest_llm
@@ -953,6 +956,7 @@ async def llm_evolve(prompt: str = "innovative crypto futures strategy combining
     """يولد n استراتيجيات، يباك تست كل واحدة، ويضيف الفائزة (WR>=60%) تلقائياً — admin only: the cron secret must not
     choose what code gets generated and run"""
     _require_llm_lab()
+    rate_limit(user["id"], "llm_evolve", 1, 600)
     prompt = prompt[:500]
     from app.llm_generator import generate_strategy, save_strategy, backtest_llm, auto_promote_if_winner
     results = []

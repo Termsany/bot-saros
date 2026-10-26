@@ -20,7 +20,7 @@ class FakeBinance:
         self.fail_stop, self.fail_close, self.balance, self.min_cost = fail_stop, fail_close, balance, min_cost
         self.set_leverage = mock.Mock(); self.set_margin_mode = mock.Mock(); self.set_position_mode = mock.Mock()
 
-    def market(self, sym): return {"limits": {"cost": {"min": self.min_cost}}}
+    def market(self, sym): return {"contract": True, "linear": True, "inverse": False, "contractSize": 1.0, "limits": {"cost": {"min": self.min_cost}}}
     def amount_to_precision(self, sym, q): return str(round(float(q), 6))
     def price_to_precision(self, sym, p): return str(round(float(p), 6))
     def fetch_balance(self): return {"USDT": {"free": self.balance}}
@@ -49,7 +49,7 @@ class FakeBinance:
 
     def cancel_order(self, oid, sym, *a): self.cancelled.append(oid)
     def fetch_positions(self, syms=None):
-        return [{"symbol": f"{b}:USDT", "contracts": q} for b, q in self.positions.items() if q and (not syms or b in [s.split(":")[0] for s in syms])]
+        return [{"symbol": f"{b}:USDT", "contracts": q} for b, q in self.positions.items() if not syms or b in [s.split(":")[0] for s in syms]]
     def fetch_my_trades(self, sym, since=None, limit=20): return [{"side": "sell", "price": 82.0}]
 
 
