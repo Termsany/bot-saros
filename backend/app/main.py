@@ -21,6 +21,7 @@ import ccxt, pandas as pd, numpy as np
 from datetime import datetime, timezone
 from . import admin_control
 from app import risk_manager
+from app import live_bots_feed
 
 try:
     from dotenv import load_dotenv; load_dotenv()
@@ -1224,12 +1225,28 @@ async def admin_overview(user: dict = Depends(require_admin)):
     st=admin_control.read_state(BOT_DIR); risk=risk_manager.load_risk_state(_risk_path())
     async with async_session() as sess:
         trades=(await sess.execute(select(Trade))).scalars().all()
-    return {"ok":True,"mode":"paper","strategies":len(admin_control.STRATEGIES),"running":bool(bot_task and not bot_task.done()),"entry_paused":st["entry_paused"],"kill_switch":risk["kill_switch"],"paper":{"open":sum(t.status=="open" for t in trades),"trades":len(trades),"pnl":round(sum(t.pnl or 0 for t in trades),2)},"health":_health_snapshot(),"live_enabled":live_trading_allowed()}
+    live_feed = await live_bots_feed.fetch_all()
+    live_summary = live_bots_feed.aggregate_summary(live_feed)
+    return {"ok":True,"mode":"paper","strategies":len(admin_control.STRATEGIES),"running":bool(bot_task and not bot_task.done()),"entry_paused":st["entry_paused"],"kill_switch":risk["kill_switch"],
+            "paper":{"open":sum(t.status=="open" for t in trades),"trades":len(trades),"pnl":round(sum(t.pnl or 0 for t in trades),2)},
+            "health":_health_snapshot(),"live_enabled":live_trading_allowed(),
+            # Real VPS paper bots (7 standalone systemd services) — separate from the dashboard-managed "paper" block above.
+            "live_bots":{"label":"VPS live paper bots","base_url":live_bots_feed.base_url(),"lifecycle_control_available":False,
+                         "lifecycle_note":live_bots_feed.LIFECYCLE_CONTROL_NOTE,"summary":live_summary}}
 
 @app.get("/api/admin/strategies")
 async def admin_strategies(user: dict = Depends(require_admin)):
     st=admin_control.read_state(BOT_DIR)
-    return [{"id":s,"name":s,"status":"enabled" if st["strategies"][s]["enabled"] else "disabled","mode":"paper","config":st["strategies"][s],"runtime":admin_control.get_runtime(BOT_DIR,s),"lifecycle":admin_control.get_runtime(BOT_DIR,s)["status"]} for s in admin_control.STRATEGIES]
+    live_feed = await live_bots_feed.fetch_all()
+    out=[]
+    for s in admin_control.STRATEGIES:
+        live = live_feed.get(s) or live_bots_feed.no_service_entry(s)
+        out.append({"id":s,"name":s,"status":"enabled" if st["strategies"][s]["enabled"] else "disabled","mode":"paper",
+                    "config":st["strategies"][s],"runtime":admin_control.get_runtime(BOT_DIR,s),"lifecycle":admin_control.get_runtime(BOT_DIR,s)["status"],
+                    # Real VPS bot status for this strategy id (read-only; no start/stop control here — see live.lifecycle_control_available).
+                    "live":{"status":live["status"],"updated":live["updated"],"age_seconds":live["age_seconds"],"mode":live["mode"],
+                             "stats":live["stats"],"open_positions":len(live["positions"]),"lifecycle_control_available":False}})
+    return out
 
 @app.patch("/api/admin/strategies/{strategy}")
 async def admin_strategy(strategy: str, req: StrategyPatch, user: dict = Depends(require_admin)):
@@ -1262,7 +1279,20 @@ async def admin_strategy_lifecycle(strategy: str, req: LifecycleReq, user: dict 
 async def admin_paper_portfolio(user: dict = Depends(require_admin)):
     async with async_session() as sess:
         rows=(await sess.execute(select(Trade).order_by(desc(Trade.id)).limit(200))).scalars().all()
-    return {"mode":"paper","positions":[{"id":t.id,"symbol":t.symbol,"side":t.side,"entry":t.entry,"qty":t.qty,"sl":t.sl,"tp":t.tp,"pnl":t.pnl,"status":t.status} for t in rows if t.status=="open"],"history":[{"id":t.id,"symbol":t.symbol,"side":t.side,"entry":t.entry,"exit":t.exit,"pnl":t.pnl,"status":t.status,"entry_ts":t.entry_ts,"exit_ts":t.exit_ts} for t in rows]}
+    dashboard_positions=[{"id":t.id,"symbol":t.symbol,"side":t.side,"entry":t.entry,"qty":t.qty,"sl":t.sl,"tp":t.tp,"pnl":t.pnl,"status":t.status} for t in rows if t.status=="open"]
+    dashboard_history=[{"id":t.id,"symbol":t.symbol,"side":t.side,"entry":t.entry,"exit":t.exit,"pnl":t.pnl,"status":t.status,"entry_ts":t.entry_ts,"exit_ts":t.exit_ts} for t in rows]
+    live_feed = await live_bots_feed.fetch_all()
+    live_strategies = {sid: {"status":e["status"],"updated":e["updated"],"age_seconds":e["age_seconds"],"mode":e["mode"],
+                              "stats":e["stats"],"positions":e["positions"],"history":e["history"],"extra":e["extra"],"error":e["error"]}
+                       for sid, e in live_feed.items()}
+    # Back-compat: top-level "positions"/"history" keep meaning the dashboard-managed bot, unchanged for existing callers.
+    return {"mode":"paper","positions":dashboard_positions,"history":dashboard_history,
+            "dashboard_bot":{"label":"Dashboard-managed paper bot (SQL Trade table / bot_loop) — distinct from the VPS live bots below",
+                              "positions":dashboard_positions,"history":dashboard_history},
+            "live_bots":{"label":"VPS live paper bots (7 standalone systemd services, read-only public status files)",
+                         "base_url":live_bots_feed.base_url(),"lifecycle_control_available":False,
+                         "lifecycle_note":live_bots_feed.LIFECYCLE_CONTROL_NOTE,
+                         "aggregate":live_bots_feed.aggregate_summary(live_feed),"strategies":live_strategies}}
 
 @app.get("/api/admin/risk")
 async def admin_risk(user: dict = Depends(require_admin)):
