@@ -50,7 +50,7 @@ class FakeBinance:
     def cancel_order(self, oid, sym, *a): self.cancelled.append(oid)
     def fetch_positions(self, syms=None):
         return [{"symbol": f"{b}:USDT", "contracts": q} for b, q in self.positions.items() if not syms or b in [s.split(":")[0] for s in syms]]
-    def fetch_my_trades(self, sym, since=None, limit=20): return [{"side": "sell", "price": 82.0}]
+    def fetch_my_trades(self, sym, since=None, limit=20): return [{"side": "sell", "price": 82.0, "amount": 5.0}]
 
 
 SIG_ON = {"price": 100.0, "trend": {"on": True, "ts": 1, "size": 1.0}, "in_universe": True, "rank": 1, "total": 0}
@@ -120,7 +120,7 @@ class TrendLiveTests(unittest.TestCase):
         self.assertEqual((close["side"], close["qty"]), ("sell", 5.0)); self.assertTrue(close["params"]["reduceOnly"])
         self.assertIn(stop_id, ex.cancelled)
         self.assertNotIn("SOL/USDT:USDT", self.state["positions"])
-        h = self.state["history"][-1]; self.assertEqual(h["type"], "live"); self.assertAlmostEqual(h["pnl"], (110 - 100) * 5)
+        h = self.state["history"][-1]; self.assertEqual(h["type"], "live"); self.assertAlmostEqual(h["pnl"], 49.58)
 
     def test_exit_still_runs_while_entries_are_blocked(self):
         ex = FakeBinance()

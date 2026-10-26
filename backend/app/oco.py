@@ -135,32 +135,47 @@ def place_oco_orders(ex, symbol, side, qty, sl_price, tp_price, paper: bool = Tr
     return results
 
 
+def _owned_orders(ex, symbol, ids):
+    """Read owned orders from plain and trigger/algo views; errors are inconclusive."""
+    found = {}
+    complete = True
+    for params in ({}, {"trigger": True}, {"stop": True}):
+        try:
+            opens = ex.fetch_open_orders(symbol, None, None, params) if params else ex.fetch_open_orders(symbol)
+        except Exception:
+            complete = False
+            continue
+        if not isinstance(opens, list):
+            complete = False
+            continue
+        for order in opens:
+            if not isinstance(order, dict):
+                continue
+            if _order_cid(order) in ids or order.get("id") in ids:
+                found[order.get("id")] = order
+    return found, complete
+
+
 def cancel_oco_orders(ex, symbol, pos_id: str = None, sl_id: str = None, tp_id: str = None):
-    """Cancels only our own protective orders (by their ids) — plain and conditional (trigger) open orders both,
-    since Binance/Bybit keep stop/take-profit orders apart. Never a broad cancel: manual orders stay."""
+    """Cancel owned protection and verify absence across plain and trigger/algo views."""
     ids = {x for x in (sl_id, tp_id) if x}
     if pos_id:
         ids |= {_oco_id(pos_id, "sl"), _oco_id(pos_id, "tp")}
     if not ids:
         return False
-    seen = set()
+    found, complete = _owned_orders(ex, symbol, ids)
+    if not complete:
+        return False
     ok = True
-    for params in ({}, {"trigger": True}, {"stop": True}):
+    for oid in found:
         try:
-            opens = ex.fetch_open_orders(symbol, None, None, params) if params else ex.fetch_open_orders(symbol)
+            ex.cancel_order(oid, symbol)
         except Exception:
             ok = False
-            continue
-        for o in opens if isinstance(opens, list) else []:
-            if not isinstance(o, dict) or o.get("id") in seen:
-                continue
-            if _order_cid(o) in ids or o.get("id") in ids:
-                seen.add(o.get("id"))
-                try:
-                    ex.cancel_order(o["id"], symbol, params) if params else ex.cancel_order(o["id"], symbol)
-                except Exception:
-                    ok = False
-    return ok
+    if not ok:
+        return False
+    remaining, complete = _owned_orders(ex, symbol, ids)
+    return bool(complete and not remaining)
 
 
 def place_order_idempotent(ex, symbol, side, qty, params=None, client_order_id: str = None):

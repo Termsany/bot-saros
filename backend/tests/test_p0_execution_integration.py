@@ -11,6 +11,9 @@ class FakeFutureExchange:
     def __init__(self, positions):
         self.positions = positions
         self.created = []
+        self.set_leverage = lambda *args, **kwargs: None
+        self.set_margin_mode = lambda *args, **kwargs: None
+        self.set_position_mode = lambda *args, **kwargs: None
 
     def market(self, symbol):
         return {"contract": True, "linear": True, "inverse": False, "contractSize": 0.001}
@@ -39,10 +42,18 @@ class P0IntegrationTests(unittest.TestCase):
 
     def test_entry_uses_contracts_not_base_quantity(self):
         ex = FakeFutureExchange([])
-        with self.assertRaises(Exception):
-            # setup calls are intentionally absent: this proves the quantity conversion
-            bot.place_order(ex, "BTC/USDT", "long", 20, 50000)
-        self.assertEqual(ex.created, [])
+        result = bot.place_order(ex, "BTC/USDT", "long", 20, 50000)
+        self.assertEqual(len(ex.created), 1)
+        self.assertEqual(ex.created[0][2], 2.0)
+        self.assertEqual(result["qty"], 2.0)
+        self.assertEqual(result["contract_size"], 0.001)
+
+    def test_entry_contract_quantity_changes_with_leverage_and_contract_size(self):
+        ex = FakeFutureExchange([])
+        ex.market = lambda symbol: {"contract": True, "linear": True, "inverse": False, "contractSize": 0.01}
+        bot.CONFIG["leverage"] = 3
+        bot.place_order(ex, "BTC/USDT", "long", 20, 50000)
+        self.assertAlmostEqual(ex.created[0][2], 0.12)
 
     def test_close_does_not_claim_flat_from_empty_snapshot(self):
         ex = FakeFutureExchange([])
@@ -55,6 +66,17 @@ class P0IntegrationTests(unittest.TestCase):
         pos = {"side": "long", "qty": 2, "entry": 50000}
         result = bot.close_live_position(ex, "BTC/USDT", pos, 50000)
         self.assertTrue(result["by_exchange"])
+        self.assertFalse(result["accounting_verified"])
+        self.assertEqual(result["price"], None)
+
+    def test_verified_close_returns_explicit_accounting_flag(self):
+        ex = FakeFutureExchange([{"symbol": "BTC/USDT", "contracts": 2}])
+        reads = iter([[{"symbol": "BTC/USDT", "contracts": 2}], [{"symbol": "BTC/USDT", "contracts": 0}]])
+        ex.fetch_positions = lambda symbols=None: next(reads)
+        pos = {"side": "long", "qty": 2, "entry": 50000, "contract_size": 0.001}
+        result = bot.close_live_position(ex, "BTC/USDT", pos, 50000)
+        self.assertTrue(result["accounting_verified"])
+        self.assertTrue(result["by_exchange"] is False)
 
     def test_hedge_mode_selects_exact_position_leg(self):
         ex = FakeFutureExchange([

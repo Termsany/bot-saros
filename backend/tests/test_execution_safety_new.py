@@ -5,10 +5,17 @@ from backend.app.execution_safety import (
     linear_contracts_from_margin,
     normalize_filled_contracts,
     authoritative_position_state,
+    futures_net_pnl,
 )
 
 
 class ExecutionSafetyTests(unittest.TestCase):
+    def test_net_pnl_uses_contract_size_fees_and_funding(self):
+        self.assertAlmostEqual(
+            futures_net_pnl(100, 110, 2, 0.5, "long", fee_rate=0.001, funding_pnl=-1),
+            8.79,
+        )
+
     def test_linear_margin_conversion_uses_contract_size(self):
         self.assertEqual(linear_contracts_from_margin(20, 5, 50_000, 0.001), 2.0)
 

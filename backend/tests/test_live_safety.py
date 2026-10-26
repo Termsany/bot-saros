@@ -56,6 +56,19 @@ class ProtectiveIdTests(unittest.TestCase):
         self.assertLessEqual(len(a), 36)
         self.assertTrue(a.startswith("raqm-") and a.endswith("-sl"))
 
+    def test_cancel_requires_readback_absence(self):
+        ex = mock.Mock()
+        owned = [{"id": "sl-1", "clientOrderId": "raqm-pos-sl"}]
+        active = list(owned)
+        ex.fetch_open_orders.side_effect = lambda sym, *a: list(active)
+        ex.cancel_order.side_effect = lambda oid, *a: active.clear()
+        self.assertTrue(cancel_oco_orders(ex, "BTC/USDT", sl_id="raqm-pos-sl"))
+
+    def test_cancel_ambiguous_readback_stays_unconfirmed(self):
+        ex = mock.Mock()
+        ex.fetch_open_orders.return_value = [{"id": "sl-1", "clientOrderId": "raqm-pos-sl"}]
+        self.assertFalse(cancel_oco_orders(ex, "BTC/USDT", sl_id="raqm-pos-sl"))
+
     def test_cancel_leaves_the_other_positions_stop(self):
         mine, other = "raqm-0e8b777212da", "raqm-0e8f00000000"
         ex = mock.Mock()
@@ -142,6 +155,12 @@ class CloseLivePositionTests(unittest.TestCase):
         pos = {"side": "long", "qty": 0.37, "oco_ids": {"pos_id": "raqm-aaaabbbbcccc"}}
         sl = oco_mod._oco_id("raqm-aaaabbbbcccc", "sl")
         ex.fetch_open_orders.return_value = [{"id": "9", "clientOrderId": sl}, {"id": "8", "clientOrderId": "manual"}]
+        orders = list(ex.fetch_open_orders.return_value)
+        cancelled = set()
+        def active_remove(oid):
+            orders[:] = [o for o in orders if o["id"] != oid]
+        ex.fetch_open_orders.side_effect = lambda sym, *a: [o for o in orders if o["id"] not in cancelled]
+        ex.cancel_order.side_effect = lambda oid, *a: (cancelled.add(oid), active_remove(oid))[1]
         res = botmod.close_live_position(ex, "SOL/USDT", pos, 100.0)
         args = ex.create_order.call_args[0]
         self.assertEqual(args[2], "sell"); self.assertAlmostEqual(float(args[3]), 0.37)   # not 0.37 x leverage

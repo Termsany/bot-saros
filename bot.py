@@ -9,7 +9,7 @@ import ccxt, pandas as pd, numpy as np, time, json, os, re, uuid, threading, htt
 from datetime import datetime, timezone
 from pathlib import Path
 import strategies_advanced as adv
-from backend.app.execution_safety import AmbiguousFill, authoritative_position_state, linear_contracts_from_margin, normalize_filled_contracts
+from backend.app.execution_safety import AmbiguousFill, authoritative_position_state, futures_net_pnl, linear_contracts_from_margin, normalize_filled_contracts
 
 try:
     from dotenv import load_dotenv; load_dotenv()
@@ -152,21 +152,26 @@ def write_public_status(state, analyses, symbols_allowed):
     positions = []
     for sym, pos in state["positions"].items():
         price = (analyses.get(sym) or {}).get("price") or pos["entry"]
-        pnl = (price - pos["entry"]) * pos["qty"] * (1 if pos.get("side", "long") == "long" else -1)
-        margin = pos["entry"] * pos["qty"] / max(1, int(pos.get("leverage", lev)))
+        cs = _position_contract_size(pos)
+        if cs is None:
+            pnl = None
+            margin = None
+        else:
+            pnl = futures_net_pnl(pos["entry"], price, pos["qty"], cs, pos.get("side", "long"), funding_pnl=float(pos.get("funding_pnl", 0.0) or 0.0))
+            margin = pos["entry"] * pos["qty"] * cs / max(1, int(pos.get("leverage", lev)))
         positions.append({"symbol": sym.split(":")[0], "side": pos.get("side", "long"), "entry": pos["entry"], "price": price,
-                          "qty": pos["qty"], "margin": round(margin, 2), "sl": pos.get("sl"), "pnl": round(pnl, 4),
-                          "pnl_pct": round(pnl / margin * 100, 2) if margin else 0, "opened": pos.get("time"), "rank": pos.get("rank"),
+                          "qty": pos["qty"], "contract_size": cs, "margin": round(margin, 2) if margin is not None else None, "sl": pos.get("sl"), "pnl": round(pnl, 4) if pnl is not None else None,
+                          "pnl_pct": round(pnl / margin * 100, 2) if pnl is not None and margin else None, "opened": pos.get("time"), "rank": pos.get("rank"),
                           "exit_below": ((analyses.get(sym) or {}).get("trend") or {}).get("exit_below") if pos.get("trend") else None,
                           "tp": pos.get("tp")})
     history = [{"symbol": h["symbol"].split(":")[0], "side": h.get("side", "long"), "entry": h.get("entry"), "exit": h.get("exit"), "qty": h.get("qty"),
-                "pnl": round(float(h.get("pnl", 0)), 4), "reason": h.get("reason", ""), "time": h.get("time"),
+                "pnl": round(float(h.get("pnl", 0)), 4), "funding_pnl": h.get("funding_pnl"), "reason": h.get("reason", ""), "time": h.get("time"),
                 "opened": h.get("opened"), "rank": h.get("rank")} for h in state.get("history", [])[-200:]]
     signals = [{"symbol": sym.split(":")[0], "price": a.get("price"), "on": bool((a.get("trend") or {}).get("on")),
                 "in_list": bool(a.get("in_universe", True)), "size": round((a.get("trend") or {}).get("size", 0) * 100)}
                for sym, a in sorted(analyses.items())]
     st = state.get("stats", {})
-    unreal = sum(x["pnl"] for x in positions)
+    unreal = sum(x["pnl"] for x in positions if x["pnl"] is not None)
     data = {"updated": now.isoformat(), "mode": "paper" if CONFIG["paper_trading"] else "live",
             "strategy": ",".join(CONFIG.get("enabled_strategies") or []), "leverage": lev, "margin": CONFIG.get("trade_amount_usdt"),
             "universe_size": CONFIG.get("universe_size"), "universe": [x.split("/")[0] for x in sorted(symbols_allowed or [])],
@@ -1041,6 +1046,12 @@ def ensure_futures_setup(ex, symbol):
     except RuntimeError: raise
     except Exception: pass
 
+def _position_contract_size(pos):
+    value = pos.get("contract_size")
+    return float(value) if value is not None and float(value) > 0 else (1.0 if pos.get("type") == "paper" else None)
+
+
+
 def _contract_meta(ex, symbol):
     """Return explicit linear-contract metadata; reject inverse/unknown semantics."""
     try:
@@ -1077,7 +1088,7 @@ def place_order(ex,symbol,side,amount_usdt,price, client_order_id=None, close_qt
     except: qty=round(qty,6)
     if CONFIG["paper_trading"]:
         cid = client_order_id or f"raqm-{uuid.uuid4().hex[:12]}"[:36]
-        return {"id":"paper-"+str(int(time.time()*1000)),"qty":qty,"price":price,"cost":qty*price,"notional":notional,"leverage":lev,"clientOrderId": cid}
+        return {"id":"paper-"+str(int(time.time()*1000)),"qty":qty,"price":price,"cost":qty*price,"notional":notional,"leverage":lev,"contract_size":meta.get("contract_size", 1.0),"clientOrderId": cid}
     if not side.startswith("close"):
         ensure_futures_setup(ex, symbol)   # a close must never wait on (or fail because of) account settings
     cid = client_order_id or f"raqm-{uuid.uuid4().hex[:12]}"[:36]
@@ -1109,13 +1120,13 @@ def place_order(ex,symbol,side,amount_usdt,price, client_order_id=None, close_qt
                 if found:
                     fq=normalize_filled_contracts(found)
                     ap=float(found.get("average",price) or found.get("price",price) or price)
-                    return {"id":str(found.get("id","")),"qty":fq,"price":ap,"cost":fq*ap,"notional":notional,"leverage":lev,"raw":found,"clientOrderId": cid, "reconciled": True}
+                    return {"id":str(found.get("id","")),"qty":fq,"price":ap,"cost":fq*ap,"notional":notional,"leverage":lev,"contract_size":meta.get("contract_size", 1.0),"raw":found,"clientOrderId": cid, "reconciled": True}
             except Exception:
                 pass
         raise
     fq=normalize_filled_contracts(order)
     ap=float(order.get("average",price) or order.get("price",price) or price)
-    return {"id":str(order.get("id","")),"qty":fq,"price":ap,"cost":fq*ap,"notional":notional,"leverage":lev,"raw":order,"clientOrderId": cid}
+    return {"id":str(order.get("id","")),"qty":fq,"price":ap,"cost":fq*ap,"notional":notional,"leverage":lev,"contract_size":meta.get("contract_size", 1.0),"raw":order,"clientOrderId": cid}
 
 def _exchange_position_qty(ex, symbol, *, side=None, position_idx=None):
     """Return authoritative matching position contracts; None means inconclusive."""
@@ -1178,7 +1189,7 @@ def close_live_position(ex, symbol, pos, price):
         cancelled = cancel_oco_orders(ex, symbol, pos_id=ids.get("pos_id"), sl_id=ids.get("sl"), tp_id=ids.get("tp"))
         if cancelled is False:
             raise RuntimeError(f"protective cleanup is unconfirmed for {symbol}")
-    return {"price": res["price"], "qty": res["qty"], "by_exchange": False}
+    return {"price": res["price"], "qty": res["qty"], "contract_size": res.get("contract_size", pos.get("contract_size")), "by_exchange": False, "accounting_verified": True}
 
 def check_sl_tp(state, prices, ex=None):
     closed=[]
@@ -1252,9 +1263,12 @@ def check_sl_tp(state, prices, ex=None):
                 state["history"].append({"symbol":symbol,"side":pos.get("side","long"),"entry":entry,"exit":price,"qty":qty,"pnl":pnl,"pnl_pct":pnl_pct,"reason":reason,"time":datetime.now(timezone.utc).isoformat(),"type":"paper","opened":pos.get("time"),"rank":pos.get("rank")})
             else:
                 res=close_live_position(ex or get_exchange(auth=True)[0], symbol, pos, price)
-                if not res.get("accounting_verified", True):
+                if not res.get("accounting_verified", False):
                     raise RuntimeError("exchange already flat; fill price unavailable for accounting")
-                pnl=(res["price"]-entry)*res["qty"] if pos.get("side","long")=="long" else (entry-res["price"])*res["qty"]
+                cs = _position_contract_size(pos)
+                if cs is None:
+                    raise RuntimeError("missing contract_size for live PnL")
+                pnl = futures_net_pnl(entry, res["price"], res["qty"], cs, pos.get("side", "long"), funding_pnl=float(pos.get("funding_pnl", 0.0) or 0.0))
                 log(f"🔒 اغلاق حقيقي {symbol} @ {res['price']:.4f} PnL {pnl:+.4f}")
                 notify(f"🔒 قفل {symbol} — {reason}\nدخول {entry:.6g} → خروج {res['price']:.6g}\nPnL {pnl:+.2f}$ (حقيقي)")
                 state["history"].append({"symbol":symbol,"side":pos.get("side","long"),"entry":entry,"exit":res["price"],"qty":res["qty"],"pnl":pnl,"pnl_pct":(res["price"]/entry-1)*100,"reason":reason,"time":datetime.now(timezone.utc).isoformat(),"type":"live"})
@@ -1293,7 +1307,7 @@ def try_enter_wave(symbol, analysis, state, ex):
     try:
         res=place_order(ex,symbol,side,position_size(price, ex),price)
         tp=sig["tgt2"] if sig["two"] else sig["tgt1"]
-        state["positions"][symbol]={"side":side,"entry":res["price"],"qty":res["qty"],"cost":res["cost"],"notional":res.get("notional"),"leverage":res.get("leverage",CONFIG.get("leverage",5)),
+        state["positions"][symbol]={"side":side,"entry":res["price"],"qty":res["qty"],"cost":res["cost"],"notional":res.get("notional"),"contract_size":res.get("contract_size", 1.0),"leverage":res.get("leverage",CONFIG.get("leverage",5)),
             "time":datetime.now(timezone.utc).isoformat(),"sl":sig["stop"],"tp":tp,"breakeven":False,
             "wave":{"kind":sig["kind"],"tp1":sig["tgt1"] if sig["two"] else None,"tp1_done":False,"be":sig["be"]}}
         state["last_trade"][symbol]=datetime.now(timezone.utc).isoformat(); save_state(state)
@@ -1335,20 +1349,32 @@ def reconcile_live(state, ex):
             flat[sym] = flat.get(sym, 0) + 1
             if flat[sym] < 2: continue                                     # flat twice in a row before believing it
             flat.pop(sym, None)
-            exit_px = pos.get("sl") or pos["entry"]
+            fills = []
             try:
                 since = int(datetime.fromisoformat(pos["time"]).timestamp() * 1000)
-                fills = [t for t in ex.fetch_my_trades(sym, since=since, limit=50) if t.get("side") == "sell"]
-                if fills: exit_px = float(fills[-1]["price"])
-            except Exception: pass
-            pnl = (exit_px - pos["entry"]) * pos["qty"]
+                close_side = "sell" if pos.get("side", "long") == "long" else "buy"
+                fills = [t for t in ex.fetch_my_trades(sym, since=since, limit=50) if t.get("side") == close_side and float(t.get("filled", t.get("amount", 0)) or 0) > 0]
+            except Exception:
+                fills = []
+            if not fills:
+                state.setdefault("recovery_required", {})[sym] = {"reason": "exchange flat but no authoritative closing fill", "at": datetime.now(timezone.utc).isoformat()}
+                _ENTRY_BLOCK["reason"] = "exchange exit has no authoritative fill evidence"
+                save_state(state)
+                continue
+            exit_px = float(fills[-1].get("average") or fills[-1].get("price"))
+            cs = _position_contract_size(pos)
+            if cs is None:
+                state.setdefault("recovery_required", {})[sym] = {"reason": "missing contract_size for realized PnL", "at": datetime.now(timezone.utc).isoformat()}
+                save_state(state)
+                continue
+            pnl = futures_net_pnl(pos["entry"], exit_px, pos["qty"], cs, pos.get("side", "long"), funding_pnl=float(pos.get("funding_pnl", 0.0) or 0.0))
             by_hand = exit_px > float(pos.get("sl") or 0) * 1.01   # well above the stop: closed by hand in the Binance app
             why = "اتقفلت يدوي من Binance" if by_hand else "وقف الحماية اتنفذ على المنصة"
             if by_hand: state.setdefault("manual_hold", {})[sym] = datetime.now(timezone.utc).isoformat()
             log(f"🔒 {sym}: {why} @ {exit_px:.6g} PnL {pnl:+.2f}")
             notify(f"🔒 قفل {sym} — {why}\nدخول {pos['entry']:.6g} → خروج {exit_px:.6g}\nPnL {pnl:+.2f}$ ({_live_label()})")
             state["history"].append({"symbol": sym, "side": "long", "entry": pos["entry"], "exit": exit_px, "qty": pos["qty"], "pnl": pnl,
-                "pnl_pct": pnl / (pos["entry"] * pos["qty"]) * 100, "reason": "قفل يدوي من Binance" if by_hand else "وقف المنصة", "time": datetime.now(timezone.utc).isoformat(),
+                "pnl_pct": pnl / (pos["entry"] * pos["qty"] * cs / max(1, int(pos.get("leverage", CONFIG.get("leverage", 1))))) * 100, "reason": "قفل يدوي من Binance" if by_hand else "وقف المنصة", "time": datetime.now(timezone.utc).isoformat(),
                 "type": "live", "opened": pos.get("time"), "rank": pos.get("rank")})
             state["stats"]["trades"] += 1; state["stats"]["pnl"] += float(pnl); state["stats"]["wins" if pnl > 0 else "losses"] += 1
             try:
@@ -1436,9 +1462,12 @@ def process_manual_closes(state, ex, prices):
                 r = close_live_position(ex, match, pos, px)
                 if not r.get("accounting_verified", True):
                     raise RuntimeError("exchange already flat; fill price unavailable for accounting")
-                pnl = (r["price"] - pos["entry"]) * r["qty"]
+                cs = _position_contract_size(pos)
+                if cs is None:
+                    raise RuntimeError("missing contract_size for live PnL")
+                pnl = futures_net_pnl(pos["entry"], r["price"], r["qty"], cs, pos.get("side", "long"), funding_pnl=float(pos.get("funding_pnl", 0.0) or 0.0))
                 state["history"].append({"symbol": match, "side": "long", "entry": pos["entry"], "exit": r["price"], "qty": r["qty"], "pnl": pnl,
-                    "pnl_pct": pnl / (pos["entry"] * r["qty"]) * 100, "reason": "قفل يدوي من الموقع", "time": datetime.now(timezone.utc).isoformat(),
+                    "pnl_pct": pnl / (pos["entry"] * r["qty"] * cs / max(1, int(pos.get("leverage", CONFIG.get("leverage", 1))))) * 100, "reason": "قفل يدوي من الموقع", "time": datetime.now(timezone.utc).isoformat(),
                     "type": "live", "opened": pos.get("time"), "rank": pos.get("rank"), "by": req.get("by")})
                 state["stats"]["trades"] += 1; state["stats"]["pnl"] += float(pnl); state["stats"]["wins" if pnl > 0 else "losses"] += 1
                 state["positions"].pop(match, None); state["last_trade"][match] = datetime.now(timezone.utc).isoformat()
@@ -1532,10 +1561,15 @@ def write_live_status(state, prices, analyses=None):
     for sym, p in state["positions"].items():
         px = prices.get(sym)
         exit_below = (((analyses or {}).get(sym) or {}).get("trend") or {}).get("exit_below")
-        pos.append({"symbol": sym.split(":")[0], "entry": p["entry"], "qty": p["qty"], "sl": p.get("sl"), "price": px,
+        cs = _position_contract_size(p)
+        live_pnl = futures_net_pnl(p["entry"], px, p["qty"], cs, p.get("side", "long"), funding_pnl=float(p.get("funding_pnl", 0.0) or 0.0)) if px and cs else None
+        loss_at_sl = None
+        if p.get("sl") and cs:
+            loss_at_sl = futures_net_pnl(p["entry"], float(p["sl"]), p["qty"], cs, p.get("side", "long"), funding_pnl=0.0)
+        pos.append({"symbol": sym.split(":")[0], "entry": p["entry"], "qty": p["qty"], "contract_size": cs, "sl": p.get("sl"), "price": px,
                     "exit_below": exit_below, "tp": p.get("tp"),
-                    "loss_at_sl": round((float(p["sl"]) - p["entry"]) * p["qty"], 2) if p.get("sl") else None,
-                    "pnl": round((px - p["entry"]) * p["qty"], 4) if px else None, "opened": p.get("time"),
+                    "loss_at_sl": round(loss_at_sl, 2) if loss_at_sl is not None else None,
+                    "pnl": round(live_pnl, 4) if live_pnl is not None else None, "opened": p.get("time"),
                     "unprotected": bool(p.get("unprotected")), "sl_unverified": bool(p.get("sl_unverified"))})
     hist = [h for h in state.get("history", []) if h.get("type") == "live"][-30:][::-1]
     try:
@@ -1557,7 +1591,7 @@ def try_enter_trend(symbol, analysis, state, ex):
         if live:
             try:
                 res = close_live_position(ex, symbol, pos, price)
-                if not res.get("accounting_verified", True):
+                if not res.get("accounting_verified", False):
                     raise RuntimeError("exchange already flat; fill price unavailable for accounting")
             except Exception as e:
                 log(f"⚠️ {symbol}: الترند وقف بس القفل فشل — هيحاول تاني الدورة الجاية: {e}")
@@ -1565,11 +1599,19 @@ def try_enter_trend(symbol, analysis, state, ex):
             exit_px, qty = res["price"], res["qty"]
         else:
             exit_px, qty = price, pos["qty"]
-        pnl=(exit_px-pos["entry"])*qty
+        if live:
+            cs = _position_contract_size(pos)
+            if cs is None:
+                raise RuntimeError("missing contract_size for live PnL")
+            pnl = futures_net_pnl(pos["entry"], exit_px, qty, cs, pos.get("side", "long"), funding_pnl=float(pos.get("funding_pnl", 0.0) or 0.0))
+            margin = pos["entry"] * qty * cs / max(1, int(pos.get("leverage", CONFIG.get("leverage", 1))))
+        else:
+            pnl = (exit_px-pos["entry"])*qty
+            margin = pos["entry"] * qty
         mode = _live_label() if live else "Paper"
         log(f"📉 اغلاق {symbol} — الترند وقف @ {exit_px:.6g} PnL {pnl:+.4f}")
         notify(f"📉 قفل {symbol} — الترند وقف\nدخول {pos['entry']:.6g} → خروج {exit_px:.6g}\nPnL {pnl:+.2f}$ ({mode})")
-        state["history"].append({"symbol":symbol,"side":"long","entry":pos["entry"],"exit":exit_px,"qty":qty,"pnl":pnl,"pnl_pct":pnl/(pos["entry"]*qty)*100,"reason":"الترند وقف","time":datetime.now(timezone.utc).isoformat(),"type":"live" if live else "paper","opened":pos.get("time"),"rank":pos.get("rank")})
+        state["history"].append({"symbol":symbol,"side":"long","entry":pos["entry"],"exit":exit_px,"qty":qty,"pnl":pnl,"pnl_pct":pnl/margin*100 if margin else 0,"reason":"الترند وقف","time":datetime.now(timezone.utc).isoformat(),"type":"live" if live else "paper","opened":pos.get("time"),"rank":pos.get("rank")})
         state["stats"]["trades"]+=1; state["stats"]["pnl"]+=float(pnl); state["stats"]["wins" if pnl>0 else "losses"]+=1
         state["positions"].pop(symbol,None); state["last_trade"][symbol]=datetime.now(timezone.utc).isoformat(); save_state(state)
         return
@@ -1590,7 +1632,7 @@ def try_enter_trend(symbol, analysis, state, ex):
         try:
             res=place_order(ex,symbol,"long",margin,price)
             sl=res["price"]*(1-stt.STOP_SHARE/lev)
-            state["positions"][symbol]={"side":"long","entry":res["price"],"qty":res["qty"],"cost":res["cost"],"notional":res.get("notional"),"leverage":res.get("leverage",lev),
+            state["positions"][symbol]={"side":"long","entry":res["price"],"qty":res["qty"],"cost":res["cost"],"notional":res.get("notional"),"contract_size":res.get("contract_size", 1.0),"leverage":res.get("leverage",lev),
                 "time":datetime.now(timezone.utc).isoformat(),"sl":sl,"tp":None,"breakeven":False,"trend":True,"rank":analysis.get("rank")}
             state["last_trade"][symbol]=datetime.now(timezone.utc).isoformat(); save_state(state)
             log(f"✅ 🟢 لونج وهمي {symbol} ترند يومي x{lev} @ {res['price']:.6g} حجم {sig['size']*100:.0f}% وقف حماية {sl:.6g}")
@@ -1630,7 +1672,7 @@ def _enter_trend_live(symbol, analysis, state, ex, margin, lev, price):
         log(f"{symbol}: أمر الدخول رجّع خطأ بس الصفقة اتفتحت ({q}) — بنكمل ونحط الوقف: {e}")
         res = {"price": price, "qty": q, "cost": q * price, "notional": q * price, "leverage": lev}
     sl = res["price"] * (1 - stt.STOP_SHARE / lev)
-    pos = {"side":"long","entry":res["price"],"qty":res["qty"],"cost":res["cost"],"notional":res.get("notional"),"leverage":res.get("leverage",lev),
+    pos = {"side":"long","entry":res["price"],"qty":res["qty"],"cost":res["cost"],"notional":res.get("notional"),"contract_size":res.get("contract_size", 1.0),"leverage":res.get("leverage",lev),
            "time":datetime.now(timezone.utc).isoformat(),"sl":sl,"tp":None,"breakeven":False,"trend":True,"rank":analysis.get("rank"),
            "clientOrderId": cid, "oco_ids": {"pos_id": cid}}
     try:
@@ -1645,8 +1687,11 @@ def _enter_trend_live(symbol, analysis, state, ex, margin, lev, price):
             r = close_live_position(ex, symbol, pos, price)
             if not r.get("accounting_verified", True):
                 raise RuntimeError("exchange already flat; fill price unavailable for accounting")
-            pnl = (r["price"] - pos["entry"]) * r["qty"]
-            state["history"].append({"symbol":symbol,"side":"long","entry":pos["entry"],"exit":r["price"],"qty":r["qty"],"pnl":pnl,"pnl_pct":pnl/(pos["entry"]*r["qty"])*100,
+            cs = _position_contract_size(pos)
+            if cs is None:
+                raise RuntimeError("missing contract_size for live PnL")
+            pnl = futures_net_pnl(pos["entry"], r["price"], r["qty"], cs, pos.get("side", "long"), funding_pnl=float(pos.get("funding_pnl", 0.0) or 0.0))
+            state["history"].append({"symbol":symbol,"side":"long","entry":pos["entry"],"exit":r["price"],"qty":r["qty"],"pnl":pnl,"pnl_pct":pnl/(pos["entry"]*r["qty"]*cs/max(1, int(pos.get("leverage", CONFIG.get("leverage", 1)))))*100,
                 "reason":"الوقف اترفض — قفل فوري","time":datetime.now(timezone.utc).isoformat(),"type":"live","opened":pos["time"],"rank":pos.get("rank")})
             state["stats"]["trades"]+=1; state["stats"]["pnl"]+=float(pnl); state["stats"]["wins" if pnl>0 else "losses"]+=1
             state["last_trade"][symbol]=datetime.now(timezone.utc).isoformat(); save_state(state)
@@ -1718,10 +1763,13 @@ def try_enter(symbol, analysis, state, ex):
                     state["history"].append({"symbol":symbol,"side":side,"entry":entry,"exit":price,"qty":qty,"pnl":pnl,"pnl_pct":pct,"reason":"اشارة عكسية قوية","time":datetime.now(timezone.utc).isoformat(),"type":"paper"})
                 else:
                     res=close_live_position(ex, symbol, pos, price)
-                    if not res.get("accounting_verified", True):
+                    if not res.get("accounting_verified", False):
                         raise RuntimeError("exchange already flat; fill price unavailable for accounting")
-                    pnl=(res["price"]-entry)*res["qty"] if side=="long" else (entry-res["price"])*res["qty"]
-                    pct=(pnl/(entry*res["qty"])*100) if entry*res["qty"] else 0
+                    cs = _position_contract_size(pos)
+                    if cs is None:
+                        raise RuntimeError("missing contract_size for live PnL")
+                    pnl = futures_net_pnl(entry, res["price"], res["qty"], cs, side, funding_pnl=float(pos.get("funding_pnl", 0.0) or 0.0))
+                    pct=(pnl/(entry*res["qty"]*cs/max(1, int(pos.get("leverage", CONFIG.get("leverage", 1)))))*100) if entry*res["qty"] else 0
                     log(f"📉 اغلاق حقيقي {side} {symbol} @ {res['price']:.4f} PnL {pnl:+.4f}")
                     state["history"].append({"symbol":symbol,"side":side,"entry":entry,"exit":res["price"],"qty":res["qty"],"pnl":pnl,"pnl_pct":pct,"reason":"اشارة عكسية","time":datetime.now(timezone.utc).isoformat(),"type":"live"})
                 state["stats"]["trades"]+=1; state["stats"]["pnl"]+=float(pnl)
@@ -1790,7 +1838,7 @@ def try_enter(symbol, analysis, state, ex):
             except: pass
             res=place_order(ex,symbol,order_side,amount,price, client_order_id=cid)
             sl, tp = dynamic_sl_tp(price, side, _f_df2)
-            pos = {"side":side,"entry":res["price"],"qty":res["qty"],"cost":res["cost"],"notional":res.get("notional",amount*CONFIG.get("leverage",5)),"leverage":res.get("leverage",CONFIG.get("leverage",5)),"time":datetime.now(timezone.utc).isoformat(),"sl":sl,"tp":tp,"breakeven":False, "clientOrderId": cid}
+            pos = {"side":side,"entry":res["price"],"qty":res["qty"],"cost":res["cost"],"notional":res.get("notional",amount*CONFIG.get("leverage",5)),"contract_size":res.get("contract_size", 1.0),"leverage":res.get("leverage",CONFIG.get("leverage",5)),"time":datetime.now(timezone.utc).isoformat(),"sl":sl,"tp":tp,"breakeven":False, "clientOrderId": cid}
             if not CONFIG["paper_trading"]:
                 from backend.app.oco import place_oco_orders
                 pos_id = cid

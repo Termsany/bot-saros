@@ -5,6 +5,17 @@ class AmbiguousFill(RuntimeError):
     """The exchange response cannot prove a positive executed quantity."""
 
 
+def futures_net_pnl(entry_price, exit_price, contracts, contract_size, side, fee_rate=0.0004, funding_pnl=0.0):
+    """Net linear-futures PnL in quote currency; contracts are not base units."""
+    base_qty = float(contracts) * float(contract_size)
+    direction = 1.0 if side == "long" else -1.0
+    gross = (float(exit_price) - float(entry_price)) * base_qty * direction
+    fees = (float(entry_price) * base_qty + float(exit_price) * base_qty) * float(fee_rate)
+    return gross - fees + float(funding_pnl)
+
+
+
+
 def linear_contracts_from_margin(margin_quote, leverage, price, contract_size, *, inverse=False):
     if inverse:
         raise ValueError("inverse contracts are unsupported; refusing ambiguous conversion")
