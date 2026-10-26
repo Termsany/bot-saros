@@ -27,10 +27,14 @@ export default function AuthPage() {
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
-    const urlState = (value: string) => new URLSearchParams(value.replace(/^#/, "")).get("type")
-    if (urlState(window.location.search) === "recovery" || urlState(window.location.hash) === "recovery") {
-      setMode("recovery")
-    }
+    // SECURITY: recovery mode must never be derived from a hand-parsed URL
+    // query/hash string (e.g. "?type=recovery") — that value is fully
+    // attacker-controlled and can be used to trick an already-logged-in
+    // victim into resubmitting their password via updateUser() with no
+    // genuine recovery session behind it. supabase-js already parses the
+    // real recovery hash tokens itself (detectSessionInUrl) and emits the
+    // PASSWORD_RECOVERY auth event only when it establishes a verified
+    // recovery session, so that event is the sole trigger for recovery UI.
     if (!supabase || !isSupabaseConfigured) return
 
     const { data } = supabase.auth.onAuthStateChange((event: string) => {
