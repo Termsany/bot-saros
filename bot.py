@@ -1703,8 +1703,7 @@ def close_live_position(ex, symbol, pos, price):
             _refresh_funding_evidence(ex, symbol, pos)
         except Exception as e:
             return _close_failure(e, by_exchange=True)
-        _release_position_risk(symbol, pos)
-        return {"price": evidence["price"], "qty": evidence["qty"], "contract_size": pos.get("contract_size"), "by_exchange": True, "accounting_verified": True, "recovery_required": False, "error": None}
+        return {"price": evidence["price"], "qty": evidence["qty"], "authoritative_qty": evidence["qty"], "authoritative_fill_qty": evidence["qty"], "contract_size": pos.get("contract_size"), "by_exchange": True, "accounting_verified": True, "recovery_required": False, "error": None}
     try:
         res = place_order(ex, symbol, "close_long" if side == "long" else "close_short", 0, price, close_qty=exchange_qty)
     except Exception as e:
@@ -1718,8 +1717,7 @@ def close_live_position(ex, symbol, pos, price):
                 _refresh_fee_evidence(ex, symbol, pos, evidence.get("raw")); _refresh_funding_evidence(ex, symbol, pos)
             except Exception as evidence_error:
                 return _close_failure(evidence_error, by_exchange=True)
-            _release_position_risk(symbol, pos)
-            return {"price": evidence["price"], "qty": evidence["qty"], "contract_size": pos.get("contract_size"), "by_exchange": True, "accounting_verified": True, "recovery_required": False, "error": None}
+            return {"price": evidence["price"], "qty": evidence["qty"], "authoritative_qty": evidence["qty"], "authoritative_fill_qty": evidence["qty"], "contract_size": pos.get("contract_size"), "by_exchange": True, "accounting_verified": True, "recovery_required": False, "error": None}
         return _close_failure(e)
     if float(res.get("qty", 0) or 0) <= 0 or float(res.get("qty", 0)) + 1e-9 < float(exchange_qty):
         return _close_failure("close fill is partial or unverified; recovery required")
@@ -1735,8 +1733,7 @@ def close_live_position(ex, symbol, pos, price):
         _refresh_funding_evidence(ex, symbol, pos)
     except Exception as e:
         return _close_failure(e)
-    _release_position_risk(symbol, pos)
-    return {"price": res["price"], "qty": res["qty"], "contract_size": res.get("contract_size", pos.get("contract_size")), "by_exchange": False, "accounting_verified": True, "recovery_required": False, "error": None}
+    return {"price": res["price"], "qty": res["qty"], "authoritative_qty": exchange_qty, "authoritative_fill_qty": res["qty"], "contract_size": res.get("contract_size", pos.get("contract_size")), "by_exchange": False, "accounting_verified": True, "recovery_required": False, "error": None}
 
 def _require_verified_close(result):
     if not isinstance(result, dict) or result.get("accounting_verified") is not True:
@@ -1744,7 +1741,7 @@ def _require_verified_close(result):
     return result
 
 def check_sl_tp(state, prices, ex=None):
-    closed=[]
+    closed=[]; closed_positions={}
     for symbol,pos in list(state["positions"].items()):
         price=prices.get(symbol)
         if price is None: continue
@@ -1832,7 +1829,7 @@ def check_sl_tp(state, prices, ex=None):
             state["stats"]["trades"]+=1; state["stats"]["pnl"]+=float(pnl)
             if pnl>0: state["stats"]["wins"]+=1
             else: state["stats"]["losses"]+=1
-            closed.append(symbol)
+            closed.append(symbol); closed_positions[symbol] = pos
         except Exception as e:
             if not CONFIG["paper_trading"]:
                 state.setdefault("recovery_required", {})[symbol] = {"reason": f"live close accounting or protective cleanup unconfirmed: {e}", "at": datetime.now(timezone.utc).isoformat()}
@@ -1850,7 +1847,11 @@ def check_sl_tp(state, prices, ex=None):
             state.setdefault("recovery_required", {})[s] = {"reason": "exchange stop not moved / maybe missing", "at": datetime.now(timezone.utc).isoformat()}
             log(f"🚨 {s}: تحريك الوقف على المنصة فشل — ممكن الصفقة تكون من غير وقف. الدخول متوقف لحد ما تتراجع")
             notify(f"🚨 {s}: تحريك الوقف على المنصة فشل — ممكن الصفقة تكون من غير وقف. راجعها يدويا، البوت وقف أي دخول جديد.")
-    if closed or flagged: save_state(state)
+    if closed or flagged:
+        save_state(state)
+        if not CONFIG["paper_trading"]:
+            for s, pos in closed_positions.items(): _release_position_risk(s, pos)
+
     return closed
 
 def try_enter_wave(symbol, analysis, state, ex):
@@ -2012,10 +2013,10 @@ def reconcile_live(state, ex):
                 "pnl_pct": pnl / (pos["entry"] * pos["qty"] * cs / max(1, int(pos.get("leverage", CONFIG.get("leverage", 1))))) * 100, "reason": "قفل يدوي من Binance" if by_hand else "وقف المنصة", "time": datetime.now(timezone.utc).isoformat(),
                 "type": "live", "opened": pos.get("time"), "rank": pos.get("rank")})
             state["stats"]["trades"] += 1; state["stats"]["pnl"] += float(pnl); state["stats"]["wins" if pnl > 0 else "losses"] += 1
-            # Protective cleanup was verified before accounting was committed above.
-            _release_position_risk(sym, pos)
             state["positions"].pop(sym, None); state["last_trade"][sym] = datetime.now(timezone.utc).isoformat()
             state.get("recovery_required", {}).pop(sym, None)
+            save_state(state)
+            _release_position_risk(sym, pos)
         elif abs(q - float(pos["qty"])) > 0.02 * float(pos["qty"]):
             if sym not in state.setdefault("recovery_required", {}):
                 state["recovery_required"][sym] = {"reason": f"الكمية على المنصة {q} مش {pos['qty']}", "at": datetime.now(timezone.utc).isoformat()}
@@ -2105,6 +2106,7 @@ def process_manual_closes(state, ex, prices):
                 state.get("recovery_required", {}).pop(match, None)
                 state.setdefault("manual_hold", {})[match] = datetime.now(timezone.utc).isoformat()
                 save_state(state)
+                _release_position_risk(match, pos)
                 out.update(ok=True, msg="اتقفلت", price=r["price"], qty=r["qty"], pnl=round(pnl, 4))
                 log(f"🖐️ قفل يدوي {match} @ {r['price']:.6g} PnL {pnl:+.2f} (طلب {req.get('by', '?')})")
                 notify(f"🖐️ قفل يدوي من الموقع: {match}\nدخول {pos['entry']:.6g} → خروج {r['price']:.6g}\nPnL {pnl:+.2f}$ ({_live_label()})\nمش هيشتري العملة دي تاني غير لما الترند يقف ويبدأ من جديد")
@@ -2246,6 +2248,7 @@ def try_enter_trend(symbol, analysis, state, ex):
         state["history"].append({"symbol":symbol,"side":"long","entry":pos["entry"],"exit":exit_px,"qty":qty,"pnl":pnl,"pnl_pct":pnl/margin*100 if margin else 0,"reason":"الترند وقف","time":datetime.now(timezone.utc).isoformat(),"type":"live" if live else "paper","opened":pos.get("time"),"rank":pos.get("rank")})
         state["stats"]["trades"]+=1; state["stats"]["pnl"]+=float(pnl); state["stats"]["wins" if pnl>0 else "losses"]+=1
         state["positions"].pop(symbol,None); state["last_trade"][symbol]=datetime.now(timezone.utc).isoformat(); save_state(state)
+        if live: _release_position_risk(symbol, pos)
         return
     hold = state.get("manual_hold", {})
     if symbol in hold:   # closed by hand: wait for the trend to turn off, then a new signal may buy it again
@@ -2720,17 +2723,31 @@ def _phase2_live_basket(ex, state, strategy, intent, legs, *, reserve=True):
             _ENTRY_BLOCK["reason"] = f"Central Risk Manager kill switch is tripped — {reason}"; return None
     equity = equity or 1.0
     engine = _phase2_engine(state); fills = {}
+    cycle_key = f"{strategy}:{intent}"
+    cycles = state.setdefault("_execution_cycles", {})
+    cycle_token = cycles.setdefault(cycle_key, uuid.uuid4().hex)
     def _lookup_pending(payload):
         symbols = [leg.get("symbol") for leg in payload.get("legs", []) if leg.get("symbol")]
         try:
             return ex.fetch_positions(symbols) if symbols else []
         except Exception as exc:
             return {"error": str(exc), "authoritative": False}
-    pending = engine.reconcile(position_lookup=_lookup_pending)
+    def _resolve_pending(item):
+        positions = item.get("positions")
+        if isinstance(positions, dict) and positions.get("error"):
+            return {"status": "recovery_required", "residual": [{"execution_id": item["execution_id"], "reason": positions["error"], "positions": positions}]}
+        residual = [{"execution_id": item["execution_id"], "reason": "restart reconciliation requires exchange-confirmed compensation or manual residual recovery", "positions": positions, "legs": item["payload"].get("legs", [])}]
+        if not positions or all(float((p.get("contracts") if isinstance(p, dict) else 0) or 0) == 0 for p in (positions or [])):
+            return {"status": "compensated", "residual": []}
+        return {"status": "recovery_required", "residual": residual}
+    pending = engine.reconcile(position_lookup=_lookup_pending, resolve=_resolve_pending)
+    unresolved = [row for row in pending if (row.get("resolution") or {}).get("status") == "recovery_required"]
+    if unresolved:
+        for row in unresolved:
+            state.setdefault("recovery_required", {})[f"execution:{row['execution_id']}"] = {"reason": "restart reconciliation residual persisted", "residual": (row.get("resolution") or {}).get("residual"), "at": row["updated_at"]}
+        _ENTRY_BLOCK["reason"] = "durable live execution residual requires recovery"; save_state(state); return None
     if pending:
-        for row in pending:
-            state.setdefault("recovery_required", {})[f"execution:{row['execution_id']}"] = {"reason": "durable live execution requires restart reconciliation", "at": row["updated_at"]}
-        _ENTRY_BLOCK["reason"] = "durable live execution requires reconciliation"; save_state(state); return None
+        save_state(state)
     def execute_leg(leg):
         if leg.get("action", "entry") == "exit":
             result = close_live_position(ex, leg["symbol"], leg["position"], leg.get("price")); _require_verified_close(result)
@@ -2739,7 +2756,12 @@ def _phase2_live_basket(ex, state, strategy, intent, legs, *, reserve=True):
         if float(result.get("qty", 0) or 0) <= 0: raise RuntimeError("leg returned no filled quantity")
         from backend.app.oco import place_oco_orders
         oco = place_oco_orders(ex, leg["symbol"], leg["side"], result["qty"], leg.get("sl"), leg.get("tp"), paper=False, pos_id=leg["client_order_id"])
-        result = {**result, "oco": oco}; fills[leg["symbol"]] = result; return result
+        result = {**result, "oco": oco}
+        authoritative_qty = _exchange_position_qty(ex, leg["symbol"], side=leg["side"])
+        if authoritative_qty is None: raise RuntimeError("authoritative exchange position evidence unavailable")
+        result["authoritative_qty"] = authoritative_qty
+        result["authoritative_fill_qty"] = float(result.get("qty", 0) or 0)
+        fills[leg["symbol"]] = result; return result
     def compensate(leg, result):
         if leg.get("action", "entry") == "exit": return {"confirmed": False, "reason": "closed exit leg cannot be compensated automatically"}
         close_side = "close_long" if leg["side"] == "long" else "close_short"
@@ -2747,17 +2769,26 @@ def _phase2_live_basket(ex, state, strategy, intent, legs, *, reserve=True):
         q = _exchange_position_qty(ex, leg["symbol"], side=leg["side"])
         if q is None or float(q or 0) != 0: raise RuntimeError("compensating close outcome ambiguous")
         return {"confirmed": True, "close": closed}
-    def protected(leg, result):
-        if leg.get("action", "entry") == "exit": return True
-        oco = result.get("oco") or {}; return not (oco.get("protection_missing") or oco.get("verify_failed") or oco.get("sl_unverified"))
-    result = engine.execute(strategy=strategy, intent=intent, legs=legs, equity_usdt=equity, execute_leg=execute_leg,
-                            compensate_leg=compensate, verify_protection=protected, state=state, reserve=reserve)
-    if result.get("status") == "filled":
-        for leg in legs:
+    for leg in legs:
+        if leg.get("action", "entry") == "exit":
+            leg["requested_qty"] = float(leg["position"]["qty"])
+        else:
+            meta = _contract_meta(ex, leg["symbol"])
+            requested = linear_contracts_from_margin(leg["margin"], int(CONFIG.get("leverage", 2)), leg["price"], meta["contract_size"])
+            try: requested = float(ex.amount_to_precision(leg["symbol"], requested))
+            except Exception: requested = float(requested)
+            if requested <= 0: raise RuntimeError(f"invalid requested quantity for {leg['symbol']}")
+            leg["requested_qty"] = requested
+    def _persist_fills(filled):
+        for leg, fill in filled:
             sym = leg["symbol"]
             if leg.get("action", "entry") == "exit":
-                state["positions"].pop(sym, None); riskmgr.release_open_risk(RISK_PATH, strategy=strategy, symbol=sym); continue
-            fill = fills[sym]; oco = fill.get("oco") or {}
+                state["positions"].pop(sym, None)
+                state["last_trade"][sym] = datetime.now(timezone.utc).isoformat()
+                save_state(state)
+                _release_position_risk(sym, leg["position"])
+                continue
+            oco = fill.get("oco") or {}
             state["positions"][sym] = {"side": leg["side"], "entry": fill["price"], "qty": fill["qty"], "cost": fill.get("cost"),
                 "notional": fill.get("notional"), "contract_size": fill.get("contract_size"), "contract_size_verified": fill.get("contract_size_verified", False),
                 "entry_fee_rate": fill.get("entry_fee_rate"), "entry_fee_cost": fill.get("entry_fee_cost"), "leverage": fill.get("leverage", CONFIG.get("leverage", 2)),
@@ -2766,7 +2797,15 @@ def _phase2_live_basket(ex, state, strategy, intent, legs, *, reserve=True):
             riskmgr.register_open_risk(RISK_PATH, strategy=strategy, symbol=sym, side=leg["side"], risk_usdt=leg["risk_usdt"],
                 notional_usdt=leg["notional_usdt"], correlation_group=leg.get("correlation_group"))
         save_state(state)
-    elif result.get("status") == "recovery_required":
+        cycles.pop(cycle_key, None)
+        return True
+    def protected(leg, result):
+        if leg.get("action", "entry") == "exit": return True
+        oco = result.get("oco") or {}; return not (oco.get("protection_missing") or oco.get("verify_failed") or oco.get("sl_unverified"))
+    result = engine.execute(strategy=strategy, intent=intent, legs=legs, equity_usdt=equity, execute_leg=execute_leg,
+                            compensate_leg=compensate, verify_protection=protected, state=state, reserve=reserve,
+                            persist_fills=_persist_fills, cycle_token=cycle_token)
+    if result.get("status") == "recovery_required":
         for item in result.get("residual", []):
             sym = item["leg"]["symbol"]
             state.setdefault("recovery_required", {})[sym] = {"reason": item.get("reason"), "execution_id": result.get("execution_id"), "at": datetime.now(timezone.utc).isoformat()}

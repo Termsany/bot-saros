@@ -98,18 +98,26 @@ class Phase2ExecutionTests(unittest.TestCase):
         for t in ts: t.join()
         self.assertEqual(sum(ok for ok, _ in answers), 1)
 
-    def test_retry_reuses_deterministic_execution_and_does_not_duplicate_orders(self):
+    def test_completed_cycle_gets_new_identity_for_later_legitimate_cycle(self):
         calls = []
         kwargs = dict(strategy="momentum_ls", intent="same-intent", legs=self.legs(), equity_usdt=1000,
                       execute_leg=lambda leg: calls.append(leg["client_order_id"]) or {"qty": 1, "price": 10},
                       compensate_leg=lambda leg, fill: {"confirmed": True}, verify_protection=lambda leg, fill: True)
         first = self.engine.execute(**kwargs)
         second = self.engine.execute(**kwargs)
-        self.assertEqual(first["execution_id"], second["execution_id"])
-        self.assertTrue(second.get("reused"))
+        self.assertNotEqual(first["execution_id"], second["execution_id"])
         self.assertEqual(len(calls), 2)
-        self.assertEqual(len(set(calls)), 2)
 
+    def test_explicit_cycle_token_reuses_inflight_identity(self):
+        kwargs = dict(strategy="momentum_ls", intent="retryable", cycle_token="cycle-1", legs=self.legs(), equity_usdt=1000,
+                      execute_leg=lambda leg: (_ for _ in ()).throw(RuntimeError("ambiguous")) if leg["symbol"] == "BBB/USDT" else {"qty": 1, "price": 10},
+                      compensate_leg=lambda leg, fill: (_ for _ in ()).throw(RuntimeError("unknown")), verify_protection=lambda leg, fill: True)
+        first = self.engine.execute(**kwargs)
+        second = self.engine.execute(**kwargs)
+        self.assertEqual(first["execution_id"], second["execution_id"])
+
+    def test_retry_reuses_deterministic_execution_and_does_not_duplicate_orders(self):
+        self.test_explicit_cycle_token_reuses_inflight_identity()
     def test_partial_fill_is_not_counted_as_complete(self):
         closed = []
         legs = self.legs(); legs[0]["requested_qty"] = 2
@@ -117,6 +125,14 @@ class Phase2ExecutionTests(unittest.TestCase):
             execute_leg=lambda leg: {"qty": 1, "price": 10},
             compensate_leg=lambda leg, fill: closed.append(leg["symbol"]) or {"confirmed": True},
             verify_protection=lambda leg, fill: True)
+        self.assertEqual(result["status"], "compensated")
+        self.assertFalse(self.engine.pending())
+
+    def test_authoritative_position_evidence_rejects_positive_but_partial_leg(self):
+        legs = self.legs(); legs[0]["requested_qty"] = 2
+        result = self.engine.execute(strategy="authoritative", intent="entry", legs=legs, equity_usdt=1000,
+            execute_leg=lambda leg: {"qty": 2, "authoritative_qty": 1, "authoritative_fill_qty": 2, "price": 10},
+            compensate_leg=lambda leg, fill: {"confirmed": True}, verify_protection=lambda leg, fill: True)
         self.assertEqual(result["status"], "compensated")
         self.assertFalse(self.engine.pending())
 

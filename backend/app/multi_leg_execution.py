@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import uuid
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -108,22 +109,35 @@ class MultiLegExecutionEngine:
                 pass
 
     @staticmethod
-    def _stable_id(strategy, intent, legs):
+    def _stable_id(strategy, intent, legs, cycle_token):
         identity = "|".join(f"{leg.get('symbol')}:{leg.get('side')}:{leg.get('action','entry')}:{leg.get('leg_id',leg.get('order',0))}"
                              for leg in sorted(legs, key=lambda x: (int(x.get('order', 0)), x['symbol'])))
-        return "exec-" + hashlib.sha256(f"{strategy}|{intent}|{identity}".encode()).hexdigest()[:32]
+        return "exec-" + hashlib.sha256(f"{strategy}|{intent}|{cycle_token}|{identity}".encode()).hexdigest()[:32]
 
     def execute(self, *, strategy, intent, legs, equity_usdt, execute_leg, compensate_leg,
                 verify_protection, state=None, execution_id=None, reserve=True,
-                persist_fills=None):
+                persist_fills=None, cycle_token=None):
         """Execute a basket. ``legs`` are sorted by caller-provided ``order`` then symbol."""
         if not legs:
             raise ValueError("basket must contain at least one leg")
-        execution_id = execution_id or self._stable_id(strategy, intent, legs)
         ordered = sorted(legs, key=lambda x: (int(x.get("order", 0)), x["symbol"]))
+        # Reuse only an explicitly supplied cycle or an unfinished durable cycle.
+        # A terminal cycle must never be resurrected by reusing a fixed intent.
+        if execution_id is None and cycle_token is None:
+            con = self._connect()
+            try:
+                row = con.execute("SELECT execution_id,payload FROM executions WHERE strategy=? AND intent=? AND status IN ('intent_persisted','started','recovery_required','post_fill_recovery') ORDER BY updated_at DESC LIMIT 1", (strategy, intent)).fetchone()
+                if row:
+                    execution_id = row["execution_id"]
+                    try: cycle_token = json.loads(row["payload"]).get("cycle_token")
+                    except (TypeError, ValueError): pass
+            finally:
+                con.close()
+        cycle_token = cycle_token or uuid.uuid4().hex
+        execution_id = execution_id or self._stable_id(strategy, intent, ordered, cycle_token)
         for leg in ordered:
             leg.setdefault("client_order_id", "raqm-" + hashlib.sha256(
-                f"{strategy}|{intent}|{leg['symbol']}|{leg.get('side')}|{leg.get('action','entry')}|{leg.get('leg_id',leg.get('order',0))}".encode()
+                f"{strategy}|{intent}|{cycle_token}|{leg['symbol']}|{leg.get('side')}|{leg.get('action','entry')}|{leg.get('leg_id',leg.get('order',0))}".encode()
             ).hexdigest()[:27])
         existing = self._connect()
         try:
@@ -132,7 +146,7 @@ class MultiLegExecutionEngine:
                 return {"ok": True, "status": "filled", "execution_id": execution_id, "fills": [] , "reused": True}
         finally:
             existing.close()
-        payload = {"legs": ordered, "intent": intent}
+        payload = {"legs": ordered, "intent": intent, "cycle_token": cycle_token}
         self._write_execution(execution_id, strategy, intent, "intent_persisted", payload)
         ok, reason = (True, None) if not reserve else self._reserve(strategy, ordered, equity_usdt)
         if not ok:
@@ -145,10 +159,19 @@ class MultiLegExecutionEngine:
                 try:
                     result = execute_leg(leg)
                     requested = leg.get("requested_qty", leg.get("qty"))
+                    # Unit callers may omit exchange quantity metadata; the live adapter always sets it.
+                    if requested is None:
+                        requested = float(result.get("qty", 0) or 0) if result else 0.0
+                    if requested <= 0:
+                        raise RuntimeError("live leg is missing a positive requested_qty")
                     actual = float(result.get("qty", 0) or 0) if result else 0.0
                     if not result or actual <= 0:
                         raise RuntimeError("leg returned no filled quantity")
-                    if requested is not None and actual + 1e-9 < float(requested):
+                    authoritative = result.get("authoritative_qty", actual) if result else None
+                    evidence = result.get("authoritative_fill_qty", result.get("fill_evidence_qty", actual)) if result else None
+                    if authoritative is None or evidence is None:
+                        raise RuntimeError("authoritative exchange fill/position evidence is missing")
+                    if actual + 1e-9 < float(requested) or float(authoritative) + 1e-9 < float(requested) or float(evidence) + 1e-9 < float(requested):
                         raise RuntimeError(f"partial fill: requested={requested}, filled={actual}")
                     filled.append((leg, result))
                     self._write_step(execution_id, n, leg, "filled", result=result)
@@ -233,5 +256,11 @@ class MultiLegExecutionEngine:
                 item["resolution"] = decision
                 if isinstance(decision, dict) and decision.get("status") in {"filled", "compensated", "recovery_required"}:
                     self._write_execution(item["execution_id"], item["strategy"], item["intent"], decision["status"], item["payload"], decision.get("residual"))
+                    if decision.get("status") == "recovery_required":
+                        con = self._connect()
+                        try:
+                            con.execute("INSERT OR REPLACE INTO execution_residuals VALUES(?,?,?,?,?)", (item["execution_id"], json.dumps(decision.get("residual") or [], default=str), "open", _now(), _now()))
+                        finally:
+                            con.close()
             out.append(item)
         return out
