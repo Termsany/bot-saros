@@ -12,6 +12,7 @@ import strategies_advanced as adv
 from backend.app.execution_safety import AmbiguousFill, authoritative_position_state, futures_net_pnl, linear_contracts_from_margin, normalize_filled_contracts
 from backend.app import risk_manager as riskmgr
 from backend.app.multi_leg_execution import MultiLegExecutionEngine
+from backend.app import live_activation
 
 try:
     from dotenv import load_dotenv; load_dotenv()
@@ -62,6 +63,7 @@ CONFIG = {
 STATE_PATH = Path(__file__).parent / CONFIG["state_file"]
 LOG_PATH   = Path(__file__).parent / CONFIG["log_file"]
 RISK_PATH  = Path(__file__).parent / "risk_state.json"   # shared Central Risk Manager ledger across ALL strategy processes
+ACTIVATION_PATH = Path(__file__).parent / "live_activation.sqlite3"
 
 # Crude correlation grouping for the correlated-risk cap: nearly every altcoin trades as
 # BTC-beta, so "majors" vs "alts" is the conservative default until a real correlation
@@ -88,6 +90,13 @@ def _current_strategy_name():
     if tbreak_mode(): return "trend_breakout"
     enabled = CONFIG.get("enabled_strategies") or []
     return enabled[0] if enabled else "default"
+
+
+def _live_activation_gate(strategy):
+    if binance_env() != "live":
+        return True, None
+    account = os.getenv("BINANCE_LIVE_ACCOUNT", "").strip()
+    return live_activation.live_activation_allowed(ACTIVATION_PATH, strategy=strategy, account=account)
 
 
 def _fetch_equity_usdt(ex):
@@ -2218,6 +2227,10 @@ def try_enter_trend(symbol, analysis, state, ex):
 def _enter_trend_live(symbol, analysis, state, ex, margin, lev, price):
     import strategies_trend as stt
     from backend.app.oco import place_oco_orders
+    activation_ok, activation_reason = _live_activation_gate("trend_daily")
+    if not activation_ok:
+        _ENTRY_BLOCK["reason"] = f"live activation blocked — {activation_reason}"
+        log(f"⛔ {symbol} {_ENTRY_BLOCK['reason']}"); return
     # the exchange's minimum order value (Binance: $5, ETH $20, BTC $50) — skip instead of having it rejected
     try: min_cost = float(((ex.market(symbol).get("limits") or {}).get("cost") or {}).get("min") or 5)
     except Exception: min_cost = 5.0
@@ -2641,6 +2654,10 @@ def _phase2_live_basket(ex, state, strategy, intent, legs, *, reserve=True):
     if binance_env() == "live" and os.getenv("ALLOW_LIVE_TRADING", "").strip().lower() != "true":
         _ENTRY_BLOCK["reason"] = "ALLOW_LIVE_TRADING is not enabled"; return None
     is_exit = bool(legs) and all(leg.get("action", "entry") == "exit" for leg in legs)
+    if not is_exit:
+        activation_ok, activation_reason = _live_activation_gate(strategy)
+        if not activation_ok:
+            _ENTRY_BLOCK["reason"] = f"live activation blocked — {activation_reason}"; return None
     if _ENTRY_BLOCK.get("reason") and not is_exit:
         return None
     if state.get("recovery_required") and not is_exit:
@@ -2716,6 +2733,10 @@ def _single_leg_live_entry(ex, state, symbol, side, margin, price, sl, tp, strat
         raise RuntimeError("live adapter called while paper trading is enabled")
     if binance_env() == "live" and os.getenv("ALLOW_LIVE_TRADING", "").strip().lower() != "true":
         _ENTRY_BLOCK["reason"] = "ALLOW_LIVE_TRADING is not enabled"
+        return None
+    activation_ok, activation_reason = _live_activation_gate(strategy)
+    if not activation_ok:
+        _ENTRY_BLOCK["reason"] = f"live activation blocked — {activation_reason}"
         return None
     if _ENTRY_BLOCK.get("reason") or state.get("recovery_required"):
         return None

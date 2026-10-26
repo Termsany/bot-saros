@@ -62,6 +62,8 @@ SIG_OFF = {"price": 110.0, "trend": {"on": False, "ts": 2, "size": 1.0}, "in_uni
 class TrendLiveTests(unittest.TestCase):
     def setUp(self):
         self._cfg = dict(botmod.CONFIG)
+        self._env = os.environ.get("BINANCE_ENV")
+        os.environ["BINANCE_ENV"] = "demo"
         self.td = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)   # Windows can still hold a file open
         self._paths = (botmod.STATE_PATH, botmod.LOG_PATH, botmod.RISK_PATH)
         botmod.STATE_PATH = Path(self.td.name) / "state.json"; botmod.LOG_PATH = Path(self.td.name) / "t.log"
@@ -79,6 +81,8 @@ class TrendLiveTests(unittest.TestCase):
         self.state = botmod.load_state()
     def tearDown(self):
         botmod.CONFIG.clear(); botmod.CONFIG.update(self._cfg)
+        if self._env is None: os.environ.pop("BINANCE_ENV", None)
+        else: os.environ["BINANCE_ENV"] = self._env
         botmod.STATE_PATH, botmod.LOG_PATH, botmod.RISK_PATH = self._paths
         self.td.cleanup()
 

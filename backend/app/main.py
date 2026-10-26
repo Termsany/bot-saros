@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.db import init_db, async_session, Trade, BacktestRun, UserSetting, UserClose
 from app.auth import require_user, require_admin, require_admin_or_cron, is_admin
+from app import live_activation
 from sqlalchemy import select, desc
 import ccxt, pandas as pd, numpy as np
 from datetime import datetime, timezone
@@ -24,6 +25,7 @@ try:
 except: pass
 
 BOT_DIR = Path(__file__).parent.parent.parent
+LIVE_ACTIVATION_PATH = BOT_DIR / "live_activation.sqlite3"
 
 def _supabase_key_kind(key: str) -> str:
     """'service', 'public' or 'unknown' — from the key's own format, without calling Supabase."""
@@ -1005,6 +1007,14 @@ LIVE_SYMBOL_RE = re.compile(r"^[A-Z0-9]{1,20}/USDT(:USDT)?$")
 class LiveCloseReq(BaseModel):
     symbol: str
 
+
+class LiveActivationReq(BaseModel):
+    environment: str
+    account: str = Field(min_length=1, max_length=120)
+    strategies: List[str] = Field(min_length=1, max_length=20)
+    risk_allocation: dict
+    readiness: dict
+
 @app.get("/api/live/status")
 async def live_status(user: dict = Depends(require_admin)):
     f = IPC_DIR / "live_status.json"
@@ -1016,6 +1026,35 @@ async def live_status(user: dict = Depends(require_admin)):
         return {"running": False, "error": "status unreadable"}
     data["running"] = (datetime.now(timezone.utc) - datetime.fromisoformat(data["updated"])).total_seconds() < 300
     return data
+
+
+@app.get("/api/live/activation")
+async def live_activation_status(user: dict = Depends(require_admin)):
+    record = live_activation.active_record(LIVE_ACTIVATION_PATH)
+    return {"enabled": live_trading_allowed(), "active": bool(record), "record": record}
+
+
+@app.post("/api/live/activation")
+async def live_activation_create(req: LiveActivationReq, user: dict = Depends(require_admin)):
+    if req.environment != "live":
+        raise HTTPException(400, "activation requires the explicit live environment")
+    if not all(re.fullmatch(r"[a-z0-9_]{1,30}", s) for s in req.strategies):
+        raise HTTPException(400, "bad strategy name")
+    try:
+        aid = live_activation.activate(LIVE_ACTIVATION_PATH, environment=req.environment, account=req.account,
+            approved_by=str(user.get("email") or user.get("id")), strategies=req.strategies,
+            risk_allocation=req.risk_allocation, readiness=req.readiness)
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    return {"ok": True, "activation_id": aid, "approved_by": user.get("email") or user.get("id")}
+
+
+@app.post("/api/live/activation/revoke")
+async def live_activation_revoke(user: dict = Depends(require_admin)):
+    live_activation.revoke(LIVE_ACTIVATION_PATH, reason=f"revoked by {user.get('email') or user.get('id')}")
+    return {"ok": True}
 
 @app.post("/api/live/close")
 async def live_close(req: LiveCloseReq, user: dict = Depends(require_admin)):
