@@ -98,6 +98,49 @@ class Phase2ExecutionTests(unittest.TestCase):
         for t in ts: t.join()
         self.assertEqual(sum(ok for ok, _ in answers), 1)
 
+    def test_retry_reuses_deterministic_execution_and_does_not_duplicate_orders(self):
+        calls = []
+        kwargs = dict(strategy="momentum_ls", intent="same-intent", legs=self.legs(), equity_usdt=1000,
+                      execute_leg=lambda leg: calls.append(leg["client_order_id"]) or {"qty": 1, "price": 10},
+                      compensate_leg=lambda leg, fill: {"confirmed": True}, verify_protection=lambda leg, fill: True)
+        first = self.engine.execute(**kwargs)
+        second = self.engine.execute(**kwargs)
+        self.assertEqual(first["execution_id"], second["execution_id"])
+        self.assertTrue(second.get("reused"))
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(set(calls)), 2)
+
+    def test_partial_fill_is_not_counted_as_complete(self):
+        closed = []
+        legs = self.legs(); legs[0]["requested_qty"] = 2
+        result = self.engine.execute(strategy="partial", intent="entry", legs=legs, equity_usdt=1000,
+            execute_leg=lambda leg: {"qty": 1, "price": 10},
+            compensate_leg=lambda leg, fill: closed.append(leg["symbol"]) or {"confirmed": True},
+            verify_protection=lambda leg, fill: True)
+        self.assertEqual(result["status"], "compensated")
+        self.assertFalse(self.engine.pending())
+
+    def test_caller_persistence_failure_remains_pending(self):
+        result = self.engine.execute(strategy="persist", intent="entry", legs=self.legs(), equity_usdt=1000,
+            execute_leg=lambda leg: {"qty": 1, "price": 10},
+            compensate_leg=lambda leg, fill: {"confirmed": True}, verify_protection=lambda leg, fill: True,
+            persist_fills=lambda fills: False)
+        self.assertEqual(result["status"], "post_fill_recovery")
+        self.assertTrue(self.engine.pending())
+
+    def test_reconcile_invokes_exchange_lookup_and_resolution(self):
+        self.engine.execute(strategy="restart", intent="entry", legs=self.legs(), equity_usdt=1000,
+            execute_leg=lambda leg: {"qty": 1, "price": 10},
+            compensate_leg=lambda leg, fill: (_ for _ in ()).throw(RuntimeError("ambiguous")),
+            verify_protection=lambda leg, fill: False)
+        looked_up = []
+        rows = self.engine.reconcile(
+            position_lookup=lambda payload: looked_up.append(payload["legs"]) or {"AAA/USDT": 0, "BBB/USDT": 0},
+            resolve=lambda item: {"status": "compensated"})
+        self.assertTrue(rows)
+        self.assertTrue(looked_up)
+        self.assertFalse(self.engine.pending())
+
 
 if __name__ == "__main__":
     unittest.main()

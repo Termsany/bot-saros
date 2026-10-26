@@ -224,11 +224,11 @@ class ReplacementStopDualTrackingTests(unittest.TestCase):
         ex.positions = [{"symbol": "BTC/USDT:USDT", "contracts": 0}]   # already flat on the exchange
         res = botmod.close_live_position(ex, "BTC/USDT", pos, 49500.0)
         self.assertTrue(res["by_exchange"])
-        self.assertFalse(res["recovery_required"], res)
-        self.assertNotIn("sl_pending_cancel", pos["oco_ids"])
+        self.assertTrue(res["recovery_required"], res)
+        self.assertIn("sl_pending_cancel", pos["oco_ids"])
         remaining = [o["clientOrderId"] for o in ex.open_orders]
-        self.assertNotIn(current_sl_id, remaining)
-        self.assertNotIn(stale_old_id, remaining)
+        self.assertIn(current_sl_id, remaining)
+        self.assertIn(stale_old_id, remaining)
 
     def test_close_live_position_fails_closed_when_pending_replacement_cannot_be_cancelled(self):
         ex = _AmendExchange(cancel_removes=False)   # every cancel is ambiguous

@@ -294,6 +294,10 @@ def _listing_close(ex, state, sym, price, reason):
 
 def run_once_listing(ex):
     L = LISTING; state = load_state(); now = datetime.now(timezone.utc)
+    if not CONFIG["paper_trading"]:
+        reconcile_live(state, ex)
+        if _ENTRY_BLOCK.get("reason"):
+            save_state(state); return
     process_paper_closes(state, ex, "listing")
     done = state.setdefault("listing_done", {})
     mk = listing_markets(ex); prices = {}
@@ -415,6 +419,10 @@ def _paper_close(ex, state, sym, price, reason):
 
 def run_once_momentum(ex):
     M = MOM; state = load_state(); now = datetime.now(timezone.utc); prices = {}
+    if not CONFIG["paper_trading"]:
+        reconcile_live(state, ex)
+        if _ENTRY_BLOCK.get("reason"):
+            save_state(state); return
     process_paper_closes(state, ex, "momentum")
     # protective stops during the week
     for sym, pos in list(state["positions"].items()):
@@ -557,6 +565,10 @@ def _ratio_close_pair(ex, state, key, prices, reason, fcache):
 
 def run_once_ratio(ex):
     R = RATIO; state = load_state(); state.setdefault("pairs", {}); now = datetime.now(timezone.utc)
+    if not CONFIG["paper_trading"]:
+        reconcile_live(state, ex)
+        if _ENTRY_BLOCK.get("reason"):
+            save_state(state); return
     process_paper_closes(state, ex, "ratio")
     today = now.replace(hour=0, minute=0, second=0, microsecond=0); prices = {}
     if state.get("ratio_day") != today.isoformat():          # once a day, right after the daily close
@@ -1651,6 +1663,28 @@ def _release_position_risk(symbol, pos):
     except Exception as e:
         log(f"risk ledger release failed {symbol}: {e}")
 
+def _authoritative_close_fill(ex, symbol, pos):
+    """Require exchange trade evidence before treating an already-flat position as closed."""
+    try:
+        since = int(datetime.fromisoformat(pos["time"]).timestamp() * 1000)
+        close_side = "sell" if pos.get("side", "long") == "long" else "buy"
+        rows = [t for t in ex.fetch_my_trades(symbol, since=since, limit=100)
+                if t.get("side") == close_side]
+        valid = []
+        for row in rows:
+            qty = float(row.get("filled", row.get("amount", 0)) or 0)
+            px = float(row.get("average") or row.get("price") or 0)
+            if qty > 0 and px > 0:
+                valid.append((qty, px, row))
+        total = sum(x[0] for x in valid)
+        if total + 1e-9 < float(pos.get("qty", 0)):
+            return None
+        return {"qty": total, "price": sum(q * p for q, p, _ in valid) / total,
+                "raw": {"filled": total, "price": sum(q * p for q, p, _ in valid) / total,
+                        "fee": {"cost": sum(float((r.get("fee") or {}).get("cost", 0) or 0) for _, _, r in valid)}}}
+    except Exception:
+        return None
+
 
 def close_live_position(ex, symbol, pos, price):
     """Close exact authoritative contracts and verify an authoritative flat readback."""
@@ -1659,18 +1693,33 @@ def close_live_position(ex, symbol, pos, price):
     if exchange_qty is None:
         return _close_failure(f"cannot confirm current exchange position for {symbol}")
     if exchange_qty == 0:
+        evidence = _authoritative_close_fill(ex, symbol, pos)
+        if evidence is None:
+            return _close_failure(f"exchange is flat but authoritative close fill is missing for {symbol}", by_exchange=True)
         if _cancel_all_protective_orders(ex, symbol, pos) is False:
             return _close_failure(f"protective cleanup is unconfirmed for {symbol}", by_exchange=True)
+        try:
+            _refresh_fee_evidence(ex, symbol, pos, evidence.get("raw"))
+            _refresh_funding_evidence(ex, symbol, pos)
+        except Exception as e:
+            return _close_failure(e, by_exchange=True)
         _release_position_risk(symbol, pos)
-        return {"price": None, "qty": 0.0, "contract_size": pos.get("contract_size"), "by_exchange": True, "accounting_verified": False, "recovery_required": False, "error": None}
+        return {"price": evidence["price"], "qty": evidence["qty"], "contract_size": pos.get("contract_size"), "by_exchange": True, "accounting_verified": True, "recovery_required": False, "error": None}
     try:
         res = place_order(ex, symbol, "close_long" if side == "long" else "close_short", 0, price, close_qty=exchange_qty)
     except Exception as e:
         remaining = _exchange_position_qty(ex, symbol, side=side, position_idx=pos.get("position_idx"))
         if remaining == 0:
+            evidence = _authoritative_close_fill(ex, symbol, pos)
+            if evidence is None:
+                return _close_failure(f"close errored and no authoritative fill proves closure for {symbol}", by_exchange=True)
             log(f"{symbol}: المنصة قفلت الصفقة بالفعل (وقف/هدف) — {e}")
+            try:
+                _refresh_fee_evidence(ex, symbol, pos, evidence.get("raw")); _refresh_funding_evidence(ex, symbol, pos)
+            except Exception as evidence_error:
+                return _close_failure(evidence_error, by_exchange=True)
             _release_position_risk(symbol, pos)
-            return {"price": None, "qty": 0.0, "contract_size": pos.get("contract_size"), "by_exchange": True, "accounting_verified": False, "recovery_required": False, "error": None}
+            return {"price": evidence["price"], "qty": evidence["qty"], "contract_size": pos.get("contract_size"), "by_exchange": True, "accounting_verified": True, "recovery_required": False, "error": None}
         return _close_failure(e)
     if float(res.get("qty", 0) or 0) <= 0 or float(res.get("qty", 0)) + 1e-9 < float(exchange_qty):
         return _close_failure("close fill is partial or unverified; recovery required")
@@ -2254,7 +2303,7 @@ def _enter_trend_live(symbol, analysis, state, ex, margin, lev, price):
         correlation_group=_correlation_group(symbol))
     if not allowed:
         log(f"⛔ {symbol} رفض بوابة المخاطر المركزية — {reason}"); return
-    cid = f"raqm-{uuid.uuid4().hex[:12]}"
+    cid = "raqm-" + uuid.uuid5(uuid.NAMESPACE_URL, f"trend_daily|{symbol}|long").hex[:27]
     state.setdefault("pending_orders", {})[symbol] = cid; save_state(state)   # survives a crash between order and record
     try:
         res = place_order(ex, symbol, "long", margin, price, client_order_id=cid)
@@ -2460,7 +2509,7 @@ def try_enter(symbol, analysis, state, ex):
         try:
             order_side="long" if side=="long" else "short"
             _f_df2 = _f_df if '_f_df' in locals() else fetch_ohlcv(symbol, CONFIG["timeframe"], limit=60, ex=ex)
-            cid = f"raqm-{uuid.uuid4().hex[:12]}"[:36]
+            cid = "raqm-" + uuid.uuid5(uuid.NAMESPACE_URL, f"{_current_strategy_name()}|{symbol}|{side}").hex[:27]
             # pending flag for idempotent recovery (P0-05)
             state.setdefault("pending_orders", {})[symbol] = cid
             try: save_state(state)
@@ -2671,7 +2720,13 @@ def _phase2_live_basket(ex, state, strategy, intent, legs, *, reserve=True):
             _ENTRY_BLOCK["reason"] = f"Central Risk Manager kill switch is tripped — {reason}"; return None
     equity = equity or 1.0
     engine = _phase2_engine(state); fills = {}
-    pending = engine.pending()
+    def _lookup_pending(payload):
+        symbols = [leg.get("symbol") for leg in payload.get("legs", []) if leg.get("symbol")]
+        try:
+            return ex.fetch_positions(symbols) if symbols else []
+        except Exception as exc:
+            return {"error": str(exc), "authoritative": False}
+    pending = engine.reconcile(position_lookup=_lookup_pending)
     if pending:
         for row in pending:
             state.setdefault("recovery_required", {})[f"execution:{row['execution_id']}"] = {"reason": "durable live execution requires restart reconciliation", "at": row["updated_at"]}
@@ -2761,7 +2816,7 @@ def _single_leg_live_entry(ex, state, symbol, side, margin, price, sl, tp, strat
     if not allowed:
         log(f"⛔ {symbol} رفض بوابة المخاطر المركزية — {reason}")
         return None
-    cid = f"raqm-{uuid.uuid4().hex[:12]}"[:36]
+    cid = "raqm-" + uuid.uuid5(uuid.NAMESPACE_URL, f"{strategy}|{symbol}|{side}|{extra or {}}").hex[:27][:36]
     state.setdefault("pending_orders", {})[symbol] = cid
     save_state(state)
     try:

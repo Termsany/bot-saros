@@ -7,8 +7,8 @@ signal code unchanged while making every live workflow journaled and recoverable
 from __future__ import annotations
 
 import json
+import hashlib
 import sqlite3
-import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -107,15 +107,31 @@ class MultiLegExecutionEngine:
             except Exception:
                 pass
 
+    @staticmethod
+    def _stable_id(strategy, intent, legs):
+        identity = "|".join(f"{leg.get('symbol')}:{leg.get('side')}:{leg.get('action','entry')}:{leg.get('leg_id',leg.get('order',0))}"
+                             for leg in sorted(legs, key=lambda x: (int(x.get('order', 0)), x['symbol'])))
+        return "exec-" + hashlib.sha256(f"{strategy}|{intent}|{identity}".encode()).hexdigest()[:32]
+
     def execute(self, *, strategy, intent, legs, equity_usdt, execute_leg, compensate_leg,
-                verify_protection, state=None, execution_id=None, reserve=True):
+                verify_protection, state=None, execution_id=None, reserve=True,
+                persist_fills=None):
         """Execute a basket. ``legs`` are sorted by caller-provided ``order`` then symbol."""
         if not legs:
             raise ValueError("basket must contain at least one leg")
-        execution_id = execution_id or f"exec-{uuid.uuid4().hex}"
+        execution_id = execution_id or self._stable_id(strategy, intent, legs)
         ordered = sorted(legs, key=lambda x: (int(x.get("order", 0)), x["symbol"]))
         for leg in ordered:
-            leg.setdefault("client_order_id", f"raqm-{execution_id[-12:]}-{leg['symbol'].replace('/', '')}"[:36])
+            leg.setdefault("client_order_id", "raqm-" + hashlib.sha256(
+                f"{strategy}|{intent}|{leg['symbol']}|{leg.get('side')}|{leg.get('action','entry')}|{leg.get('leg_id',leg.get('order',0))}".encode()
+            ).hexdigest()[:27])
+        existing = self._connect()
+        try:
+            row = existing.execute("SELECT status,payload FROM executions WHERE execution_id=?", (execution_id,)).fetchone()
+            if row and row["status"] == "filled":
+                return {"ok": True, "status": "filled", "execution_id": execution_id, "fills": [] , "reused": True}
+        finally:
+            existing.close()
         payload = {"legs": ordered, "intent": intent}
         self._write_execution(execution_id, strategy, intent, "intent_persisted", payload)
         ok, reason = (True, None) if not reserve else self._reserve(strategy, ordered, equity_usdt)
@@ -128,8 +144,12 @@ class MultiLegExecutionEngine:
                 self._write_step(execution_id, n, leg, "started")
                 try:
                     result = execute_leg(leg)
-                    if not result or float(result.get("qty", 0) or 0) <= 0:
+                    requested = leg.get("requested_qty", leg.get("qty"))
+                    actual = float(result.get("qty", 0) or 0) if result else 0.0
+                    if not result or actual <= 0:
                         raise RuntimeError("leg returned no filled quantity")
+                    if requested is not None and actual + 1e-9 < float(requested):
+                        raise RuntimeError(f"partial fill: requested={requested}, filled={actual}")
                     filled.append((leg, result))
                     self._write_step(execution_id, n, leg, "filled", result=result)
                 except Exception as exc:
@@ -159,6 +179,18 @@ class MultiLegExecutionEngine:
                     return {"ok": False, "status": "compensated", "execution_id": execution_id}
                 if not verify_protection(leg, result):
                     raise ExecutionRecoveryRequired(f"protective order verification failed for {leg['symbol']}")
+            if persist_fills is not None:
+                try:
+                    persisted = persist_fills(filled)
+                except Exception as exc:
+                    persisted = False
+                    persist_error = exc
+                if persisted is not True:
+                    reason = str(locals().get("persist_error", "caller-side persistence not confirmed"))
+                    self._write_execution(execution_id, strategy, intent, "post_fill_recovery", payload,
+                                           [{"leg": leg, "fill": result, "reason": reason} for leg, result in filled])
+                    self.block("post-fill caller persistence requires recovery")
+                    return {"ok": False, "status": "post_fill_recovery", "execution_id": execution_id}
             self._write_execution(execution_id, strategy, intent, "filled", payload)
             return {"ok": True, "status": "filled", "execution_id": execution_id, "fills": filled}
         except Exception as exc:
@@ -181,13 +213,13 @@ class MultiLegExecutionEngine:
     def pending(self):
         con = self._connect()
         try:
-            rows = con.execute("SELECT * FROM executions WHERE status IN ('intent_persisted','started','recovery_required') ORDER BY created_at").fetchall()
+            rows = con.execute("SELECT * FROM executions WHERE status IN ('intent_persisted','started','recovery_required','post_fill_recovery') ORDER BY created_at").fetchall()
             return [dict(r) for r in rows]
         finally:
             con.close()
 
-    def reconcile(self, *, position_lookup, compensation_lookup=None):
-        """Return durable pending intents; callers can reconcile exchange positions by CID."""
+    def reconcile(self, *, position_lookup, compensation_lookup=None, resolve=None):
+        """Reconcile durable pending intents; resolve may compensate or persist residuals."""
         out = []
         for row in self.pending():
             item = dict(row)
@@ -196,5 +228,10 @@ class MultiLegExecutionEngine:
             if compensation_lookup and item["residual"]:
                 item["compensation"] = compensation_lookup(item["residual"])
             item["positions"] = position_lookup(item["payload"])
+            if resolve:
+                decision = resolve(item)
+                item["resolution"] = decision
+                if isinstance(decision, dict) and decision.get("status") in {"filled", "compensated", "recovery_required"}:
+                    self._write_execution(item["execution_id"], item["strategy"], item["intent"], decision["status"], item["payload"], decision.get("residual"))
             out.append(item)
         return out
