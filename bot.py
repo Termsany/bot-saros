@@ -2683,8 +2683,7 @@ def _guard_stops(ex, state, prices, label):
 def run_once_breakout(ex):
     V = VB; state = load_state(); now = datetime.now(timezone.utc); day = _utc_day(now); prices = {}
     process_paper_closes(state, ex, "breakout")
-    if not CONFIG["paper_trading"] and _ENTRY_BLOCK.get("reason"):
-        _guard_stops(ex, state, prices, "بريك أوت")
+    _guard_stops(ex, state, prices, "بريك أوت")
     if state.get("vb_day") != day.isoformat():
         # a new UTC day: yesterday's trades close at today's open, then today's triggers
         day_ms = int(day.timestamp() * 1000); closed = 0.0; n = 0
