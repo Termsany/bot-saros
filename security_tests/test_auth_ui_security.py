@@ -24,6 +24,22 @@ class AuthUiSourceAuditTests(unittest.TestCase):
         for value in forbidden:
             self.assertNotIn(value, source)
 
+    def test_password_recovery_flow_is_present_and_safe(self):
+        source = (ROOT / "app/auth/page.tsx").read_text(encoding="utf-8")
+        for value in (
+            "PASSWORD_RECOVERY",
+            "onAuthStateChange",
+            "resetPasswordForEmail",
+            "updateUser({ password: newPassword })",
+            "newPassword !== confirmPassword",
+            "newPassword.length < 8",
+            "window.location.origin}/auth",
+            "replaceState",
+        ):
+            self.assertIn(value, source)
+        for value in ("error.message", "error as any", "access_token", "refresh_token", "console."):
+            self.assertNotIn(value, source)
+
     def test_client_artifacts_have_no_private_key_markers(self):
         roots = [ROOT / "app/auth", ROOT / "components", ROOT / "lib/supabase.ts", ROOT / "next.config.js", ROOT / ".next/static"]
         files = []
