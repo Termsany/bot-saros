@@ -70,7 +70,21 @@ class AdminLiveBotsEndpointTests(unittest.TestCase):
         ]
         for p in self.patches:
             p.start()
+        from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+        import app.db as dbmod
+        self.db_path = Path(self.tmp.name) / "admin_live_bots.db"
+        self.eng = create_async_engine(f"sqlite+aiosqlite:///{self.db_path}", echo=False)
+        self.session_maker = async_sessionmaker(self.eng, expire_on_commit=False)
+        async def _create_all():
+            async with self.eng.begin() as conn:
+                await conn.run_sync(dbmod.Base.metadata.create_all)
+        asyncio.run(_create_all())
         import app.main as mainmod
+        self.db_patches = [
+            mock.patch.object(mainmod, "async_session", self.session_maker),
+        ]
+        for p in self.db_patches:
+            p.start()
         mainmod.app.dependency_overrides = {}
         self._orig_botdir = mainmod.BOT_DIR
         self.botdir = Path(self.tmp.name) / "botdir"
@@ -86,8 +100,14 @@ class AdminLiveBotsEndpointTests(unittest.TestCase):
     def tearDown(self):
         self.fetch_patch.stop()
         self.mainmod.BOT_DIR = self._orig_botdir
+        for p in self.db_patches:
+            p.stop()
         for p in self.patches:
             p.stop()
+        try:
+            asyncio.run(self.eng.dispose())
+        except Exception:
+            pass
         self.tmp.cleanup()
 
     def _admin_headers(self):
