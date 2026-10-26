@@ -1,4 +1,6 @@
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import Mock
 
 import bot
@@ -38,10 +40,15 @@ class P0IntegrationTests(unittest.TestCase):
         bot.CONFIG["paper_trading"] = False
         bot.CONFIG["market"] = "future"
         bot.CONFIG["leverage"] = 5
+        self._td = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self._risk_path = bot.RISK_PATH
+        bot.RISK_PATH = Path(self._td.name) / "risk_state.json"
 
     def tearDown(self):
         bot.CONFIG.clear()
         bot.CONFIG.update(self.old)
+        bot.RISK_PATH = self._risk_path
+        self._td.cleanup()
 
     def test_entry_uses_contracts_not_base_quantity(self):
         ex = FakeFutureExchange([])

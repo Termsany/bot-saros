@@ -37,4 +37,5 @@ trades.log
 !*.env.example
 !.env.example
 state*.json
+risk_state*.json
 *.log

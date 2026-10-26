@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import strategies_advanced as adv
 from backend.app.execution_safety import AmbiguousFill, authoritative_position_state, futures_net_pnl, linear_contracts_from_margin, normalize_filled_contracts
+from backend.app import risk_manager as riskmgr
 
 try:
     from dotenv import load_dotenv; load_dotenv()
@@ -59,6 +60,64 @@ CONFIG = {
 
 STATE_PATH = Path(__file__).parent / CONFIG["state_file"]
 LOG_PATH   = Path(__file__).parent / CONFIG["log_file"]
+RISK_PATH  = Path(__file__).parent / "risk_state.json"   # shared Central Risk Manager ledger across ALL strategy processes
+
+# Crude correlation grouping for the correlated-risk cap: nearly every altcoin trades as
+# BTC-beta, so "majors" vs "alts" is the conservative default until a real correlation
+# matrix is computed. Override via CONFIG["correlation_groups"] = {symbol: group}.
+_CORRELATION_MAJORS = {"BTC/USDT", "ETH/USDT"}
+
+
+def _correlation_group(symbol):
+    override = (CONFIG.get("correlation_groups") or {}).get(symbol)
+    if override:
+        return override
+    base = symbol.split(":")[0]
+    return "majors" if base in _CORRELATION_MAJORS else "alts"
+
+
+def _current_strategy_name():
+    if trend_mode(): return "trend_daily"
+    if wave_mode(): return "wave_flats"
+    if listing_mode(): return "listing_short"
+    if momentum_mode(): return "momentum_ls"
+    if ratio_mode(): return "ratio_trend"
+    if breakout_mode(): return "vol_breakout"
+    if rsi2_mode(): return "rsi2_pullback"
+    if tbreak_mode(): return "trend_breakout"
+    enabled = CONFIG.get("enabled_strategies") or []
+    return enabled[0] if enabled else "default"
+
+
+def _fetch_equity_usdt(ex):
+    """Best-effort USDT account equity (free + used margin); None means unavailable —
+    callers must fail closed on None, never substitute a guessed figure."""
+    try:
+        bal = ex.fetch_balance()
+        usdt = bal.get("USDT") or {}
+        total = usdt.get("total")
+        if total is None:
+            free = float(usdt.get("free") or (bal.get("free") or {}).get("USDT") or 0)
+            used = float(usdt.get("used") or (bal.get("used") or {}).get("USDT") or 0)
+            total = free + used
+        total = float(total)
+        return total if total > 0 else None
+    except Exception:
+        return None
+
+
+def _estimate_trade_risk_usdt(margin_usdt, leverage, entry_price, sl_price):
+    """Worst-case loss to the stop for a new position, used by the pre-trade risk gate.
+    Returns None (fail closed) if the stop price is unknown — an entry with no stop has
+    unbounded risk and must never pass the gate."""
+    try:
+        if sl_price is None or entry_price is None or float(entry_price) <= 0:
+            return None
+        notional = float(margin_usdt) * max(1, int(leverage or 1))
+        base_qty = notional / float(entry_price)
+        return abs(float(entry_price) - float(sl_price)) * base_qty
+    except (TypeError, ValueError):
+        return None
 
 def get_exchange(auth=False):
     mtype = "future" if CONFIG.get("market","future")=="future" else "spot"
@@ -1500,6 +1559,15 @@ def _exchange_position_qty(ex, symbol, *, side=None, position_idx=None):
 def _close_failure(reason, *, by_exchange=False):
     return {"price": None, "qty": 0.0, "contract_size": None, "by_exchange": by_exchange, "accounting_verified": False, "recovery_required": True, "error": str(reason)}
 
+def _release_position_risk(symbol, pos):
+    """Best-effort Central Risk Manager release — never let a ledger write failure block
+    an already-confirmed close; log and move on."""
+    try:
+        riskmgr.release_open_risk(RISK_PATH, strategy=pos.get("strategy") or _current_strategy_name(), symbol=symbol)
+    except Exception as e:
+        log(f"risk ledger release failed {symbol}: {e}")
+
+
 def close_live_position(ex, symbol, pos, price):
     """Close exact authoritative contracts and verify an authoritative flat readback."""
     side = pos.get("side", "long")
@@ -1509,6 +1577,7 @@ def close_live_position(ex, symbol, pos, price):
     if exchange_qty == 0:
         if _cancel_all_protective_orders(ex, symbol, pos) is False:
             return _close_failure(f"protective cleanup is unconfirmed for {symbol}", by_exchange=True)
+        _release_position_risk(symbol, pos)
         return {"price": None, "qty": 0.0, "contract_size": pos.get("contract_size"), "by_exchange": True, "accounting_verified": False, "recovery_required": False, "error": None}
     try:
         res = place_order(ex, symbol, "close_long" if side == "long" else "close_short", 0, price, close_qty=exchange_qty)
@@ -1516,6 +1585,7 @@ def close_live_position(ex, symbol, pos, price):
         remaining = _exchange_position_qty(ex, symbol, side=side, position_idx=pos.get("position_idx"))
         if remaining == 0:
             log(f"{symbol}: المنصة قفلت الصفقة بالفعل (وقف/هدف) — {e}")
+            _release_position_risk(symbol, pos)
             return {"price": None, "qty": 0.0, "contract_size": pos.get("contract_size"), "by_exchange": True, "accounting_verified": False, "recovery_required": False, "error": None}
         return _close_failure(e)
     if float(res.get("qty", 0) or 0) <= 0 or float(res.get("qty", 0)) + 1e-9 < float(exchange_qty):
@@ -1532,6 +1602,7 @@ def close_live_position(ex, symbol, pos, price):
         _refresh_funding_evidence(ex, symbol, pos)
     except Exception as e:
         return _close_failure(e)
+    _release_position_risk(symbol, pos)
     return {"price": res["price"], "qty": res["qty"], "contract_size": res.get("contract_size", pos.get("contract_size")), "by_exchange": False, "accounting_verified": True, "recovery_required": False, "error": None}
 
 def _require_verified_close(result):
@@ -1684,6 +1755,20 @@ def reconcile_live(state, ex):
     Flat there = its stop filled (or someone closed it): record it and clean up. Unknown positions or a size
     mismatch block new entries and alert once — the account must be used by the bot alone (a sub-account)."""
     _ENTRY_BLOCK["reason"] = ""
+    equity = _fetch_equity_usdt(ex)
+    if equity is None:
+        _ENTRY_BLOCK["reason"] = "account equity unavailable — blocking new entries until the risk gate can size risk"
+        log(f"⚠️ {_ENTRY_BLOCK['reason']}")
+    else:
+        try:
+            tripped, kill_reason = riskmgr.update_equity_and_check_kill_switch(RISK_PATH, equity)
+            if tripped:
+                _ENTRY_BLOCK["reason"] = f"Central Risk Manager kill switch is tripped — {kill_reason}"
+                log(f"🛑 {_ENTRY_BLOCK['reason']}")
+        except Exception as e:
+            # Ledger unavailable: fail closed — block new entries rather than trade blind on risk state.
+            _ENTRY_BLOCK["reason"] = f"risk ledger unavailable — blocking new entries: {e}"
+            log(f"⚠️ {_ENTRY_BLOCK['reason']}")
     try:
         live = {}
         positions = ex.fetch_positions()
@@ -1785,6 +1870,7 @@ def reconcile_live(state, ex):
                 "type": "live", "opened": pos.get("time"), "rank": pos.get("rank")})
             state["stats"]["trades"] += 1; state["stats"]["pnl"] += float(pnl); state["stats"]["wins" if pnl > 0 else "losses"] += 1
             # Protective cleanup was verified before accounting was committed above.
+            _release_position_risk(sym, pos)
             state["positions"].pop(sym, None); state["last_trade"][sym] = datetime.now(timezone.utc).isoformat()
             state.get("recovery_required", {}).pop(sym, None)
         elif abs(q - float(pos["qty"])) > 0.02 * float(pos["qty"]):
@@ -2059,6 +2145,15 @@ def _enter_trend_live(symbol, analysis, state, ex, margin, lev, price):
         log(f"⏸️ {symbol} فحص الرصيد فشل — مفيش دخول: {e}"); return
     if free < margin * 1.02:
         log(f"⏸️ {symbol} رصيد {free:.2f}$ مش كفاية لهامش {margin:.2f}$"); return
+    equity = _fetch_equity_usdt(ex) or free
+    sl_estimate = price * (1 - stt.STOP_SHARE / lev)
+    risk_usdt = _estimate_trade_risk_usdt(margin, lev, price, sl_estimate)
+    allowed, reason = riskmgr.pre_trade_gate(
+        RISK_PATH, strategy="trend_daily", symbol=symbol, side="long",
+        risk_usdt=risk_usdt, notional_usdt=margin * lev, equity_usdt=equity,
+        correlation_group=_correlation_group(symbol))
+    if not allowed:
+        log(f"⛔ {symbol} رفض بوابة المخاطر المركزية — {reason}"); return
     cid = f"raqm-{uuid.uuid4().hex[:12]}"
     state.setdefault("pending_orders", {})[symbol] = cid; save_state(state)   # survives a crash between order and record
     try:
@@ -2080,7 +2175,7 @@ def _enter_trend_live(symbol, analysis, state, ex, margin, lev, price):
     sl = res["price"] * (1 - stt.STOP_SHARE / lev)
     pos = {"side":"long","entry":res["price"],"qty":res["qty"],"cost":res["cost"],"notional":res.get("notional"),"contract_size":res.get("contract_size", 1.0),"contract_size_verified":res.get("contract_size_verified", False),"entry_fee_rate":res.get("entry_fee_rate"),"entry_fee_cost":res.get("entry_fee_cost"),"leverage":res.get("leverage",lev),
            "time":datetime.now(timezone.utc).isoformat(),"sl":sl,"tp":None,"breakeven":False,"trend":True,"rank":analysis.get("rank"),
-           "clientOrderId": cid, "oco_ids": {"pos_id": cid}}
+           "clientOrderId": cid, "oco_ids": {"pos_id": cid}, "strategy": "trend_daily"}
     try:
         oco = place_oco_orders(ex, symbol, "long", res["qty"], sl, None, paper=False, pos_id=cid)
     except Exception as e:
@@ -2110,6 +2205,12 @@ def _enter_trend_live(symbol, analysis, state, ex, margin, lev, price):
         state.setdefault("recovery_required", {})[symbol] = {"reason": oco.get("verify_warn"), "at": datetime.now(timezone.utc).isoformat()}
         notify(f"🚨 {symbol}: الوقف اتقبل بس مش لاقيه على المنصة — راجعه. البوت وقف أي دخول جديد.")
     state["positions"][symbol] = pos
+    try:
+        riskmgr.register_open_risk(RISK_PATH, strategy="trend_daily", symbol=symbol, side="long",
+            risk_usdt=_estimate_trade_risk_usdt(margin, lev, res["price"], sl) or 0,
+            notional_usdt=margin * lev, correlation_group=_correlation_group(symbol))
+    except Exception as e:
+        log(f"risk ledger register failed {symbol}: {e}")
     state["last_trade"][symbol]=datetime.now(timezone.utc).isoformat(); save_state(state)
     log(f"✅ 🟢 لونج {_live_label()} {symbol} ترند يومي x{lev} @ {res['price']:.6g} qty {res['qty']} وقف على المنصة {sl:.6g}")
     notify(f"🟢 لونج {symbol} — ترند يومي x{lev} ({_live_label()})\nدخول {res['price']:.6g} · هامش {margin:.2f}$\nوقف على المنصة {sl:.6g} · الخروج لما الترند يقف")
@@ -2242,6 +2343,14 @@ def try_enter(symbol, analysis, state, ex):
                 if usdt < amount: log(f"رصيد غير كافي {usdt:.2f} < {amount:.2f}"); return
             except Exception as e:
                 log(f"فحص الرصيد فشل — مفيش دخول: {e}"); return
+            equity = _fetch_equity_usdt(ex) or usdt
+            risk_usdt = _estimate_trade_risk_usdt(amount, CONFIG.get("leverage", 5), price, risk_sl)
+            allowed, reason = riskmgr.pre_trade_gate(
+                RISK_PATH, strategy=_current_strategy_name(), symbol=symbol, side=side,
+                risk_usdt=risk_usdt, notional_usdt=amount * CONFIG.get("leverage", 5), equity_usdt=equity,
+                correlation_group=_correlation_group(symbol))
+            if not allowed:
+                log(f"⛔ {symbol} رفض بوابة المخاطر المركزية — {reason}"); return
         try:
             order_side="long" if side=="long" else "short"
             _f_df2 = _f_df if '_f_df' in locals() else fetch_ohlcv(symbol, CONFIG["timeframe"], limit=60, ex=ex)
@@ -2304,6 +2413,7 @@ def try_enter(symbol, analysis, state, ex):
                                 cleanup_ok = False
                         if not cleanup_ok:
                             pos["unprotected"] = True
+                            pos["strategy"] = _current_strategy_name()
                             state["positions"][symbol] = pos
                             state.setdefault("recovery_required", {})[symbol] = {"cid": cid, "reason": "emergency flatten succeeded but protective cancellation is unconfirmed", "at": datetime.now(timezone.utc).isoformat()}
                             _ENTRY_BLOCK["reason"] = "protective cancellation requires recovery"
@@ -2337,9 +2447,17 @@ def try_enter(symbol, analysis, state, ex):
                     # still open on the exchange without a stop: the bot keeps managing it (its own SL/TP check)
                     # and no new entry anywhere until someone resolves it
                     pos["unprotected"] = True
+                    pos["strategy"] = _current_strategy_name()
                     state["positions"][symbol] = pos
                     state.setdefault("recovery_required", {})[symbol] = {"cid": cid, "reason": "unprotected: " + reason, "qty": flatten_qty, "price": flatten_price, "at": datetime.now(timezone.utc).isoformat()}
                     state.get("pending_orders", {}).pop(symbol, None)
+                    try:
+                        riskmgr.register_open_risk(RISK_PATH, strategy=pos["strategy"], symbol=symbol, side=side,
+                            risk_usdt=_estimate_trade_risk_usdt(amount, pos.get("leverage", CONFIG.get("leverage", 5)), flatten_price, None) or 0,
+                            notional_usdt=amount * pos.get("leverage", CONFIG.get("leverage", 5)),
+                            correlation_group=_correlation_group(symbol))
+                    except Exception as e:
+                        log(f"risk ledger register failed {symbol}: {e}")
                     try: save_state(state)
                     except: pass
                     log(f"🚨 {symbol} RECOVERY_REQUIRED — صفقة مفتوحة من غير وقف، الدخول متوقف لحد ما تتراجع")
@@ -2355,6 +2473,15 @@ def try_enter(symbol, analysis, state, ex):
                     log(f"🚨 {symbol}: {oco.get('verify_warn')} — الدخول متوقف لحد ما تتراجع")
                     notify(f"🚨 {symbol}: أوامر الحماية اتقبلت بس مش لاقيها على المنصة ({oco.get('verify_warn')}). راجعها يدويا — البوت وقف أي دخول جديد.")
             state["positions"][symbol]=pos
+            if not CONFIG["paper_trading"]:
+                pos["strategy"] = _current_strategy_name()
+                try:
+                    riskmgr.register_open_risk(RISK_PATH, strategy=pos["strategy"], symbol=symbol, side=side,
+                        risk_usdt=_estimate_trade_risk_usdt(amount, pos.get("leverage", CONFIG.get("leverage", 5)), res["price"], sl) or 0,
+                        notional_usdt=amount * pos.get("leverage", CONFIG.get("leverage", 5)),
+                        correlation_group=_correlation_group(symbol))
+                except Exception as e:
+                    log(f"risk ledger register failed {symbol}: {e}")
             try:
                 if pos.get("oco_ids"):
                     state.setdefault("_last_oco", {})[symbol] = dict(pos["oco_ids"])

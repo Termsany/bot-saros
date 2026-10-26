@@ -8,6 +8,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "backend"))
 import bot as botmod
 from backend.app import oco as oco_mod
+from backend.app import risk_manager as riskmgr_mod
 
 
 class FakeBinance:
@@ -62,15 +63,23 @@ class TrendLiveTests(unittest.TestCase):
     def setUp(self):
         self._cfg = dict(botmod.CONFIG)
         self.td = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)   # Windows can still hold a file open
-        self._paths = (botmod.STATE_PATH, botmod.LOG_PATH)
+        self._paths = (botmod.STATE_PATH, botmod.LOG_PATH, botmod.RISK_PATH)
         botmod.STATE_PATH = Path(self.td.name) / "state.json"; botmod.LOG_PATH = Path(self.td.name) / "t.log"
+        botmod.RISK_PATH = Path(self.td.name) / "risk_state.json"
+        # These tests exercise OCO/stop placement and close mechanics, not risk sizing — seed a
+        # permissive risk ledger so the Central Risk Manager gate doesn't reject the fixture's
+        # (deliberately simple, not risk-tuned) position sizes.
+        riskmgr_mod.save_risk_state(botmod.RISK_PATH, riskmgr_mod._default_state({
+            "risk_per_trade_pct": 100.0, "max_aggregate_risk_pct": 100.0,
+            "max_correlated_risk_pct": 100.0, "max_daily_loss_pct": 100.0, "max_drawdown_pct": 100.0,
+        }))
         botmod.CONFIG.update({"paper_trading": False, "market": "future", "leverage": 5, "trade_amount_usdt": 100,
                               "enabled_strategies": ["trend_daily"], "max_open_positions": 10, "use_percent_risk": False})
         botmod._ENTRY_BLOCK["reason"] = ""
         self.state = botmod.load_state()
     def tearDown(self):
         botmod.CONFIG.clear(); botmod.CONFIG.update(self._cfg)
-        botmod.STATE_PATH, botmod.LOG_PATH = self._paths
+        botmod.STATE_PATH, botmod.LOG_PATH, botmod.RISK_PATH = self._paths
         self.td.cleanup()
 
     def test_entry_buys_then_puts_the_stop_on_the_exchange(self):
@@ -146,6 +155,48 @@ class TrendLiveTests(unittest.TestCase):
         botmod.try_enter("SOL/USDT:USDT", SIG_ON, self.state, ex)
         self.assertEqual(ex.orders, [])
         self.assertIn("DOGE", botmod._ENTRY_BLOCK["reason"])
+
+    def test_risk_gate_blocks_an_oversized_live_entry(self):
+        riskmgr_mod.save_risk_state(botmod.RISK_PATH, riskmgr_mod._default_state({
+            "risk_per_trade_pct": 0.01, "max_aggregate_risk_pct": 100.0,
+            "max_correlated_risk_pct": 100.0, "max_daily_loss_pct": 100.0, "max_drawdown_pct": 100.0,
+        }))
+        ex = FakeBinance()
+        botmod.try_enter("SOL/USDT:USDT", SIG_ON, self.state, ex)
+        self.assertEqual(ex.orders, [])
+        self.assertNotIn("SOL/USDT:USDT", self.state["positions"])
+
+    def test_successful_live_entry_registers_open_risk_ledger(self):
+        ex = FakeBinance()
+        botmod.try_enter("SOL/USDT:USDT", SIG_ON, self.state, ex)
+        self.assertIn("SOL/USDT:USDT", self.state["positions"])
+        ledger = riskmgr_mod.load_risk_state(botmod.RISK_PATH)
+        self.assertIn("trend_daily:SOL/USDT:USDT", ledger["open_risk"])
+        row = ledger["open_risk"]["trend_daily:SOL/USDT:USDT"]
+        self.assertEqual(row["side"], "long"); self.assertGreater(row["risk_usdt"], 0)
+
+    def test_closing_a_live_position_releases_the_risk_ledger(self):
+        ex = FakeBinance()
+        botmod.try_enter("SOL/USDT:USDT", SIG_ON, self.state, ex)
+        self.assertIn("trend_daily:SOL/USDT:USDT", riskmgr_mod.load_risk_state(botmod.RISK_PATH)["open_risk"])
+        ex.positions["SOL/USDT"] = 0.0
+        botmod.reconcile_live(self.state, ex); botmod.reconcile_live(self.state, ex)
+        self.assertNotIn("SOL/USDT:USDT", self.state["positions"])
+        self.assertNotIn("trend_daily:SOL/USDT:USDT", riskmgr_mod.load_risk_state(botmod.RISK_PATH)["open_risk"])
+
+    def test_tripped_kill_switch_blocks_new_entries_via_reconcile(self):
+        ex = FakeBinance(); ex.positions["BTC/USDT"] = 0.0   # keep fetch_positions() non-empty, contributes nothing to `live`
+        riskmgr_mod.trip_kill_switch(botmod.RISK_PATH, "pre-tripped for this test")
+        botmod.reconcile_live(self.state, ex)
+        self.assertIn("kill switch", botmod._ENTRY_BLOCK["reason"])
+        botmod.try_enter("SOL/USDT:USDT", SIG_ON, self.state, ex)
+        self.assertEqual(ex.orders, [])
+
+    def test_missing_equity_blocks_new_entries_via_reconcile(self):
+        ex = FakeBinance(); ex.positions["BTC/USDT"] = 0.0   # keep fetch_positions() non-empty, contributes nothing to `live`
+        ex.fetch_balance = lambda: (_ for _ in ()).throw(Exception("network down"))
+        botmod.reconcile_live(self.state, ex)
+        self.assertIn("equity", botmod._ENTRY_BLOCK["reason"])
 
 
 class StartupGateTests(unittest.TestCase):
