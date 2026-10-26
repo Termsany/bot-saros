@@ -48,7 +48,7 @@ class _AmendExchange:
     def fetch_open_orders(self, symbol, *a):
         if self._readback_incomplete:
             raise Exception("exchange timeout")
-        return list(self.open_orders)
+        return [dict(o, status="open") for o in self.open_orders]
 
     def cancel_order(self, oid, symbol):
         self.cancel_calls.append(oid)
@@ -271,12 +271,14 @@ class ReplacementStopDualTrackingTests(unittest.TestCase):
         state = {"positions": {"BTC/USDT": pos}, "recovery_required": {}}
         ok = botmod._amend_exchange_sl("BTC/USDT", pos, 50500.0, 51000.0, ex, state)
         self.assertFalse(ok)
-        self.assertEqual(pos["oco_ids"]["sl"], old_sl_id)
-        self.assertIn("sl_pending_cleanup", pos["oco_ids"])
+        self.assertNotEqual(pos["oco_ids"]["sl"], old_sl_id)
+        self.assertIn("sl_pending_cancel", pos["oco_ids"])
+        self.assertEqual(pos["oco_ids"]["sl_pending_cancel"]["id"], old_sl_id)
         self.assertIn("BTC/USDT", state["recovery_required"])
 
     def test_cleanup_ambiguity_retains_unverified_replacement_id(self):
         ex, pos, old_sl_id = self._pos("long")
+        ex._readback_incomplete = True
         ex.fetch_order = lambda oid, symbol: (_ for _ in ()).throw(RuntimeError("readback unavailable"))
         ex._cancel_removes = False
         state = {"positions": {"BTC/USDT": pos}, "recovery_required": {}}
@@ -298,6 +300,31 @@ class ReplacementStopDualTrackingTests(unittest.TestCase):
         self.assertEqual(pos["oco_ids"]["sl_pending_cancel"]["id"], old_sl_id)
         self.assertTrue(pos["sl_unverified"])
         self.assertIn("SL replacement", botmod._ENTRY_BLOCK["reason"])
+    def test_active_status_is_required_and_terminal_statuses_fail_closed(self):
+        base = {"id": "replacement-1", "side": "sell", "reduceOnly": True,
+                "amount": 1.0, "stopLossPrice": 49500.0}
+        for status in ("open", "new", "active", "pending"):
+            ex = _AmendExchange()
+            ex.fetch_order = lambda oid, symbol, status=status: dict(base, status=status)
+            ok, reason = botmod._verify_protective_stop(ex, "BTC/USDT", base, 49500.0, "sell", 1.0)
+            self.assertTrue(ok, (status, reason))
+        for status in ("canceled", "closed", "expired", "rejected", "unknown", None):
+            ex = _AmendExchange(readback_incomplete=True)
+            ex.fetch_order = lambda oid, symbol, status=status: (dict(base, status=status) if status is not None else dict(base))
+            ok, reason = botmod._verify_protective_stop(ex, "BTC/USDT", base, 49500.0, "sell", 1.0)
+            self.assertFalse(ok, (status, reason))
+
+    def test_missing_fetch_status_can_only_pass_with_active_endpoint(self):
+        base = {"id": "replacement-2", "clientOrderId": "cid-2", "side": "sell",
+                "reduceOnly": True, "amount": 1.0, "stopLossPrice": 49500.0}
+        ex = _AmendExchange()
+        ex.open_orders.append(dict(base, status="open"))
+        ex.fetch_order = lambda oid, symbol: dict(base)
+        ok, reason = botmod._verify_protective_stop(ex, "BTC/USDT", base, 49500.0, "sell", 1.0)
+        self.assertTrue(ok, reason)
+        ex._readback_incomplete = True
+        ok, reason = botmod._verify_protective_stop(ex, "BTC/USDT", base, 49500.0, "sell", 1.0)
+        self.assertFalse(ok, reason)
 
 
 if __name__ == "__main__":

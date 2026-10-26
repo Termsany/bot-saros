@@ -1105,18 +1105,73 @@ def _amend_exchange_sl(symbol, pos, new_sl, old_sl, ex, state=None):
     return False
 
 
+def _active_protective_readback(ex, symbol, oid, cid):
+    """Find an authoritative active representation in unified or provider-specific open-order views."""
+    views = []
+    fetch_open = getattr(ex, "fetch_open_orders", None)
+    if callable(fetch_open):
+        views.extend([("plain", lambda: fetch_open(symbol)),
+                      ("trigger", lambda: fetch_open(symbol, None, None, {"trigger": True})),
+                      ("stop", lambda: fetch_open(symbol, None, None, {"stop": True}))])
+    for name in ("fetch_open_algo_orders", "fetch_open_conditional_orders", "fetch_open_trigger_orders"):
+        fn = getattr(ex, name, None)
+        if callable(fn):
+            views.append((name, lambda fn=fn: fn(symbol)))
+    saw_inconclusive = False
+    for view, fetch in views:
+        try:
+            rows = fetch()
+        except Exception:
+            saw_inconclusive = True
+            continue
+        if not isinstance(rows, list):
+            saw_inconclusive = True
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            info = row.get("info") or {}
+            row_id = row.get("id") or info.get("orderId") or info.get("orderID")
+            row_cid = row.get("clientOrderId") or row.get("orderLinkId") or info.get("clientOrderId") or info.get("orderLinkId")
+            if row_id == oid or (cid and row_cid == cid):
+                return row, None
+    return None, "active protective-order readback was inconclusive" if saw_inconclusive else "replacement is not present in any active protective-order view"
+
+
 def _verify_protective_stop(ex, symbol, order_obj, expected_trigger, close_side, expected_qty):
     """Require authoritative exchange readback of every protective field; create-order data alone is
     never sufficient. Binance hedge mode additionally requires the correct positionSide."""
     if not isinstance(order_obj, dict) or not order_obj.get("id"):
         return False, "replacement stop has no authoritative exchange id"
     oid = order_obj["id"]
+    cid = order_obj.get("clientOrderId") or order_obj.get("orderLinkId")
+    candidate = None
+    fetch_error = None
     try:
-        candidate = ex.fetch_order(oid, symbol)
+        fetched = ex.fetch_order(oid, symbol)
+        if isinstance(fetched, dict) and fetched.get("id") == oid:
+            candidate = fetched
+        else:
+            fetch_error = "authoritative replacement readback is missing or mismatched"
     except Exception as exc:
-        return False, f"authoritative replacement readback failed: {exc}"
-    if not isinstance(candidate, dict) or candidate.get("id") != oid:
-        return False, "authoritative replacement readback is missing or mismatched"
+        fetch_error = f"authoritative replacement readback failed: {exc}"
+    status = None if candidate is None else (candidate.get("status") or (candidate.get("info") or {}).get("status"))
+    active_statuses = {"open", "new", "active", "pending", "untriggered", "trigger_pending"}
+    terminal_statuses = {"canceled", "cancelled", "closed", "expired", "rejected", "rejected_by_exchange", "failed"}
+    if candidate is None or status is None or str(status).lower() not in active_statuses:
+        active, active_error = _active_protective_readback(ex, symbol, oid, cid)
+        if active is None:
+            if status is not None and str(status).lower() in terminal_statuses:
+                return False, f"replacement stop is not active (status={status})"
+            return False, active_error or fetch_error or f"replacement stop status is not active (status={status})"
+        candidate = active
+        status = candidate.get("status") or (candidate.get("info") or {}).get("status")
+        if status is not None and str(status).lower() not in active_statuses:
+            return False, f"active-order endpoint returned non-active status={status}"
+    if status is None:
+        return False, "replacement stop has no authoritative active status"
+    if str(status).lower() in terminal_statuses or str(status).lower() not in active_statuses:
+        return False, f"replacement stop is not active (status={status})"
     info = candidate.get("info") or {}
     trigger = candidate.get("stopLossPrice") or candidate.get("triggerPrice") or info.get("stopLossPrice") or info.get("triggerPrice")
     if trigger is None:
