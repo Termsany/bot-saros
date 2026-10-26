@@ -38,4 +38,5 @@ trades.log
 !.env.example
 state*.json
 risk_state*.json
+risk_state*.sqlite3
 *.log

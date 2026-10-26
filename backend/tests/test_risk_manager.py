@@ -6,6 +6,8 @@ rejection, missing-equity fail-closed, daily-loss and drawdown kill-switch tripp
 manual-only reset, and persistence across process restarts (a fresh load from disk)."""
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from backend.app import risk_manager as rm
@@ -148,6 +150,42 @@ class RiskManagerTests(unittest.TestCase):
         allowed, reason = rm.pre_trade_gate(self.path, strategy="trend_daily", symbol="BTC/USDT",
             side="long", risk_usdt=0.1, notional_usdt=10, equity_usdt=1000)
         self.assertFalse(allowed); self.assertIn("unavailable", reason)
+
+    def test_concurrent_reservations_cannot_exceed_aggregate_limit(self):
+        def attempt(i):
+            return rm.pre_trade_gate(self.path, strategy=f"s{i}", symbol=f"COIN{i}/USDT",
+                side="long", risk_usdt=2.0, notional_usdt=100, equity_usdt=1000, correlation_group=f"g{i}")
+        with ThreadPoolExecutor(max_workers=12) as pool:
+            results = list(pool.map(attempt, range(12)))
+        allowed = [ok for ok, _ in results]
+        self.assertEqual(sum(allowed), 5)  # 5 x 0.2% <= 1%; sixth must fail
+        state = rm.load_risk_state(self.path)
+        self.assertEqual(len(state["open_risk"]), 5)
+        self.assertLessEqual(rm.aggregate_open_risk_pct(state, 1000), 1.0)
+
+    def test_failed_order_rolls_back_reservation(self):
+        ok, reason = rm.pre_trade_gate(self.path, strategy="s1", symbol="BTC/USDT", side="long",
+            risk_usdt=2, notional_usdt=100, equity_usdt=1000)
+        self.assertTrue(ok, reason)
+        self.assertEqual(rm.load_risk_state(self.path)["open_risk"]["s1:BTC/USDT"]["status"], "reserved")
+        rm.rollback_reservation(self.path, strategy="s1", symbol="BTC/USDT")
+        self.assertNotIn("s1:BTC/USDT", rm.load_risk_state(self.path)["open_risk"])
+
+    def test_ambiguous_order_reservation_is_persisted_for_recovery(self):
+        ok, reason = rm.pre_trade_gate(self.path, strategy="s1", symbol="BTC/USDT", side="long",
+            risk_usdt=2, notional_usdt=100, equity_usdt=1000)
+        self.assertTrue(ok, reason)
+        rm.mark_reservation_recovery(self.path, strategy="s1", symbol="BTC/USDT", reason="timeout")
+        row = rm.load_risk_state(self.path)["open_risk"]["s1:BTC/USDT"]
+        self.assertEqual(row["status"], "recovery")
+
+    def test_invalid_or_stale_equity_engages_kill_switch(self):
+        tripped, reason = rm.update_equity_and_check_kill_switch(self.path, float("nan"))
+        self.assertTrue(tripped); self.assertIn("unavailable", reason)
+        rm.reset_kill_switch(self.path, operator="test")
+        old = (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat()
+        tripped, reason = rm.update_equity_and_check_kill_switch(self.path, 1000, equity_observed_at=old, max_equity_age_s=30)
+        self.assertTrue(tripped); self.assertIn("stale", reason)
 
 
 if __name__ == "__main__":

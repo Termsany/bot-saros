@@ -2145,7 +2145,9 @@ def _enter_trend_live(symbol, analysis, state, ex, margin, lev, price):
         log(f"⏸️ {symbol} فحص الرصيد فشل — مفيش دخول: {e}"); return
     if free < margin * 1.02:
         log(f"⏸️ {symbol} رصيد {free:.2f}$ مش كفاية لهامش {margin:.2f}$"); return
-    equity = _fetch_equity_usdt(ex) or free
+    equity = _fetch_equity_usdt(ex)
+    if equity is None:
+        log(f"⏸️ {symbol} equity unavailable — no entry"); return
     sl_estimate = price * (1 - stt.STOP_SHARE / lev)
     risk_usdt = _estimate_trade_risk_usdt(margin, lev, price, sl_estimate)
     allowed, reason = riskmgr.pre_trade_gate(
@@ -2161,13 +2163,16 @@ def _enter_trend_live(symbol, analysis, state, ex, margin, lev, price):
     except Exception as e:
         q = _exchange_position_qty(ex, symbol)
         if q is None:
+            riskmgr.mark_reservation_recovery(RISK_PATH, strategy="trend_daily", symbol=symbol, reason="entry outcome unknown")
             state.setdefault("recovery_required", {})[symbol] = {"cid": cid, "reason": f"entry error, position unknown: {e}", "at": datetime.now(timezone.utc).isoformat()}
             save_state(state)
             notify(f"🚨 {symbol}: أمر الدخول رجّع خطأ ومقدرناش نعرف اتنفذ ولا لأ — راجع المنصة. البوت وقف أي دخول جديد."); return
         if q == 0:
+            riskmgr.rollback_reservation(RISK_PATH, strategy="trend_daily", symbol=symbol)
             state["pending_orders"].pop(symbol, None); save_state(state)
             log(f"فشل دخول {symbol}: {e}"); return
         state.setdefault("recovery_required", {})[symbol] = {"cid": cid, "reason": f"entry error with an open position but no authoritative entry fill: {e}", "qty": q, "at": datetime.now(timezone.utc).isoformat()}
+        riskmgr.mark_reservation_recovery(RISK_PATH, strategy="trend_daily", symbol=symbol, reason="open position without authoritative fill")
         _ENTRY_BLOCK["reason"] = "live entry fill evidence unavailable"
         save_state(state)
         notify(f"🚨 {symbol}: الصفقة ظهرت على المنصة لكن مفيش fill موثوق — دخلت recovery وممنوع حماية أو تداول جديد")
@@ -2195,6 +2200,7 @@ def _enter_trend_live(symbol, analysis, state, ex, margin, lev, price):
                 "reason":"الوقف اترفض — قفل فوري","time":datetime.now(timezone.utc).isoformat(),"type":"live","opened":pos["time"],"rank":pos.get("rank")})
             state["stats"]["trades"]+=1; state["stats"]["pnl"]+=float(pnl); state["stats"]["wins" if pnl>0 else "losses"]+=1
             state["last_trade"][symbol]=datetime.now(timezone.utc).isoformat(); save_state(state)
+            riskmgr.release_open_risk(RISK_PATH, strategy="trend_daily", symbol=symbol)
             log(f"🔒 {symbol}: اتقفلت فورا لأن الوقف اترفض"); return
         except Exception as e:
             pos["unprotected"] = True
@@ -2343,7 +2349,9 @@ def try_enter(symbol, analysis, state, ex):
                 if usdt < amount: log(f"رصيد غير كافي {usdt:.2f} < {amount:.2f}"); return
             except Exception as e:
                 log(f"فحص الرصيد فشل — مفيش دخول: {e}"); return
-            equity = _fetch_equity_usdt(ex) or usdt
+            equity = _fetch_equity_usdt(ex)
+            if equity is None:
+                log(f"⏸️ {symbol} equity unavailable — no entry"); return
             risk_usdt = _estimate_trade_risk_usdt(amount, CONFIG.get("leverage", 5), price, risk_sl)
             allowed, reason = riskmgr.pre_trade_gate(
                 RISK_PATH, strategy=_current_strategy_name(), symbol=symbol, side=side,
@@ -2493,7 +2501,16 @@ def try_enter(symbol, analysis, state, ex):
             lev_txt=f" x{res.get('leverage',CONFIG.get('leverage',5))}" if CONFIG.get("market")=="future" else ""
             emoji="🟢 لونج" if side=="long" else "🔴 شورت"
             log(f"✅ {emoji} {mode} {symbol}{lev_txt} @ {res['price']:.6f} qty {res['qty']} SL {sl:.4f} TP {tp:.4f} سكور {total:+.3f} {analysis['decision']}")
-        except Exception as e: log(f"فشل {side} {symbol}: {e}")
+        except Exception as e:
+            if not CONFIG.get("paper_trading"):
+                try:
+                    if "pos" in locals() and pos.get("qty"):
+                        riskmgr.mark_reservation_recovery(RISK_PATH, strategy=pos.get("strategy") or _current_strategy_name(), symbol=symbol, reason=f"entry workflow ambiguous: {e}")
+                    else:
+                        riskmgr.rollback_reservation(RISK_PATH, strategy=_current_strategy_name(), symbol=symbol)
+                except Exception as risk_exc:
+                    log(f"risk reservation recovery failed {symbol}: {risk_exc}")
+            log(f"فشل {side} {symbol}: {e}")
 
 
 # ── Williams volatility breakout + Connors RSI-2: two paper bots on Binance's public market (research/traders_study.py,

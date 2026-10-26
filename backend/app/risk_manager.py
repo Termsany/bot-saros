@@ -1,114 +1,31 @@
-"""Central Risk Manager (shared across every Bot Saros strategy/process).
+"""Transactional Central Risk Manager shared by every strategy process.
 
-Single source of truth for pre-trade risk checks and the kill switch. Every live
-strategy process (bot.py --strategy X --live) reads/writes the same JSON ledger
-file so risk is evaluated across ALL strategies together, not per-process.
-
-Concurrency note: this uses a best-effort file lock (atomic rename + short retry),
-not a true distributed lock. It is adequate for a handful of poll-interval-driven
-processes (seconds between cycles), not for high-frequency concurrent writers. If
-more than a few live strategy processes run simultaneously with sub-second write
-collisions, upgrade to a real lock (e.g. a tiny SQLite ledger with transactions)
-before trusting this for capital protection.
-
-Public API:
-    load_risk_state(path) -> dict
-    save_risk_state(path, state)
-    pre_trade_gate(path, *, strategy, symbol, side, risk_usdt, notional_usdt,
-                   equity_usdt, correlation_group=None) -> (allowed: bool, reason: str|None)
-    register_open_risk(path, *, strategy, symbol, side, risk_usdt, notional_usdt,
-                        correlation_group=None) -> None
-    release_open_risk(path, *, strategy, symbol) -> None
-    update_equity_and_check_kill_switch(path, equity_usdt) -> (tripped: bool, reason: str|None)
-    trip_kill_switch(path, reason) -> None
-    reset_kill_switch(path, *, operator) -> None
+SQLite is authoritative.  Pre-trade checks and reservations happen inside one
+BEGIN IMMEDIATE transaction, preventing concurrent strategies from consuming
+the same aggregate risk capacity. Reservations are promoted to open after an
+entry, removed on known failure, and retained as recovery on ambiguity.
 """
-import contextlib
 import json
-import os
-import time
+import math
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
 DEFAULT_LIMITS = {
-    "risk_per_trade_pct": 0.25,       # max % of equity risked (to stop) on a single new trade
-    "max_aggregate_risk_pct": 1.0,    # max % of equity in open-position stop-risk, summed across ALL strategies
-    "max_correlated_risk_pct": 1.0,   # max % of equity in same-direction risk within one correlation group
-    "max_daily_loss_pct": 1.0,        # daily realized+unrealized loss that trips the kill switch for the day
-    "max_drawdown_pct": 5.0,          # drop from the equity high-water-mark that trips the kill switch (manual reset)
+    "risk_per_trade_pct": 0.25,
+    "max_aggregate_risk_pct": 1.0,
+    "max_correlated_risk_pct": 1.0,
+    "max_daily_loss_pct": 1.0,
+    "max_drawdown_pct": 5.0,
     "leverage": 1,
     "margin_mode": "isolated",
 }
-
-_LOCK_SUFFIX = ".lock"
-_LOCK_TIMEOUT_S = 5.0
-_LOCK_RETRY_S = 0.05
+_DB_SUFFIX = ".sqlite3"
 
 
-@contextlib.contextmanager
-def _file_lock(path: Path):
-    """Best-effort cross-process mutex: an exclusive-create lock file, retried with
-    a timeout, removed in a finally. See module docstring for concurrency limits."""
-    lock_path = path.with_suffix(path.suffix + _LOCK_SUFFIX)
-    deadline = time.time() + _LOCK_TIMEOUT_S
-    fd = None
-    while True:
-        try:
-            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_RDWR)
-            break
-        except FileExistsError:
-            if time.time() > deadline:
-                # Stale lock (a crashed process never released it) or genuine contention;
-                # fail closed by raising so the caller treats this as inconclusive, not permissive.
-                raise TimeoutError(f"risk ledger lock timeout: {lock_path}")
-            time.sleep(_LOCK_RETRY_S)
-    try:
-        yield
-    finally:
-        try:
-            if fd is not None:
-                os.close(fd)
-        finally:
-            try:
-                os.remove(lock_path)
-            except OSError:
-                pass
-
-
-def _default_state(limits=None):
-    return {
-        "limits": dict(limits or DEFAULT_LIMITS),
-        "kill_switch": {"tripped": False, "reason": None, "at": None, "by": None},
-        "equity_high_water_mark": None,
-        "daily": {"date": None, "realized_pnl": 0.0, "start_equity": None},
-        "open_risk": {},   # f"{strategy}:{symbol}" -> {strategy, symbol, side, risk_usdt, notional_usdt, correlation_group, at}
-    }
-
-
-def load_risk_state(path) -> dict:
-    path = Path(path)
-    if not path.exists():
-        return _default_state()
-    try:
-        with _file_lock(path):
-            data = json.loads(path.read_text(encoding="utf-8"))
-    except (TimeoutError, json.JSONDecodeError, OSError):
-        # Fail closed to a state that still carries limits but keeps the kill switch
-        # unknown rather than silently permissive; callers must treat read failure as
-        # non-authoritative and avoid trading on it.
-        raise
-    base = _default_state(data.get("limits"))
-    base.update({k: v for k, v in data.items() if k != "limits"})
-    base["limits"] = {**DEFAULT_LIMITS, **(data.get("limits") or {})}
-    return base
-
-
-def save_risk_state(path, state: dict) -> None:
-    path = Path(path)
-    with _file_lock(path):
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-        tmp.replace(path)
+def _db_path(path):
+    p = Path(path)
+    return p.with_suffix(_DB_SUFFIX) if p.suffix else Path(str(p) + _DB_SUFFIX)
 
 
 def _now():
@@ -119,158 +36,332 @@ def _today():
     return datetime.now(timezone.utc).date().isoformat()
 
 
-def _open_risk_rows(state):
+def _default_state(limits=None):
+    return {
+        "limits": {**DEFAULT_LIMITS, **(limits or {})},
+        "kill_switch": {"tripped": False, "reason": None, "at": None, "by": None},
+        "equity_high_water_mark": None,
+        "equity_observed_at": None,
+        "daily": {"date": None, "realized_pnl": 0.0, "start_equity": None},
+        "open_risk": {},
+    }
+
+
+def _connect(path):
+    db = _db_path(path)
+    db.parent.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(str(db), timeout=5.0, isolation_level=None)
+    con.row_factory = sqlite3.Row
+    con.execute("PRAGMA busy_timeout=5000")
+    try:
+        con.execute("PRAGMA journal_mode=WAL")
+    except sqlite3.OperationalError as exc:
+        if "locked" not in str(exc).lower():
+            raise
+
+    con.execute("CREATE TABLE IF NOT EXISTS risk_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    con.execute("""CREATE TABLE IF NOT EXISTS open_risk (
+        key TEXT PRIMARY KEY, strategy TEXT NOT NULL, symbol TEXT NOT NULL,
+        side TEXT NOT NULL, risk_usdt REAL NOT NULL, notional_usdt REAL NOT NULL,
+        correlation_group TEXT, status TEXT NOT NULL, at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )""")
+    return con
+
+
+def _legacy_json(path):
+    p = Path(path)
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        raise
+
+
+def _ensure_legacy_migrated(con, path):
+    if con.execute("SELECT 1 FROM risk_meta WHERE key='limits'").fetchone():
+        return
+    legacy = _legacy_json(path)
+    state = _default_state()
+    if legacy is not None:
+        if not isinstance(legacy, dict):
+            raise ValueError("risk ledger JSON is not an object")
+        state.update({k: v for k, v in legacy.items() if k != "limits"})
+        state["limits"] = {**DEFAULT_LIMITS, **(legacy.get("limits") or {})}
+    _write_state_tx(con, state)
+
+
+def _write_state_tx(con, state):
+    for key in ("limits", "kill_switch", "equity_high_water_mark", "equity_observed_at", "daily"):
+        con.execute("INSERT INTO risk_meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    (key, json.dumps(state.get(key))))
+    con.execute("DELETE FROM open_risk")
+    for key, row in (state.get("open_risk") or {}).items():
+        stamp = row.get("at", _now())
+        con.execute("""INSERT INTO open_risk
+            (key,strategy,symbol,side,risk_usdt,notional_usdt,correlation_group,status,at,updated_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?)""", (key, row.get("strategy"), row.get("symbol"), row.get("side"),
+            float(row.get("risk_usdt", 0) or 0), float(row.get("notional_usdt", 0) or 0),
+            row.get("correlation_group"), row.get("status", "open"), stamp, row.get("updated_at", stamp)))
+
+
+def _read_state_tx(con):
+    state = _default_state()
+    for row in con.execute("SELECT key,value FROM risk_meta"):
+        state[row["key"]] = json.loads(row["value"])
+    state["limits"] = {**DEFAULT_LIMITS, **(state.get("limits") or {})}
+    state["open_risk"] = {}
+    for row in con.execute("SELECT * FROM open_risk"):
+        state["open_risk"][row["key"]] = {k: row[k] for k in
+            ("strategy", "symbol", "side", "risk_usdt", "notional_usdt", "correlation_group", "status", "at", "updated_at")}
+    return state
+
+
+def load_risk_state(path):
+    con = _connect(path)
+    try:
+        con.execute("BEGIN")
+        _ensure_legacy_migrated(con, path)
+        state = _read_state_tx(con)
+        con.execute("COMMIT")
+        return state
+    except Exception:
+        con.execute("ROLLBACK")
+        raise
+    finally:
+        con.close()
+
+
+def save_risk_state(path, state):
+    con = _connect(path)
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        _write_state_tx(con, state)
+        con.execute("COMMIT")
+    except Exception:
+        con.execute("ROLLBACK")
+        raise
+    finally:
+        con.close()
+
+
+def _rows(state):
     return list((state.get("open_risk") or {}).values())
 
 
 def aggregate_open_risk_pct(state, equity_usdt):
     if not equity_usdt or equity_usdt <= 0:
         return None
-    total = sum(float(r.get("risk_usdt", 0) or 0) for r in _open_risk_rows(state))
-    return total / float(equity_usdt) * 100.0
+    return sum(float(r.get("risk_usdt", 0) or 0) for r in _rows(state)) / float(equity_usdt) * 100.0
 
 
 def correlated_risk_pct(state, equity_usdt, correlation_group, side):
-    """Sum open risk sharing BOTH the correlation group and the same directional side
-    (same-side exposure compounds; opposite-side exposure in the same group partially
-    hedges and is intentionally excluded from this figure)."""
     if not equity_usdt or equity_usdt <= 0 or not correlation_group:
         return None
-    total = sum(
-        float(r.get("risk_usdt", 0) or 0)
-        for r in _open_risk_rows(state)
-        if r.get("correlation_group") == correlation_group and r.get("side") == side
-    )
-    return total / float(equity_usdt) * 100.0
+    return sum(float(r.get("risk_usdt", 0) or 0) for r in _rows(state)
+               if r.get("correlation_group") == correlation_group and r.get("side") == side) / float(equity_usdt) * 100.0
 
 
 def _conflicting_position(state, symbol, side):
-    for r in _open_risk_rows(state):
-        if r.get("symbol") == symbol and r.get("side") and r.get("side") != side:
-            return r
-    return None
+    return next((r for r in _rows(state) if r.get("symbol") == symbol and r.get("side") != side), None)
 
 
-def update_equity_and_check_kill_switch(path, equity_usdt):
-    """Update the high-water-mark and daily baseline, then evaluate drawdown and daily-loss
-    limits. Trips the kill switch (persisted) on breach; does not auto-reset on recovery —
-    a human must call reset_kill_switch(). Returns (tripped, reason)."""
-    path = Path(path)
-    state = load_risk_state(path)
-    limits = state["limits"]
-    ks = state["kill_switch"]
-    if ks.get("tripped"):
-        return True, ks.get("reason")
-    if equity_usdt is None or equity_usdt <= 0:
-        return False, None
-    hwm = state.get("equity_high_water_mark")
-    if hwm is None or equity_usdt > hwm:
-        state["equity_high_water_mark"] = equity_usdt
-        hwm = equity_usdt
-    today = _today()
-    daily = state.setdefault("daily", {"date": None, "realized_pnl": 0.0, "start_equity": None})
-    if daily.get("date") != today:
-        daily["date"] = today
-        daily["start_equity"] = equity_usdt
-        daily["realized_pnl"] = 0.0
-    reason = None
-    if hwm and hwm > 0:
-        drawdown_pct = (hwm - equity_usdt) / hwm * 100.0
-        if drawdown_pct >= float(limits.get("max_drawdown_pct", DEFAULT_LIMITS["max_drawdown_pct"])):
-            reason = f"portfolio drawdown {drawdown_pct:.2f}% >= limit {limits['max_drawdown_pct']}% (HWM {hwm:.2f} -> {equity_usdt:.2f})"
-    if reason is None and daily.get("start_equity"):
-        day_loss_pct = (daily["start_equity"] - equity_usdt) / daily["start_equity"] * 100.0
-        if day_loss_pct >= float(limits.get("max_daily_loss_pct", DEFAULT_LIMITS["max_daily_loss_pct"])):
-            reason = f"daily loss {day_loss_pct:.2f}% >= limit {limits['max_daily_loss_pct']}% (start {daily['start_equity']:.2f} -> {equity_usdt:.2f})"
-    if reason:
-        state["kill_switch"] = {"tripped": True, "reason": reason, "at": _now(), "by": "risk_manager"}
-    save_risk_state(path, state)
-    return (reason is not None), reason
+def _valid_equity(value):
+    try:
+        return value is not None and math.isfinite(float(value)) and float(value) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _equity_fresh(observed_at, max_age_s):
+    if observed_at is None:
+        return True
+    try:
+        stamp = datetime.fromisoformat(observed_at.replace("Z", "+00:00")) if isinstance(observed_at, str) else datetime.fromtimestamp(float(observed_at), tz=timezone.utc)
+        return (datetime.now(timezone.utc) - stamp).total_seconds() <= max_age_s
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
+def pre_trade_gate(path, *, strategy, symbol, side, risk_usdt, notional_usdt,
+                    equity_usdt, correlation_group=None, allow_strategy_conflicts=False,
+                    equity_observed_at=None, max_equity_age_s=30):
+    """Atomically check all limits and reserve the requested risk."""
+    if not _valid_equity(equity_usdt):
+        return False, "equity unavailable or invalid; refusing to reserve risk"
+    if not _equity_fresh(equity_observed_at, max_equity_age_s):
+        return False, "equity stale; refusing to reserve risk"
+    try:
+        risk_usdt = float(risk_usdt)
+        notional_usdt = float(notional_usdt or 0)
+        if not math.isfinite(risk_usdt) or risk_usdt < 0 or not math.isfinite(notional_usdt):
+            raise ValueError
+    except (TypeError, ValueError):
+        return False, "invalid risk amount"
+    con = _connect(path)
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        _ensure_legacy_migrated(con, path)
+        state = _read_state_tx(con)
+        if state["kill_switch"].get("tripped"):
+            con.execute("ROLLBACK")
+            return False, f"kill switch is tripped: {state['kill_switch'].get('reason')}"
+        limits = state["limits"]
+        pct = risk_usdt / float(equity_usdt) * 100.0
+        cap = float(limits.get("risk_per_trade_pct", DEFAULT_LIMITS["risk_per_trade_pct"]))
+        key = f"{strategy}:{symbol}"
+        if state["open_risk"].get(key):
+            con.execute("ROLLBACK")
+            return False, f"risk reservation already exists for {key}"
+        if pct > cap + 1e-9:
+            con.execute("ROLLBACK")
+            return False, f"per-trade risk {pct:.3f}% exceeds limit {cap}%"
+        agg = aggregate_open_risk_pct(state, equity_usdt) or 0.0
+        agg_cap = float(limits.get("max_aggregate_risk_pct", DEFAULT_LIMITS["max_aggregate_risk_pct"]))
+        if agg + pct > agg_cap + 1e-9:
+            con.execute("ROLLBACK")
+            return False, f"aggregate open risk {agg:.3f}% + new {pct:.3f}% would exceed limit {agg_cap}%"
+        if correlation_group:
+            corr = correlated_risk_pct(state, equity_usdt, correlation_group, side) or 0.0
+            corr_cap = float(limits.get("max_correlated_risk_pct", DEFAULT_LIMITS["max_correlated_risk_pct"]))
+            if corr + pct > corr_cap + 1e-9:
+                con.execute("ROLLBACK")
+                return False, f"correlated risk in group '{correlation_group}' {corr:.3f}% + new {pct:.3f}% would exceed limit {corr_cap}%"
+        if not allow_strategy_conflicts:
+            conflict = _conflicting_position(state, symbol, side)
+            if conflict:
+                con.execute("ROLLBACK")
+                return False, f"strategy conflict: {conflict.get('strategy')} already holds {symbol} {conflict.get('side')}"
+        stamp = _now()
+        con.execute("INSERT INTO open_risk VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    (key, strategy, symbol, side, risk_usdt, notional_usdt, correlation_group, "reserved", stamp, stamp))
+        con.execute("COMMIT")
+        return True, None
+    except (sqlite3.Error, OSError, ValueError) as exc:
+        try:
+            con.execute("ROLLBACK")
+        except sqlite3.Error:
+            pass
+        return False, f"risk ledger unavailable: {exc}"
+    finally:
+        con.close()
+
+
+def register_open_risk(path, *, strategy, symbol, side, risk_usdt, notional_usdt, correlation_group=None):
+    key = f"{strategy}:{symbol}"
+    con = _connect(path)
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        _ensure_legacy_migrated(con, path)
+        stamp = _now()
+        con.execute("""INSERT INTO open_risk VALUES(?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(key) DO UPDATE SET strategy=excluded.strategy,symbol=excluded.symbol,
+            side=excluded.side,risk_usdt=excluded.risk_usdt,notional_usdt=excluded.notional_usdt,
+            correlation_group=excluded.correlation_group,status='open',updated_at=excluded.updated_at""",
+            (key, strategy, symbol, side, float(risk_usdt or 0), float(notional_usdt or 0), correlation_group, "open", stamp, stamp))
+        con.execute("COMMIT")
+    finally:
+        con.close()
+
+
+def mark_reservation_recovery(path, *, strategy, symbol, reason):
+    con = _connect(path)
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        _ensure_legacy_migrated(con, path)
+        con.execute("UPDATE open_risk SET status='recovery', updated_at=? WHERE key=?", (_now(), f"{strategy}:{symbol}"))
+        con.execute("COMMIT")
+    finally:
+        con.close()
+
+
+def rollback_reservation(path, *, strategy, symbol):
+    con = _connect(path)
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        con.execute("DELETE FROM open_risk WHERE key=? AND status='reserved'", (f"{strategy}:{symbol}",))
+        con.execute("COMMIT")
+    finally:
+        con.close()
+
+
+def release_open_risk(path, *, strategy, symbol):
+    con = _connect(path)
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        con.execute("DELETE FROM open_risk WHERE key=?", (f"{strategy}:{symbol}",))
+        con.execute("COMMIT")
+    finally:
+        con.close()
+
+
+def update_equity_and_check_kill_switch(path, equity_usdt, *, equity_observed_at=None, max_equity_age_s=30):
+    con = _connect(path)
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        _ensure_legacy_migrated(con, path)
+        state = _read_state_tx(con)
+        if state["kill_switch"].get("tripped"):
+            con.execute("COMMIT")
+            return True, state["kill_switch"].get("reason")
+        if not _valid_equity(equity_usdt):
+            reason = "equity unavailable or invalid; kill switch engaged fail-closed"
+            state["kill_switch"] = {"tripped": True, "reason": reason, "at": _now(), "by": "risk_manager"}
+            _write_state_tx(con, state); con.execute("COMMIT")
+            return True, reason
+        if not _equity_fresh(equity_observed_at, max_equity_age_s):
+            reason = "equity stale; kill switch engaged fail-closed"
+            state["kill_switch"] = {"tripped": True, "reason": reason, "at": _now(), "by": "risk_manager"}
+            _write_state_tx(con, state); con.execute("COMMIT")
+            return True, reason
+        equity_usdt = float(equity_usdt)
+        state["equity_observed_at"] = equity_observed_at or _now()
+        hwm = state.get("equity_high_water_mark")
+        if hwm is None or equity_usdt > hwm:
+            state["equity_high_water_mark"] = equity_usdt
+            hwm = equity_usdt
+        daily = state.setdefault("daily", {"date": None, "realized_pnl": 0.0, "start_equity": None})
+        if daily.get("date") != _today():
+            daily.update({"date": _today(), "start_equity": equity_usdt, "realized_pnl": 0.0})
+        reason = None
+        dd = (hwm - equity_usdt) / hwm * 100.0
+        if dd >= float(state["limits"]["max_drawdown_pct"]):
+            reason = f"portfolio drawdown {dd:.2f}% >= limit {state['limits']['max_drawdown_pct']}%"
+        if reason is None and daily.get("start_equity"):
+            loss = (daily["start_equity"] - equity_usdt) / daily["start_equity"] * 100.0
+            if loss >= float(state["limits"]["max_daily_loss_pct"]):
+                reason = f"daily loss {loss:.2f}% >= limit {state['limits']['max_daily_loss_pct']}%"
+        if reason:
+            state["kill_switch"] = {"tripped": True, "reason": reason, "at": _now(), "by": "risk_manager"}
+        _write_state_tx(con, state); con.execute("COMMIT")
+        return reason is not None, reason
+    except Exception:
+        try:
+            con.execute("ROLLBACK")
+        except sqlite3.Error:
+            pass
+        raise
+    finally:
+        con.close()
 
 
 def trip_kill_switch(path, reason, *, by="manual"):
-    path = Path(path)
     state = load_risk_state(path)
     state["kill_switch"] = {"tripped": True, "reason": str(reason), "at": _now(), "by": by}
     save_risk_state(path, state)
 
 
 def reset_kill_switch(path, *, operator):
-    """Explicit human action only; never called automatically by trading code."""
-    path = Path(path)
     state = load_risk_state(path)
     state["kill_switch"] = {"tripped": False, "reason": None, "at": _now(), "by": f"reset:{operator}"}
     save_risk_state(path, state)
 
 
-def pre_trade_gate(path, *, strategy, symbol, side, risk_usdt, notional_usdt,
-                    equity_usdt, correlation_group=None, allow_strategy_conflicts=False):
-    """Mandatory check before ANY live order is submitted, by ANY strategy. Fails closed:
-    missing/invalid equity, an unreadable ledger, or any lock timeout blocks the trade
-    rather than permitting it. Returns (allowed, reason)."""
-    path = Path(path)
-    try:
-        state = load_risk_state(path)
-    except Exception as exc:
-        return False, f"risk ledger unavailable: {exc}"
-    ks = state.get("kill_switch") or {}
-    if ks.get("tripped"):
-        return False, f"kill switch is tripped: {ks.get('reason')}"
-    if equity_usdt is None or equity_usdt <= 0:
-        return False, "equity unavailable; refusing to size risk against an unknown account value"
-    if risk_usdt is None or risk_usdt < 0:
-        return False, "invalid risk amount"
-    limits = state["limits"]
-    per_trade_pct = float(risk_usdt) / float(equity_usdt) * 100.0
-    cap = float(limits.get("risk_per_trade_pct", DEFAULT_LIMITS["risk_per_trade_pct"]))
-    if per_trade_pct > cap + 1e-9:
-        return False, f"per-trade risk {per_trade_pct:.3f}% exceeds limit {cap}%"
-    existing_agg = aggregate_open_risk_pct(state, equity_usdt) or 0.0
-    agg_cap = float(limits.get("max_aggregate_risk_pct", DEFAULT_LIMITS["max_aggregate_risk_pct"]))
-    if existing_agg + per_trade_pct > agg_cap + 1e-9:
-        return False, f"aggregate open risk {existing_agg:.3f}% + new {per_trade_pct:.3f}% would exceed limit {agg_cap}%"
-    if correlation_group:
-        existing_corr = correlated_risk_pct(state, equity_usdt, correlation_group, side) or 0.0
-        corr_cap = float(limits.get("max_correlated_risk_pct", DEFAULT_LIMITS["max_correlated_risk_pct"]))
-        if existing_corr + per_trade_pct > corr_cap + 1e-9:
-            return False, (f"correlated risk in group '{correlation_group}' {existing_corr:.3f}% + new "
-                            f"{per_trade_pct:.3f}% would exceed limit {corr_cap}%")
-    if not allow_strategy_conflicts:
-        conflict = _conflicting_position(state, symbol, side)
-        if conflict:
-            return False, (f"strategy conflict: {conflict.get('strategy')} already holds {symbol} "
-                            f"{conflict.get('side')}, refusing opposite-side {side} from {strategy}")
-    return True, None
-
-
-def register_open_risk(path, *, strategy, symbol, side, risk_usdt, notional_usdt, correlation_group=None):
-    path = Path(path)
-    state = load_risk_state(path)
-    key = f"{strategy}:{symbol}"
-    state.setdefault("open_risk", {})[key] = {
-        "strategy": strategy, "symbol": symbol, "side": side,
-        "risk_usdt": float(risk_usdt or 0), "notional_usdt": float(notional_usdt or 0),
-        "correlation_group": correlation_group, "at": _now(),
-    }
-    save_risk_state(path, state)
-
-
-def release_open_risk(path, *, strategy, symbol):
-    path = Path(path)
-    state = load_risk_state(path)
-    state.setdefault("open_risk", {}).pop(f"{strategy}:{symbol}", None)
-    save_risk_state(path, state)
-
-
 def record_realized_pnl(path, pnl_usdt):
-    """Accumulate today's realized PnL for the daily-loss check (independent of the
-    drawdown/equity check, which reads actual exchange equity when available)."""
-    path = Path(path)
     state = load_risk_state(path)
-    today = _today()
     daily = state.setdefault("daily", {"date": None, "realized_pnl": 0.0, "start_equity": None})
-    if daily.get("date") != today:
-        daily["date"] = today
-        daily["realized_pnl"] = 0.0
+    if daily.get("date") != _today():
+        daily.update({"date": _today(), "realized_pnl": 0.0})
     daily["realized_pnl"] = float(daily.get("realized_pnl", 0) or 0) + float(pnl_usdt or 0)
     save_risk_state(path, state)
