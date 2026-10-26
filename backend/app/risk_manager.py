@@ -248,6 +248,61 @@ def pre_trade_gate(path, *, strategy, symbol, side, risk_usdt, notional_usdt,
         con.close()
 
 
+def pre_trade_gate_basket(path, *, strategy, legs, equity_usdt):
+    """Atomically reserve every leg of a basket or pair."""
+    if not _valid_equity(equity_usdt) or not legs:
+        return False, "equity unavailable or empty basket; refusing to reserve risk"
+    con = _connect(path)
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        _ensure_legacy_migrated(con, path)
+        state = _read_state_tx(con)
+        if state["kill_switch"].get("tripped"):
+            con.execute("ROLLBACK")
+            return False, f"kill switch is tripped: {state['kill_switch'].get('reason')}"
+        limits = state["limits"]
+        requested = []
+        for leg in legs:
+            try:
+                risk = float(leg.get("risk_usdt")); notional = float(leg.get("notional_usdt", 0) or 0)
+                if not math.isfinite(risk) or risk < 0 or not math.isfinite(notional): raise ValueError
+            except (TypeError, ValueError):
+                con.execute("ROLLBACK"); return False, "invalid basket risk amount"
+            key = f"{strategy}:{leg['symbol']}"
+            if key in state["open_risk"]:
+                con.execute("ROLLBACK"); return False, f"risk reservation already exists for {key}"
+            if not leg.get("allow_strategy_conflicts") and _conflicting_position(state, leg["symbol"], leg["side"]):
+                con.execute("ROLLBACK"); return False, f"strategy conflict on {leg['symbol']}"
+            pct = risk / float(equity_usdt) * 100.0
+            if pct > float(limits.get("risk_per_trade_pct", DEFAULT_LIMITS["risk_per_trade_pct"])) + 1e-9:
+                con.execute("ROLLBACK"); return False, f"per-leg risk {pct:.3f}% exceeds limit"
+            requested.append((leg, key, risk, notional))
+        total_pct = sum(x[2] for x in requested) / float(equity_usdt) * 100.0
+        corr_cap = float(limits.get("max_correlated_risk_pct", DEFAULT_LIMITS["max_correlated_risk_pct"]))
+        for group in {x[0].get("correlation_group") for x in requested if x[0].get("correlation_group")}:
+            for side in {x[0].get("side") for x in requested if x[0].get("correlation_group") == group}:
+                existing = correlated_risk_pct(state, equity_usdt, group, side) or 0.0
+                added = sum(x[2] for x in requested if x[0].get("correlation_group") == group and x[0].get("side") == side) / float(equity_usdt) * 100.0
+                if existing + added > corr_cap + 1e-9:
+                    con.execute("ROLLBACK"); return False, f"correlated basket risk exceeds limit {corr_cap}%"
+        current_pct = aggregate_open_risk_pct(state, equity_usdt) or 0.0
+        cap = float(limits.get("max_aggregate_risk_pct", DEFAULT_LIMITS["max_aggregate_risk_pct"]))
+        if current_pct + total_pct > cap + 1e-9:
+            con.execute("ROLLBACK"); return False, f"aggregate basket risk exceeds limit {cap}%"
+        for leg, key, risk, notional in requested:
+            stamp = _now()
+            con.execute("INSERT INTO open_risk VALUES(?,?,?,?,?,?,?,?,?,?)",
+                        (key, strategy, leg["symbol"], leg["side"], risk, notional,
+                         leg.get("correlation_group"), "reserved", stamp, stamp))
+        con.execute("COMMIT"); return True, None
+    except (sqlite3.Error, OSError, ValueError) as exc:
+        try: con.execute("ROLLBACK")
+        except sqlite3.Error: pass
+        return False, f"risk ledger unavailable: {exc}"
+    finally:
+        con.close()
+
+
 def register_open_risk(path, *, strategy, symbol, side, risk_usdt, notional_usdt, correlation_group=None):
     key = f"{strategy}:{symbol}"
     con = _connect(path)

@@ -11,6 +11,7 @@ from pathlib import Path
 import strategies_advanced as adv
 from backend.app.execution_safety import AmbiguousFill, authoritative_position_state, futures_net_pnl, linear_contracts_from_margin, normalize_filled_contracts
 from backend.app import risk_manager as riskmgr
+from backend.app.multi_leg_execution import MultiLegExecutionEngine
 
 try:
     from dotenv import load_dotenv; load_dotenv()
@@ -291,8 +292,15 @@ def run_once_listing(ex):
     for sym, pos in list(state["positions"].items()):
         try:
             price = float(ex.fetch_ticker(sym)["last"]); prices[sym] = price
-            if price >= pos["sl"]: _listing_close(ex, state, sym, price, f"وقف {pos['sl']:.6g}")
-            elif now >= datetime.fromisoformat(pos["exit_at"]): _listing_close(ex, state, sym, price, f"خلصت {L['hold_days']} يوم")
+            reason = f"وقف {pos['sl']:.6g}" if price >= pos["sl"] else f"خلصت {L['hold_days']} يوم" if now >= datetime.fromisoformat(pos["exit_at"]) else None
+            if reason:
+                if CONFIG["paper_trading"]:
+                    _listing_close(ex, state, sym, price, reason)
+                else:
+                    leg = {"symbol": sym, "side": "close_short", "action": "exit", "position": pos, "price": price, "order": 0,
+                           "risk_usdt": 0, "notional_usdt": 0, "correlation_group": _correlation_group(sym)}
+                    result = _phase2_live_basket(ex, state, "listing_short", f"listing-exit:{sym}", [leg], reserve=False)
+                    if result and result.get("status") == "filled": state["history"].append({"symbol": sym, "side": "short", "entry": pos["entry"], "exit": price, "qty": pos["qty"], "pnl": 0.0, "reason": reason, "time": now.isoformat(), "type": "live"})
         except Exception as e: log(f"شورت {sym}: {e}")
     # new entries: coins that just turned 30 days old (a few days of slack if the bot was down), oldest listing first;
     # like the backtest, a coin that comes up while all 10 slots are taken is skipped for good
@@ -301,7 +309,17 @@ def run_once_listing(ex):
         done[sym] = now.isoformat()
         if len(state["positions"]) >= L["max_open"]:
             log(f"⏸️ {sym} عدّى {L['skip_days']} يوم بس الـ {L['max_open']} أماكن مليانة — اتساب زي الباك تست"); continue
-        if not CONFIG["paper_trading"]: log(f"⏸️ {sym} شورت العملات الجديدة Paper بس"); continue
+        if not CONFIG["paper_trading"]:
+            try:
+                price = float(ex.fetch_ticker(sym)["last"]); prices[sym] = price
+            except Exception as e:
+                log(f"شورت {sym}: {e}"); continue
+            leg = _phase2_leg(sym, "short", position_size(price), price, price * (1 + L["stop"]), None, "listing_short",
+                               extra={"listed": datetime.fromtimestamp(listed / 1000, timezone.utc).isoformat(), "exit_at": (now + pd.Timedelta(days=L["hold_days"])).isoformat()})
+            result = _phase2_live_basket(ex, state, "listing_short", f"listing-entry:{sym}", [leg])
+            if result and result.get("status") == "filled": done[sym] = now.isoformat()
+            continue
+
         try:
             price = float(ex.fetch_ticker(sym)["last"]); prices[sym] = price
             lev = int(CONFIG.get("leverage", 2)); q = position_size(price) * lev / price
@@ -406,12 +424,30 @@ def run_once_momentum(ex):
         ranked = momentum_rank(ex)
         if len(ranked) >= 20:
             closed = 0.0
+            lev = int(CONFIG.get("leverage", 2)); picks = [(s, r, "short") for s, r in ranked[:M["n"]]] + [(s, r, "long") for s, r in ranked[-M["n"]:]]
+            if not CONFIG["paper_trading"]:
+                exits = []
+                for sym in sorted(state["positions"]):
+                    px = float(ex.fetch_ticker(sym)["last"]); pos = state["positions"][sym]
+                    exits.append({"symbol": sym, "side": "close_" + pos["side"], "action": "exit", "position": pos, "price": px, "order": 0,
+                                  "risk_usdt": 0, "notional_usdt": 0, "correlation_group": _correlation_group(sym)})
+                if exits:
+                    closed_result = _phase2_live_basket(ex, state, "momentum_ls", "momentum-rebalance-exit", exits, reserve=False)
+                    if not closed_result or closed_result.get("status") != "filled":
+                        save_state(state); return
+                entries = []
+                for sym, ret, side in picks:
+                    px = float(ex.fetch_ticker(sym)["last"]); prices[sym] = px
+                    stop = px * (1 + M["stop"]) if side == "short" else px * (1 - M["stop"])
+                    entries.append(_phase2_leg(sym, side, position_size(px), px, stop, None, "momentum_ls", extra={"ret": ret}))
+                result = _phase2_live_basket(ex, state, "momentum_ls", "momentum-rebalance-entry", entries)
+                if result and result.get("status") == "filled":
+                    state["mom_last"] = today.isoformat(); state["mom_ranking"] = [{"symbol": s.split(":")[0], "ret": round(r * 100, 1)} for s, r in ranked]; save_state(state)
+                return
             for sym in list(state["positions"]):
                 try:
                     price = float(ex.fetch_ticker(sym)["last"]); closed += _paper_close(ex, state, sym, price, "تبديل أسبوعي")
                 except Exception as e: log(f"قفل {sym}: {e}")
-            if not CONFIG["paper_trading"]: log("⏸️ المومنتم Paper بس"); save_state(state); return
-            lev = int(CONFIG.get("leverage", 2)); picks = [(s, r, "short") for s, r in ranked[:M["n"]]] + [(s, r, "long") for s, r in ranked[-M["n"]:]]
             for sym, ret, side in picks:
                 try:
                     price = float(ex.fetch_ticker(sym)["last"]); prices[sym] = price; q = position_size(price) * lev / price
@@ -527,7 +563,46 @@ def run_once_ratio(ex):
         wanted = {f"{a}|{b}" for i, a in enumerate(members) for b in members[i + 1:]}
         closed = 0.0; flips = 0
         for key in list(state["pairs"]):
-            if key not in wanted: closed += _ratio_close_pair(ex, state, key, prices, "عملة خرجت من القائمة", fcache)
+            if CONFIG["paper_trading"] and key not in wanted: closed += _ratio_close_pair(ex, state, key, prices, "عملة خرجت من القائمة", fcache)
+        if not CONFIG["paper_trading"]:
+            # Live pairs are always opened and closed through one durable basket intent.
+            exits = []
+            for key, pair in list(state["pairs"].items()):
+                if key not in wanted:
+                    for leg in pair["legs"]:
+                        exits.append({"symbol": leg["sym"], "side": "close_" + leg["side"], "action": "exit", "position": state["positions"].get(leg["sym"], leg),
+                                      "price": float(ex.fetch_ticker(leg["sym"])["last"]), "order": len(exits), "risk_usdt": 0, "notional_usdt": 0,
+                                      "correlation_group": _correlation_group(leg["sym"])})
+            if exits:
+                result = _phase2_live_basket(ex, state, "ratio_trend", "ratio-rebalance-exit", exits, reserve=False)
+                if not result or result.get("status") != "filled":
+                    save_state(state); return
+                for key in list(state["pairs"]):
+                    if key not in wanted: state["pairs"].pop(key, None)
+            for key in sorted(wanted):
+                a, b = key.split("|")
+                try: sig = ratio_signal(ex, a, b, cache)
+                except Exception as e: log(f"ratio {key}: {e}"); continue
+                cur = state["pairs"].get(key)
+                if not sig or (cur and cur["sign"] == sig): continue
+                if cur:
+                    legs_out = []
+                    for leg in cur["legs"]:
+                        legs_out.append({"symbol": leg["sym"], "side": "close_" + leg["side"], "action": "exit", "position": state["positions"].get(leg["sym"], leg),
+                                         "price": float(ex.fetch_ticker(leg["sym"])["last"]), "order": len(legs_out), "risk_usdt": 0, "notional_usdt": 0,
+                                         "correlation_group": _correlation_group(leg["sym"])})
+                    result = _phase2_live_basket(ex, state, "ratio_trend", f"ratio-flip-exit:{key}", legs_out, reserve=False)
+                    if not result or result.get("status") != "filled": save_state(state); return
+                    state["pairs"].pop(key, None)
+                ordered = ((a, "long"), (b, "short")) if sig == 1 else ((b, "long"), (a, "short"))
+                new_legs = []
+                for i, (sym, side) in enumerate(ordered):
+                    px = float(ex.fetch_ticker(sym)["last"]); prices[sym] = px
+                    new_legs.append(_phase2_leg(sym, side, position_size(px), px, px * (1 - 0.40) if side == "long" else px * (1 + 0.40), None, "ratio_trend", i))
+                result = _phase2_live_basket(ex, state, "ratio_trend", f"ratio-entry:{key}", new_legs)
+                if not result or result.get("status") != "filled": continue
+                state["pairs"][key] = {"sign": sig, "time": now.isoformat(), "legs": [{"sym": l["symbol"], "side": l["side"], "entry": state["positions"][l["symbol"]]["entry"], "qty": state["positions"][l["symbol"]]["qty"]} for l in new_legs], "ranks": [(state.get("ratio_rank") or {}).get(a), (state.get("ratio_rank") or {}).get(b)]}
+            state["ratio_day"] = today.isoformat(); save_state(state); return
         if CONFIG["paper_trading"]:
             lev = int(CONFIG.get("leverage", 2))
             for key in sorted(wanted):
@@ -2553,7 +2628,87 @@ def _paper_open(state, sym, price, now, extra):
     return q
 
 
+def _phase2_engine(state):
+    return MultiLegExecutionEngine(STATE_PATH, risk_manager=riskmgr, risk_path=RISK_PATH,
+                                   save_state=save_state,
+                                   block=lambda reason: _ENTRY_BLOCK.__setitem__("reason", str(reason)))
+
+
+def _phase2_live_basket(ex, state, strategy, intent, legs, *, reserve=True):
+    """Execute a deterministic live basket and leave all ambiguity in recovery."""
+    if CONFIG.get("paper_trading"):
+        raise RuntimeError("Phase 2 live adapter called while paper trading is enabled")
+    if binance_env() == "live" and os.getenv("ALLOW_LIVE_TRADING", "").strip().lower() != "true":
+        _ENTRY_BLOCK["reason"] = "ALLOW_LIVE_TRADING is not enabled"; return None
+    if _ENTRY_BLOCK.get("reason") or state.get("recovery_required"):
+        return None
+    is_exit = bool(legs) and all(leg.get("action", "entry") == "exit" for leg in legs)
+    equity = _fetch_equity_usdt(ex)
+    if equity is None and not is_exit:
+        _ENTRY_BLOCK["reason"] = "account equity unavailable — blocking new entries"; return None
+    if not is_exit:
+        tripped, reason = riskmgr.update_equity_and_check_kill_switch(RISK_PATH, equity)
+        if tripped:
+            _ENTRY_BLOCK["reason"] = f"Central Risk Manager kill switch is tripped — {reason}"; return None
+    equity = equity or 1.0
+    engine = _phase2_engine(state); fills = {}
+    pending = engine.pending()
+    if pending:
+        for row in pending:
+            state.setdefault("recovery_required", {})[f"execution:{row['execution_id']}"] = {"reason": "durable live execution requires restart reconciliation", "at": row["updated_at"]}
+        _ENTRY_BLOCK["reason"] = "durable live execution requires reconciliation"; save_state(state); return None
+    def execute_leg(leg):
+        if leg.get("action", "entry") == "exit":
+            result = close_live_position(ex, leg["symbol"], leg["position"], leg.get("price")); _require_verified_close(result)
+            fills[leg["symbol"]] = result; return {**result, "qty": result.get("qty", leg["position"].get("qty"))}
+        result = place_order(ex, leg["symbol"], leg["side"], leg["margin"], leg["price"], client_order_id=leg["client_order_id"])
+        if float(result.get("qty", 0) or 0) <= 0: raise RuntimeError("leg returned no filled quantity")
+        from backend.app.oco import place_oco_orders
+        oco = place_oco_orders(ex, leg["symbol"], leg["side"], result["qty"], leg.get("sl"), leg.get("tp"), paper=False, pos_id=leg["client_order_id"])
+        result = {**result, "oco": oco}; fills[leg["symbol"]] = result; return result
+    def compensate(leg, result):
+        if leg.get("action", "entry") == "exit": return {"confirmed": False, "reason": "closed exit leg cannot be compensated automatically"}
+        close_side = "close_long" if leg["side"] == "long" else "close_short"
+        closed = place_order(ex, leg["symbol"], close_side, 0, result.get("price", leg["price"]), close_qty=result.get("qty"), client_order_id=f"{leg['client_order_id']}-c"[:36])
+        q = _exchange_position_qty(ex, leg["symbol"], side=leg["side"])
+        if q is None or float(q or 0) != 0: raise RuntimeError("compensating close outcome ambiguous")
+        return {"confirmed": True, "close": closed}
+    def protected(leg, result):
+        if leg.get("action", "entry") == "exit": return True
+        oco = result.get("oco") or {}; return not (oco.get("protection_missing") or oco.get("verify_failed") or oco.get("sl_unverified"))
+    result = engine.execute(strategy=strategy, intent=intent, legs=legs, equity_usdt=equity, execute_leg=execute_leg,
+                            compensate_leg=compensate, verify_protection=protected, state=state, reserve=reserve)
+    if result.get("status") == "filled":
+        for leg in legs:
+            sym = leg["symbol"]
+            if leg.get("action", "entry") == "exit":
+                state["positions"].pop(sym, None); riskmgr.release_open_risk(RISK_PATH, strategy=strategy, symbol=sym); continue
+            fill = fills[sym]; oco = fill.get("oco") or {}
+            state["positions"][sym] = {"side": leg["side"], "entry": fill["price"], "qty": fill["qty"], "cost": fill.get("cost"),
+                "notional": fill.get("notional"), "contract_size": fill.get("contract_size"), "contract_size_verified": fill.get("contract_size_verified", False),
+                "entry_fee_rate": fill.get("entry_fee_rate"), "entry_fee_cost": fill.get("entry_fee_cost"), "leverage": fill.get("leverage", CONFIG.get("leverage", 2)),
+                "time": datetime.now(timezone.utc).isoformat(), "sl": leg.get("sl"), "tp": leg.get("tp"), "clientOrderId": leg["client_order_id"],
+                "oco_ids": {"pos_id": leg["client_order_id"], "sl": oco.get("sl_id"), "tp": oco.get("tp_id")}, "strategy": strategy, **(leg.get("extra") or {})}
+            riskmgr.register_open_risk(RISK_PATH, strategy=strategy, symbol=sym, side=leg["side"], risk_usdt=leg["risk_usdt"],
+                notional_usdt=leg["notional_usdt"], correlation_group=leg.get("correlation_group"))
+        save_state(state)
+    elif result.get("status") == "recovery_required":
+        for item in result.get("residual", []):
+            sym = item["leg"]["symbol"]
+            state.setdefault("recovery_required", {})[sym] = {"reason": item.get("reason"), "execution_id": result.get("execution_id"), "at": datetime.now(timezone.utc).isoformat()}
+        save_state(state)
+    return result
+
+
+def _phase2_leg(symbol, side, margin, price, sl, tp, strategy, order=0, extra=None):
+    lev = int(CONFIG.get("leverage", 2))
+    return {"symbol": symbol, "side": side, "margin": margin, "price": price, "sl": sl, "tp": tp,
+            "risk_usdt": _estimate_trade_risk_usdt(margin, lev, price, sl), "notional_usdt": margin * lev,
+            "correlation_group": _correlation_group(symbol), "strategy": strategy, "order": order, "extra": extra or {}}
+
+
 def _single_leg_live_entry(ex, state, symbol, side, margin, price, sl, tp, strategy, extra=None):
+
     """Fail-closed single-leg live entry shared by the Phase 1 adapters."""
     if CONFIG.get("paper_trading"):
         raise RuntimeError("live adapter called while paper trading is enabled")
