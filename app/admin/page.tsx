@@ -309,6 +309,14 @@ export default function AdminPage() {
   const liveStrategies: Json = liveBotsPortfolio.strategies || {}
   const liveSummaryOverview: Json = o.live_bots?.summary || liveBotsPortfolio.aggregate || {}
   const dashboardBot: Json = data.paper?.dashboard_bot || { positions: data.paper?.positions || [], history: data.paper?.history || [] }
+  const operationalAlerts = [
+    ...(Array.isArray(o.alerts) ? o.alerts : []),
+    ...(Array.isArray(o.warnings) ? o.warnings : []),
+    ...(Array.isArray(o.recovery_warnings) ? o.recovery_warnings : []),
+    ...(Array.isArray(data.health?.alerts) ? data.health.alerts : []),
+    ...(risk.kill_switch?.tripped ? [{ title: "Kill switch", message: "مفعل حاليًا ويمنع الإدخالات الجديدة.", severity: "critical" }] : []),
+    ...(o.entry_paused?.paused ? [{ title: "إيقاف الإدخالات", message: "الإدخالات الجديدة متوقفة.", severity: "warning" }] : []),
+  ]
 
   if (access !== "allowed") {
     return (
@@ -368,7 +376,9 @@ export default function AdminPage() {
         {currentSectionErrors.length > 0 && <div className="rounded-xl border border-amber-400/30 bg-amber-400/10 p-3 text-xs text-amber-200">هذا القسم لم يستقبل تحديثًا جديدًا: {currentSectionErrors.join(" · ")}. البيانات السابقة، إن وُجدت، ما زالت معروضة.</div>}
 
         {section === "overview" && (
-          <div className="grid md:grid-cols-4 gap-3">
+          <div className="space-y-4">
+            <Panel title="التنبيهات التشغيلية"><AlertCenter alerts={operationalAlerts} /></Panel>
+            <div className="grid md:grid-cols-4 gap-3">
             {[
               ["الحالة", o.health?.api || "unavailable"],
               ["بوتات VPS تعمل", `${liveSummaryOverview.running ?? "—"}/${REAL_BOT_IDS.length}`],
@@ -379,6 +389,7 @@ export default function AdminPage() {
               ["الإدخالات", o.entry_paused?.paused ? "متوقفة" : "مسموحة"],
               ["Kill switch", o.kill_switch?.tripped ? "مفعل" : "غير مفعل"],
             ].map(([k, v]) => <Card key={k} title={k} value={String(v)} />)}
+            </div>
           </div>
         )}
 
@@ -477,7 +488,10 @@ export default function AdminPage() {
             </div>
             <Panel title="مصفوفة الجاهزية لكل استراتيجية">
               <div className="mb-4 rounded-xl border border-amber-400/30 bg-amber-400/10 p-3 text-xs text-amber-200">البيئة الحالية: <b>{data.readiness?.environment || "غير متاحة"}</b> · لا يوجد زر لتفعيل التداول الحقيقي من الواجهة.</div>
-              <KeyValueGrid value={data.readiness?.checks || {}} empty="لا توجد أدلة جاهزية متاحة" />
+              <div className="space-y-3">
+                {Object.entries(data.readiness?.strategies || {}).map(([id, item]: [string, any]) => <div key={id} className="rounded-2xl border border-line bg-surface2 p-4"><div className="flex flex-wrap items-center justify-between gap-2"><b>{STRATEGY_LABELS_AR[id] || id}</b><span className={`rounded-full px-2 py-1 text-[10px] font-bold ${item.live_ready ? "bg-emerald-400/10 text-emerald-300" : "bg-red-400/10 text-red-300"}`}>{item.live_ready ? "Live-ready" : "مقفل"}</span></div><div className="mt-3 flex flex-wrap gap-2"><CheckPill label="Adapter" value={item.adapter_implemented} /><CheckPill label="Recovery" value={item.recovery_tests} /><CheckPill label="Security" value={item.security_approved} /><CheckPill label="Testnet" value={item.testnet_validated} /></div>{Array.isArray(item.reasons) && item.reasons.length > 0 && <div className="mt-3 text-xs text-muted">السبب: {item.reasons.join(" · ")}</div>}</div>)}
+                {!Object.keys(data.readiness?.strategies || {}).length && <KeyValueGrid value={data.readiness?.checks || {}} empty="لا توجد أدلة جاهزية متاحة" />}
+              </div>
             </Panel>
           </div>
         )}
@@ -532,6 +546,15 @@ function KeyValueGrid({ value, empty }: { value: Json; empty: string }) {
   const entries = Object.entries(value || {})
   if (!entries.length) return <div className="rounded-xl border border-dashed border-line p-4 text-xs text-muted">{empty}</div>
   return <div className="grid gap-2 sm:grid-cols-2">{entries.map(([key, val]) => <div key={key} className="rounded-xl border border-line bg-surface2 p-3"><div className="text-[10px] text-muted">{key.replaceAll("_", " ")}</div><div className="mt-1 font-mono text-sm font-bold tabular" dir="ltr">{typeof val === "object" ? JSON.stringify(val) : String(val ?? "—")}</div></div>)}</div>
+}
+function CheckPill({ label, value }: { label: string; value: any }) {
+  const ok = value === true
+  return <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-bold ${ok ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300" : "border-red-400/30 bg-red-400/10 text-red-300"}`}><span>{ok ? "✓" : "×"}</span>{label}</span>
+}
+function AlertCenter({ alerts }: { alerts: any[] }) {
+  const normalized = alerts.filter(Boolean).map(item => typeof item === "string" ? { message: item, severity: "warning" } : item)
+  if (!normalized.length) return <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/5 p-4 text-xs text-emerald-300">لا توجد تنبيهات تشغيلية حالية.</div>
+  return <div className="space-y-2">{normalized.slice(0, 8).map((item, i) => <div key={i} className={`rounded-xl border p-3 text-xs ${item.severity === "error" || item.severity === "critical" ? "border-red-400/30 bg-red-400/10 text-red-200" : "border-amber-400/30 bg-amber-400/10 text-amber-200"}`}><b>{item.title || (item.severity === "error" ? "خطأ تشغيلي" : "تنبيه")}</b><span className="mx-2">·</span>{item.message || item.reason || JSON.stringify(item)}</div>)}</div>
 }
 function Panel({ title, children }: { title: string; children: any }) {
   return <section className="rounded-2xl border border-line bg-surface p-4 sm:p-5 shadow-[0_8px_30px_rgba(0,0,0,0.12)]"><div className="mb-4 flex items-center justify-between gap-3 border-b border-line pb-3"><h2 className="font-black text-sm">{title}</h2><span className="h-1.5 w-1.5 rounded-full bg-corona" /></div>{children}</section>
