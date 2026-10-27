@@ -271,7 +271,8 @@ export default function AdminPage() {
     url.searchParams.set("tab", id)
     window.history.replaceState({}, "", `${url.pathname}?${url.searchParams.toString()}`)
   }
-  const sectionEndpoint: Record<string, string | undefined> = { overview: "overview", live: "paper", strategies: "strategies", paper: "paper", risk: "risk", readiness: "readiness", health: "health", audit: "audit" }
+  const sectionEndpoints: Record<string, string[]> = { overview: ["overview"], live: ["paper"], strategies: ["strategies"], paper: ["paper"], risk: ["risk"], readiness: ["readiness"], health: ["health", "activation"], audit: ["audit"], settings: [] }
+  const currentSectionErrors = sectionEndpoints[section]?.map(key => endpointErrors[key]).filter(Boolean) as string[] || []
   useEffect(() => {
     const requested = new URLSearchParams(window.location.search).get("tab")
     if (requested && sections.some(([id]) => id === requested)) setSection(requested)
@@ -362,9 +363,9 @@ export default function AdminPage() {
         </nav>
         <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted">
           <span>{loading ? "جاري تحديث بيانات المركز…" : lastRefreshed ? `آخر مزامنة كاملة: ${lastRefreshed.toLocaleTimeString("ar-EG")}` : "بانتظار أول مزامنة"}</span>
-          {sectionEndpoint[section] && endpointErrors[sectionEndpoint[section]!] && <button onClick={() => void load()} className="text-red-300 hover:text-red-200">إعادة المحاولة</button>}
+          {currentSectionErrors.length > 0 && <button onClick={() => void load()} className="text-red-300 hover:text-red-200">إعادة المحاولة</button>}
         </div>
-        {sectionEndpoint[section] && endpointErrors[sectionEndpoint[section]!] && <div className="rounded-xl border border-amber-400/30 bg-amber-400/10 p-3 text-xs text-amber-200">هذا القسم لم يستقبل تحديثًا جديدًا: {endpointErrors[sectionEndpoint[section]!]}. البيانات السابقة، إن وُجدت، ما زالت معروضة.</div>}
+        {currentSectionErrors.length > 0 && <div className="rounded-xl border border-amber-400/30 bg-amber-400/10 p-3 text-xs text-amber-200">هذا القسم لم يستقبل تحديثًا جديدًا: {currentSectionErrors.join(" · ")}. البيانات السابقة، إن وُجدت، ما زالت معروضة.</div>}
 
         {section === "overview" && (
           <div className="grid md:grid-cols-4 gap-3">
