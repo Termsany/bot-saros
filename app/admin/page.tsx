@@ -1,6 +1,6 @@
 "use client"
 import { useEffect, useMemo, useRef, useState } from "react"
-import { Activity, AlertTriangle, BarChart3, Bot, ClipboardList, Gauge, LockKeyhole, Settings2, ShieldCheck, WalletCards } from "lucide-react"
+import { Activity, BarChart3, Bot, ClipboardList, Gauge, LockKeyhole, Settings2, ShieldCheck, WalletCards } from "lucide-react"
 import { Logo } from "@/components/Logo"
 import { TIERS } from "@/lib/strategies"
 import { apiIsAdmin } from "@/lib/api"
