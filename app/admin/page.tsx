@@ -220,6 +220,8 @@ export default function AdminPage() {
   const [section, setSection] = useState("overview")
   const [data, setData] = useState<Json>({})
   const [error, setError] = useState("")
+  const [endpointErrors, setEndpointErrors] = useState<Record<string, string>>({})
+  const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState(false)
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null)
   const [autoRefresh, setAutoRefresh] = useState(true)
@@ -229,18 +231,51 @@ export default function AdminPage() {
   const load = async () => {
     if (loadingRef.current) return
     loadingRef.current = true
+    setLoading(true)
+    const endpoints: [string, string][] = [
+      ["overview", "overview"], ["strategies", "strategies"], ["paper", "paper/portfolio"],
+      ["risk", "risk"], ["readiness", "readiness"], ["health", "health"], ["activation", "activation"], ["audit", "audit"],
+    ]
     try {
       const h = await authHeaders()
-      const ps = ["overview", "strategies", "paper/portfolio", "risk", "readiness", "health", "activation", "audit"].map(x => fetch(`${API}/api/admin/${x}`, { headers: h }))
-      const rs = await Promise.all(ps)
-      if (rs.some(r => r.status === 401 || r.status === 403)) throw Error("ليس لديك صلاحية أدمن")
-      const js = await Promise.all(rs.map(r => r.json()))
-      setData({ overview: js[0], strategies: js[1], paper: js[2], risk: js[3], readiness: js[4], health: js[5], activation: js[6], audit: js[7] })
+      const results = await Promise.all(endpoints.map(async ([key, path]) => {
+        try {
+          const response = await fetch(`${API}/api/admin/${path}`, { headers: h, cache: "no-store" })
+          const payload = await response.json().catch(() => ({}))
+          return { key, response, payload }
+        } catch {
+          return { key, response: null, payload: {}, message: "تعذر الاتصال بالمصدر" }
+        }
+      }))
+      if (results.some(r => r.response?.status === 401 || r.response?.status === 403)) throw Error("ليس لديك صلاحية أدمن")
+      const nextData: Json = {}
+      const nextErrors: Record<string, string> = {}
+      for (const result of results) {
+        if (result.response?.ok) nextData[result.key] = result.payload
+        else nextErrors[result.key] = result.message || result.payload?.detail || `تعذر تحميل ${result.key}`
+      }
+      setData((previous) => ({ ...previous, ...nextData }))
+      setEndpointErrors(nextErrors)
       setError("")
       setLastRefreshed(new Date())
-    } catch (e: any) { setError(e.message || "تعذر الاتصال") } finally { loadingRef.current = false }
+    } catch (e: any) {
+      setError(e.message || "تعذر الاتصال")
+    } finally {
+      loadingRef.current = false
+      setLoading(false)
+    }
   }
+  const selectSection = (id: string) => {
+    setSection(id)
+    const url = new URL(window.location.href)
+    url.searchParams.set("tab", id)
+    window.history.replaceState({}, "", `${url.pathname}?${url.searchParams.toString()}`)
+  }
+  const sectionEndpoints: Record<string, string[]> = { overview: ["overview"], live: ["paper"], strategies: ["strategies"], paper: ["paper"], risk: ["risk"], readiness: ["readiness"], health: ["health", "activation"], audit: ["audit"], settings: [] }
+  const currentSectionErrors = sectionEndpoints[section]?.map(key => endpointErrors[key]).filter(Boolean) as string[] || []
   useEffect(() => {
+    const requested = new URLSearchParams(window.location.search).get("tab")
+    if (requested && sections.some(([id]) => id === requested)) setSection(requested)
     let active = true
     apiIsAdmin().then(isAdmin => {
       if (!active) return
@@ -320,12 +355,17 @@ export default function AdminPage() {
         <nav className="rounded-2xl border border-line bg-surface p-2">
           <div className="flex gap-1 overflow-x-auto">
             {sections.map(([id, label, Icon]) => (
-              <button key={id} onClick={() => setSection(id)} className={`flex items-center gap-2 whitespace-nowrap px-3 py-2.5 rounded-xl text-xs transition ${section === id ? "bg-corona text-void font-bold shadow-sm" : "text-muted hover:bg-surface2 hover:text-ink"}`}>
+              <button key={id} onClick={() => selectSection(id)} className={`flex items-center gap-2 whitespace-nowrap px-3 py-2.5 rounded-xl text-xs transition ${section === id ? "bg-corona text-void font-bold shadow-sm" : "text-muted hover:bg-surface2 hover:text-ink"}`}>
                 <Icon size={15} strokeWidth={2} />{label}
               </button>
             ))}
           </div>
         </nav>
+        <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted">
+          <span>{loading ? "جاري تحديث بيانات المركز…" : lastRefreshed ? `آخر مزامنة كاملة: ${lastRefreshed.toLocaleTimeString("ar-EG")}` : "بانتظار أول مزامنة"}</span>
+          {currentSectionErrors.length > 0 && <button onClick={() => void load()} className="text-red-300 hover:text-red-200">إعادة المحاولة</button>}
+        </div>
+        {currentSectionErrors.length > 0 && <div className="rounded-xl border border-amber-400/30 bg-amber-400/10 p-3 text-xs text-amber-200">هذا القسم لم يستقبل تحديثًا جديدًا: {currentSectionErrors.join(" · ")}. البيانات السابقة، إن وُجدت، ما زالت معروضة.</div>}
 
         {section === "overview" && (
           <div className="grid md:grid-cols-4 gap-3">
