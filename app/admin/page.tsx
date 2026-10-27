@@ -234,7 +234,7 @@ export default function AdminPage() {
     setLoading(true)
     const endpoints: [string, string][] = [
       ["overview", "overview"], ["strategies", "strategies"], ["paper", "paper/portfolio"],
-      ["risk", "risk"], ["readiness", "readiness"], ["health", "health"], ["activation", "activation"], ["audit", "audit"],
+      ["risk", "risk"], ["readiness", "readiness"], ["health", "health"], ["recovery", "recovery"], ["activation", "activation"], ["audit", "audit"],
     ]
     try {
       const h = await authHeaders()
@@ -271,7 +271,7 @@ export default function AdminPage() {
     url.searchParams.set("tab", id)
     window.history.replaceState({}, "", `${url.pathname}?${url.searchParams.toString()}`)
   }
-  const sectionEndpoints: Record<string, string[]> = { overview: ["overview"], live: ["paper"], strategies: ["strategies"], paper: ["paper"], risk: ["risk"], readiness: ["readiness"], health: ["health", "activation"], audit: ["audit"], settings: [] }
+  const sectionEndpoints: Record<string, string[]> = { overview: ["overview", "recovery"], live: ["paper"], strategies: ["strategies"], paper: ["paper"], risk: ["risk", "recovery"], readiness: ["readiness"], health: ["health", "recovery", "activation"], audit: ["audit"], settings: [] }
   const currentSectionErrors = sectionEndpoints[section]?.map(key => endpointErrors[key]).filter(Boolean) as string[] || []
   useEffect(() => {
     const requested = new URLSearchParams(window.location.search).get("tab")
@@ -305,11 +305,16 @@ export default function AdminPage() {
 
   const o = data.overview || {}
   const risk = data.risk?.state || {}
+  const recovery: Json = data.recovery || {}
   const liveBotsPortfolio: Json = data.paper?.live_bots || {}
   const liveStrategies: Json = liveBotsPortfolio.strategies || {}
   const liveSummaryOverview: Json = o.live_bots?.summary || liveBotsPortfolio.aggregate || {}
   const dashboardBot: Json = data.paper?.dashboard_bot || { positions: data.paper?.positions || [], history: data.paper?.history || [] }
+  const recoveryRequired = recovery.recovery_required || {}
+  const recoveryAlerts = Object.entries(recoveryRequired).map(([symbol, item]: [string, any]) => ({ title: `Recovery مطلوب · ${symbol}`, message: item?.reason || "يوجد وضع يحتاج مراجعة", severity: "critical" }))
+  if (recovery.reconciliation?.state && recovery.reconciliation.state !== "ok") recoveryAlerts.push({ title: "Reconciliation", message: `الحالة الحالية: ${recovery.reconciliation.state}`, severity: "warning" })
   const operationalAlerts = [
+    ...recoveryAlerts,
     ...(Array.isArray(o.alerts) ? o.alerts : []),
     ...(Array.isArray(o.warnings) ? o.warnings : []),
     ...(Array.isArray(o.recovery_warnings) ? o.recovery_warnings : []),
