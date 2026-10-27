@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { Logo } from "@/components/Logo"
 import { TIERS } from "@/lib/strategies"
+import { apiIsAdmin } from "@/lib/api"
 import { authHeaders } from "@/lib/supabase"
 
 type Json = Record<string, any>
@@ -221,6 +222,7 @@ export default function AdminPage() {
   const [busy, setBusy] = useState(false)
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null)
   const [autoRefresh, setAutoRefresh] = useState(true)
+  const [access, setAccess] = useState<"checking" | "allowed" | "denied">("checking")
   const loadingRef = useRef(false)
 
   const load = async () => {
@@ -237,13 +239,22 @@ export default function AdminPage() {
       setLastRefreshed(new Date())
     } catch (e: any) { setError(e.message || "تعذر الاتصال") } finally { loadingRef.current = false }
   }
-  useEffect(() => { load() }, [])
   useEffect(() => {
-    if (!autoRefresh) return
+    let active = true
+    apiIsAdmin().then(isAdmin => {
+      if (!active) return
+      setAccess(isAdmin ? "allowed" : "denied")
+      if (isAdmin) void load()
+    })
+    return () => { active = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  useEffect(() => {
+    if (!autoRefresh || access !== "allowed") return
     const t = setInterval(load, AUTO_REFRESH_MS)
     return () => clearInterval(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoRefresh])
+  }, [autoRefresh, access])
 
   const action = async (path: string, method: string, body: Json) => {
     setBusy(true)
@@ -262,6 +273,19 @@ export default function AdminPage() {
   const liveStrategies: Json = liveBotsPortfolio.strategies || {}
   const liveSummaryOverview: Json = o.live_bots?.summary || liveBotsPortfolio.aggregate || {}
   const dashboardBot: Json = data.paper?.dashboard_bot || { positions: data.paper?.positions || [], history: data.paper?.history || [] }
+
+  if (access !== "allowed") {
+    return (
+      <div dir="rtl" className="min-h-screen bg-void text-ink grid place-items-center p-6">
+        <div className="max-w-md rounded-2xl border border-line bg-surface p-6 text-center">
+          <Logo size="sm" />
+          <h1 className="mt-5 text-xl font-black">{access === "checking" ? "جاري التحقق من الصلاحيات…" : "ليس لديك صلاحية أدمن"}</h1>
+          {access === "denied" && <p className="mt-2 text-sm text-muted">هذه الصفحة متاحة لحسابات الإدارة فقط.</p>}
+          {access === "denied" && <a href="/dashboard" className="mt-5 inline-block rounded-xl bg-corona px-4 py-2 text-sm font-bold text-void">العودة للوحة التحكم</a>}
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div dir="rtl" className="min-h-screen bg-void text-ink p-4">
