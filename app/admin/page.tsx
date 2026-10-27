@@ -1,23 +1,25 @@
 "use client"
 import { useEffect, useMemo, useRef, useState } from "react"
+import { Activity, BarChart3, Bot, ClipboardList, Gauge, LockKeyhole, Settings2, ShieldCheck, WalletCards } from "lucide-react"
 import { Logo } from "@/components/Logo"
 import { TIERS } from "@/lib/strategies"
+import { apiIsAdmin } from "@/lib/api"
 import { authHeaders } from "@/lib/supabase"
 
 type Json = Record<string, any>
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
 const AUTO_REFRESH_MS = 30000
 
-const sections: [string, string][] = [
-  ["overview", "نظرة عامة"],
-  ["live", "البوتات الحية (VPS)"],
-  ["strategies", "الاستراتيجيات"],
-  ["paper", "المحفظة الورقية (Dashboard)"],
-  ["risk", "المخاطر والأمان"],
-  ["readiness", "جاهزية التشغيل"],
-  ["health", "صحة النظام"],
-  ["audit", "سجل التدقيق"],
-  ["settings", "الإعدادات"],
+const sections: [string, string, React.ComponentType<{ size?: number; strokeWidth?: number }>][] = [
+  ["overview", "نظرة عامة", Gauge],
+  ["live", "البوتات الحية", Bot],
+  ["strategies", "الاستراتيجيات", BarChart3],
+  ["paper", "المحفظة الورقية", WalletCards],
+  ["risk", "المخاطر والأمان", ShieldCheck],
+  ["readiness", "جاهزية التشغيل", LockKeyhole],
+  ["health", "صحة النظام", Activity],
+  ["audit", "سجل التدقيق", ClipboardList],
+  ["settings", "الإعدادات", Settings2],
 ]
 
 /** Arabic labels for all 9 admin_control.STRATEGIES ids — the last two (wave_flats, default)
@@ -221,6 +223,7 @@ export default function AdminPage() {
   const [busy, setBusy] = useState(false)
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null)
   const [autoRefresh, setAutoRefresh] = useState(true)
+  const [access, setAccess] = useState<"checking" | "allowed" | "denied">("checking")
   const loadingRef = useRef(false)
 
   const load = async () => {
@@ -237,13 +240,22 @@ export default function AdminPage() {
       setLastRefreshed(new Date())
     } catch (e: any) { setError(e.message || "تعذر الاتصال") } finally { loadingRef.current = false }
   }
-  useEffect(() => { load() }, [])
   useEffect(() => {
-    if (!autoRefresh) return
+    let active = true
+    apiIsAdmin().then(isAdmin => {
+      if (!active) return
+      setAccess(isAdmin ? "allowed" : "denied")
+      if (isAdmin) void load()
+    })
+    return () => { active = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  useEffect(() => {
+    if (!autoRefresh || access !== "allowed") return
     const t = setInterval(load, AUTO_REFRESH_MS)
     return () => clearInterval(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoRefresh])
+  }, [autoRefresh, access])
 
   const action = async (path: string, method: string, body: Json) => {
     setBusy(true)
@@ -263,35 +275,56 @@ export default function AdminPage() {
   const liveSummaryOverview: Json = o.live_bots?.summary || liveBotsPortfolio.aggregate || {}
   const dashboardBot: Json = data.paper?.dashboard_bot || { positions: data.paper?.positions || [], history: data.paper?.history || [] }
 
+  if (access !== "allowed") {
+    return (
+      <div dir="rtl" className="min-h-screen bg-void text-ink grid place-items-center p-6">
+        <div className="max-w-md rounded-2xl border border-line bg-surface p-6 text-center">
+          <Logo size="sm" />
+          <h1 className="mt-5 text-xl font-black">{access === "checking" ? "جاري التحقق من الصلاحيات…" : "ليس لديك صلاحية أدمن"}</h1>
+          {access === "denied" && <p className="mt-2 text-sm text-muted">هذه الصفحة متاحة لحسابات الإدارة فقط.</p>}
+          {access === "denied" && <a href="/dashboard" className="mt-5 inline-block rounded-xl bg-corona px-4 py-2 text-sm font-bold text-void">العودة للوحة التحكم</a>}
+        </div>
+      </div>
+    )
+  }
+
   return (
-    <div dir="rtl" className="min-h-screen bg-void text-ink p-4">
-      <div className="max-w-[1400px] mx-auto">
-        <header className="flex flex-wrap gap-3 justify-between items-center mb-5">
-          <div className="flex items-center gap-3">
-            <Logo size="sm" />
-            <div>
-              <h1 className="text-xl font-black">مركز تحكم الإدارة</h1>
-              <p className="text-xs text-muted">بيانات حية · وصول مصادق · التداول الحقيقي مقفول</p>
+    <div dir="rtl" className="min-h-screen bg-void text-ink p-4 lg:p-8">
+      <div className="max-w-[1480px] mx-auto space-y-5">
+        <header className="rounded-2xl border border-line bg-surface p-4 sm:p-5">
+          <div className="flex flex-wrap gap-4 justify-between items-center">
+            <div className="flex items-center gap-3">
+              <Logo size="sm" />
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h1 className="text-xl font-black">مركز تحكم الإدارة</h1>
+                  <span className="rounded-full border border-corona/40 bg-corona/10 px-2 py-0.5 text-[10px] font-bold text-corona">ADMIN ONLY</span>
+                </div>
+                <p className="text-xs text-muted mt-1">تشغيل ومراقبة آمنة · بيانات حقيقية · التداول الحقيقي مقفول</p>
+              </div>
             </div>
-          </div>
-          <div className="flex items-center gap-2 flex-wrap">
-            <div className="text-[11px] text-muted flex items-center gap-1">
-              <span className="inline-block w-2 h-2 rounded-full bg-emerald-400" />
-              آخر تحديث: {lastRefreshed ? lastRefreshed.toLocaleTimeString("ar-EG") : "—"}
+            <div className="flex items-center gap-2 flex-wrap">
+              <div className="rounded-xl border border-line bg-surface2 px-3 py-2 text-[11px] text-muted flex items-center gap-2">
+                <span className="inline-block w-2 h-2 rounded-full bg-emerald-400" />
+                <span>آخر تحديث</span><b className="font-mono tabular text-ink">{lastRefreshed ? lastRefreshed.toLocaleTimeString("ar-EG") : "—"}</b>
+              </div>
+              <label className="rounded-xl border border-line bg-surface2 px-3 py-2 text-[11px] text-muted flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={autoRefresh} onChange={e => setAutoRefresh(e.target.checked)} /> تحديث تلقائي
+              </label>
+              <a href="/dashboard" className="px-3 py-2 rounded-xl border border-line text-xs hover:border-corona/50">المنصة</a>
+              <button onClick={() => void load()} disabled={busy} className="px-3 py-2 rounded-xl bg-corona text-void text-xs font-bold disabled:opacity-50">تحديث الآن</button>
             </div>
-            <label className="flex items-center gap-1 text-[11px] text-muted">
-              <input type="checkbox" checked={autoRefresh} onChange={e => setAutoRefresh(e.target.checked)} />
-              تحديث تلقائي (٣٠ث)
-            </label>
-            <a href="/dashboard" className="px-3 py-2 rounded-xl border border-line text-xs">المنصة</a>
-            <button onClick={load} disabled={busy} className="px-3 py-2 rounded-xl bg-corona text-void text-xs font-bold">تحديث الآن</button>
           </div>
         </header>
         {error && <div className="mb-4 rounded-xl border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-300">{error}</div>}
-        <nav className="flex gap-2 overflow-auto pb-3">
-          {sections.map(([id, label]) => (
-            <button key={id} onClick={() => setSection(id)} className={`whitespace-nowrap px-3 py-2 rounded-xl text-xs ${section === id ? "bg-corona text-void font-bold" : "border border-line text-muted"}`}>{label}</button>
-          ))}
+        <nav className="rounded-2xl border border-line bg-surface p-2">
+          <div className="flex gap-1 overflow-x-auto">
+            {sections.map(([id, label, Icon]) => (
+              <button key={id} onClick={() => setSection(id)} className={`flex items-center gap-2 whitespace-nowrap px-3 py-2.5 rounded-xl text-xs transition ${section === id ? "bg-corona text-void font-bold shadow-sm" : "text-muted hover:bg-surface2 hover:text-ink"}`}>
+                <Icon size={15} strokeWidth={2} />{label}
+              </button>
+            ))}
+          </div>
         </nav>
 
         {section === "overview" && (
@@ -370,49 +403,76 @@ export default function AdminPage() {
         )}
 
         {section === "risk" && (
-          <div className="grid md:grid-cols-2 gap-3">
-            <Panel title="حدود المخاطر">
-              <pre className="text-xs whitespace-pre-wrap text-muted">{JSON.stringify(risk.limits || {}, null, 2)}</pre>
-              <p className="text-xs mt-3">Kill switch: <b>{risk.kill_switch?.tripped ? "مفعل" : "غير مفعل"}</b></p>
-              <button disabled={busy} onClick={() => confirmAction("تأكيد تغيير Kill switch؟", () => action("/api/admin/risk/kill-switch", "POST", { action: risk.kill_switch?.tripped ? "reset" : "trip", reason: "operator action", confirm: true }))} className="mt-3 px-3 py-2 rounded-xl border border-red-400 text-red-300 text-xs">{risk.kill_switch?.tripped ? "إعادة الضبط" : "تفعيل Kill switch"}</button>
-            </Panel>
-            <Panel title="إيقاف الإدخالات">
-              <p className="text-xs text-muted mb-3">الإيقاف يمنع الإدخالات الجديدة ولا يغلق المراكز تلقائياً. (يخص بوت Dashboard فقط — لا تأثير على بوتات VPS الحقيقية.)</p>
-              <button disabled={busy} onClick={() => confirmAction("تأكيد تغيير إيقاف الإدخالات؟", () => action("/api/admin/controls/entry-pause", "POST", { paused: !o.entry_paused?.paused, reason: "operator action", confirm: true }))} className="px-3 py-2 rounded-xl border border-line text-xs">{o.entry_paused?.paused ? "استئناف الإدخالات" : "إيقاف الإدخالات"}</button>
-            </Panel>
+          <div className="space-y-4">
+            <div className="grid gap-3 sm:grid-cols-3">
+              <Card title="Kill switch" value={risk.kill_switch?.tripped ? "مفعل" : "غير مفعل"} tone={risk.kill_switch?.tripped ? "loss" : "profit"} />
+              <Card title="الإدخالات الجديدة" value={o.entry_paused?.paused ? "متوقفة" : "مسموحة"} tone={o.entry_paused?.paused ? "loss" : "neutral"} />
+              <Card title="حالة إدارة المخاطر" value={risk.status || risk.state || "غير متاحة"} />
+            </div>
+            <div className="grid gap-4 lg:grid-cols-2">
+              <Panel title="حدود المخاطر الحالية">
+                <KeyValueGrid value={risk.limits || {}} empty="لا توجد حدود متاحة" />
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button disabled={busy} onClick={() => confirmAction("تأكيد تغيير Kill switch؟", () => action("/api/admin/risk/kill-switch", "POST", { action: risk.kill_switch?.tripped ? "reset" : "trip", reason: "operator action", confirm: true }))} className="rounded-xl border border-red-400/50 bg-red-500/10 px-3 py-2 text-xs text-red-300 disabled:opacity-50">{risk.kill_switch?.tripped ? "إعادة ضبط Kill switch" : "تفعيل Kill switch"}</button>
+                  <button disabled={busy} onClick={() => confirmAction("تأكيد تغيير إيقاف الإدخالات؟", () => action("/api/admin/controls/entry-pause", "POST", { paused: !o.entry_paused?.paused, reason: "operator action", confirm: true }))} className="rounded-xl border border-line px-3 py-2 text-xs disabled:opacity-50">{o.entry_paused?.paused ? "استئناف الإدخالات" : "إيقاف الإدخالات"}</button>
+                </div>
+              </Panel>
+              <Panel title="معنى إجراءات الأمان">
+                <div className="space-y-3 text-xs text-muted leading-6">
+                  <p><b className="text-ink">Kill switch:</b> يمنع المسارات الجديدة ويحتاج تأكيدًا وسجل تدقيق.</p>
+                  <p><b className="text-ink">إيقاف الإدخالات:</b> يوقف الصفقات الجديدة ولا يغلق المراكز تلقائيًا.</p>
+                  <p><b className="text-ink">بوتات VPS:</b> لا تتأثر بهذه الأزرار؛ ما زالت تُقرأ read-only فقط.</p>
+                </div>
+              </Panel>
+            </div>
           </div>
         )}
 
         {section === "readiness" && (
-          <Panel title="مصفوفة الجاهزية">
-            <p className="text-xs mb-3">البيئة: {data.readiness?.environment || "unavailable"} · Ready: {String(data.readiness?.ready)}</p>
-            <pre className="text-xs whitespace-pre-wrap text-muted">{JSON.stringify(data.readiness?.checks || {}, null, 2)}</pre>
-            <p className="text-xs text-muted mt-3">لا يوجد زر تفعيل مباشر للتداول الحقيقي.</p>
-          </Panel>
+          <div className="space-y-4">
+            <div className="grid gap-3 sm:grid-cols-3">
+              <Card title="Paper" value={data.readiness?.paper_ready ? "جاهز" : "مقفل"} tone={data.readiness?.paper_ready ? "profit" : "loss"} />
+              <Card title="Testnet" value={data.readiness?.testnet_ready ? "جاهز" : "مقفل"} tone={data.readiness?.testnet_ready ? "profit" : "loss"} />
+              <Card title="Live" value="مقفل افتراضيًا" tone="loss" />
+            </div>
+            <Panel title="مصفوفة الجاهزية لكل استراتيجية">
+              <div className="mb-4 rounded-xl border border-amber-400/30 bg-amber-400/10 p-3 text-xs text-amber-200">البيئة الحالية: <b>{data.readiness?.environment || "غير متاحة"}</b> · لا يوجد زر لتفعيل التداول الحقيقي من الواجهة.</div>
+              <KeyValueGrid value={data.readiness?.checks || {}} empty="لا توجد أدلة جاهزية متاحة" />
+            </Panel>
+          </div>
         )}
 
         {section === "health" && (
-          <Panel title="صحة النظام">
-            <pre className="text-xs whitespace-pre-wrap text-muted">{JSON.stringify({ health: data.health, activation: data.activation }, null, 2)}</pre>
-          </Panel>
+          <div className="grid gap-4 lg:grid-cols-2">
+            <Panel title="حالة الخدمات">
+              <KeyValueGrid value={data.health || {}} empty="لا توجد بيانات صحة متاحة" />
+            </Panel>
+            <Panel title="حالة التفعيل">
+              <KeyValueGrid value={data.activation || {}} empty="لا توجد بيانات تفعيل متاحة" />
+            </Panel>
+          </div>
         )}
 
         {section === "audit" && (
-          <Panel title="سجل التدقيق">
+          <Panel title="سجل التدقيق الإداري">
+            <div className="mb-4 rounded-xl border border-line bg-surface2 p-3 text-xs text-muted">كل إجراء حساس يجب أن يظهر هنا مع المنفذ والنتيجة. السجل للقراءة فقط من هذه الصفحة.</div>
             <div className="space-y-2">
               {(data.audit?.items || []).map((x: Json) => (
-                <div key={x.id} className="border-b border-line pb-2 text-xs"><b>{x.action}</b> · {x.actor} · {x.result}<div className="text-muted">{x.at}</div></div>
+                <div key={x.id} className="rounded-xl border border-line bg-surface2 p-3 text-xs"><div className="flex flex-wrap items-center justify-between gap-2"><b>{x.action}</b><span className="text-muted font-mono" dir="ltr">{x.at}</span></div><div className="mt-1 text-muted">المنفذ: {x.actor || "—"} · النتيجة: {x.result || "—"}</div></div>
               ))}
+              {!(data.audit?.items || []).length && <div className="rounded-xl border border-dashed border-line p-6 text-center text-xs text-muted">لا توجد أحداث تدقيق متاحة.</div>}
             </div>
           </Panel>
         )}
 
         {section === "settings" && (
-          <div className="grid md:grid-cols-2 gap-3">
-            <Panel title="التسعير الحالي"><pre className="text-xs whitespace-pre-wrap text-muted">{JSON.stringify(TIERS, null, 2)}</pre></Panel>
-            <Panel title="التكاملات">
-              <p className="text-xs text-muted">الأسرار لا تُعرض في الواجهة. حالة المفاتيح تُدار عبر API المصادق.</p>
-              <div className="flex gap-2 mt-3">
+          <div className="grid gap-4 lg:grid-cols-2">
+            <Panel title="الباقات المنشورة">
+              <div className="grid gap-2 sm:grid-cols-2">{Object.entries(TIERS).map(([key, tier]: [string, any]) => <div key={key} className="rounded-xl border border-line bg-surface2 p-3"><div className="flex items-center justify-between"><b className="text-sm">{key}</b><span className="font-mono text-corona" dir="ltr">{tier?.price ?? "—"}</span></div><div className="mt-1 text-xs text-muted">{tier?.description || tier?.name || "إعداد منشور"}</div></div>)}</div>
+            </Panel>
+            <Panel title="التكاملات والأمان">
+              <p className="text-xs text-muted leading-6">الأسرار لا تُعرض في الواجهة. حالة المفاتيح تُدار عبر API مصادق، وأي تغيير حساس يُسجل في سجل التدقيق.</p>
+              <div className="mt-4 flex flex-wrap gap-2">
                 <button onClick={() => action("/api/telegram/test", "POST", {})} className="px-3 py-2 rounded-xl bg-[#229ED9] text-white text-xs">اختبار تليجرام</button>
                 <button onClick={async () => { try { const r = await fetch(API + "/api/telegram/status", { headers: await authHeaders() }); const j = await r.json(); setError(j.configured ? "تليجرام مربوط" : "تليجرام غير مربوط") } catch (e: any) { setError(e.message) } }} className="px-3 py-2 rounded-xl border border-line text-xs">حالة تليجرام</button>
               </div>
@@ -424,9 +484,15 @@ export default function AdminPage() {
   )
 }
 
-function Card({ title, value }: { title: string; value: string }) {
-  return <div className="rounded-2xl border border-line bg-surface p-4"><div className="text-xs text-muted">{title}</div><div className="text-xl font-black mt-2">{value}</div></div>
+function Card({ title, value, tone = "neutral" }: { title: string; value: string; tone?: "profit" | "loss" | "neutral" }) {
+  const color = tone === "profit" ? "text-emerald-400" : tone === "loss" ? "text-red-400" : "text-ink"
+  return <div className="min-w-0 rounded-2xl border border-line bg-surface p-4 sm:p-5"><div className="text-xs text-muted">{title}</div><div className={`text-xl font-black mt-2 ${color}`}>{value}</div></div>
+}
+function KeyValueGrid({ value, empty }: { value: Json; empty: string }) {
+  const entries = Object.entries(value || {})
+  if (!entries.length) return <div className="rounded-xl border border-dashed border-line p-4 text-xs text-muted">{empty}</div>
+  return <div className="grid gap-2 sm:grid-cols-2">{entries.map(([key, val]) => <div key={key} className="rounded-xl border border-line bg-surface2 p-3"><div className="text-[10px] text-muted">{key.replaceAll("_", " ")}</div><div className="mt-1 font-mono text-sm font-bold tabular" dir="ltr">{typeof val === "object" ? JSON.stringify(val) : String(val ?? "—")}</div></div>)}</div>
 }
 function Panel({ title, children }: { title: string; children: any }) {
-  return <section className="rounded-2xl border border-line bg-surface p-4"><h2 className="font-black text-sm mb-4">{title}</h2>{children}</section>
+  return <section className="rounded-2xl border border-line bg-surface p-4 sm:p-5 shadow-[0_8px_30px_rgba(0,0,0,0.12)]"><div className="mb-4 flex items-center justify-between gap-3 border-b border-line pb-3"><h2 className="font-black text-sm">{title}</h2><span className="h-1.5 w-1.5 rounded-full bg-corona" /></div>{children}</section>
 }

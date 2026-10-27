@@ -1,7 +1,9 @@
 "use client"
+import { useEffect, useState } from "react"
 import { BRAND } from "@/lib/brand"
 import { Logo } from "@/components/Logo"
-import { CandlestickChart, House, KeyRound, Layers, LayoutDashboard, Sparkles } from "lucide-react"
+import { apiIsAdmin } from "@/lib/api"
+import { CandlestickChart, House, KeyRound, Layers, LayoutDashboard, ShieldCheck, Sparkles } from "lucide-react"
 
 const NAV = [
   { href: "/dashboard", label: "لوحة التحكم", icon: LayoutDashboard },
@@ -9,6 +11,7 @@ const NAV = [
   { href: "/dashboard#live-bots", label: "البوتات مباشر", icon: Layers },
   { href: "/llm-lab", label: "مختبر AI", icon: Sparkles },
   { href: "/settings/keys", label: "مفاتيح المنصات", icon: KeyRound },
+  { href: "/admin", label: "الإدارة", icon: ShieldCheck, adminOnly: true },
   { href: "/", label: "الرئيسية", icon: House },
 ]
 
@@ -23,6 +26,21 @@ const PLAN_COPY: Record<string, string> = {
 export function AppShell({ active, tier, engine, nextIn, children }: {
   active: string, tier: string, engine?: { running: boolean }, nextIn?: number | null, children: React.ReactNode,
 }){
+  const [isAdmin, setIsAdmin] = useState(false)
+  const [adminChecked, setAdminChecked] = useState(false)
+
+  useEffect(() => {
+    let active = true
+    apiIsAdmin().then(value => {
+      if (!active) return
+      setIsAdmin(value)
+      setAdminChecked(true)
+    })
+    return () => { active = false }
+  }, [])
+
+  const visibleNav = NAV.filter(item => !item.adminOnly || (adminChecked && isAdmin))
+
   return (
     <main className="min-h-screen bg-void text-ink lg:flex">
       {/* first child = right side in RTL */}
@@ -30,7 +48,7 @@ export function AppShell({ active, tier, engine, nextIn, children }: {
         <div className="space-y-7">
           <a href="/" className="flex justify-end px-2"><Logo size="sm"/></a>
           <nav className="space-y-1">
-            {NAV.map(({ href, label, icon: Icon })=>{
+            {visibleNav.map(({ href, label, icon: Icon })=>{
               const on = href === active
               return (
                 <a key={href} href={href} aria-current={on ? "page" : undefined} className={`flex items-center justify-between gap-3 rounded-xl px-3 py-2.5 text-sm transition ${on ? "bg-surface2 font-bold text-corona" : "text-muted hover:bg-surface2/60 hover:text-ink"}`}>
@@ -60,7 +78,7 @@ export function AppShell({ active, tier, engine, nextIn, children }: {
         <div className="flex items-center justify-between lg:hidden">
           <a href="/"><Logo size="sm"/></a>
           <div className="hidden gap-3 text-xs text-muted min-[360px]:flex">
-            {NAV.filter(n=> n.href!==active && ["/dashboard","/backtest","/"].includes(n.href)).map(n=> <a key={n.href} href={n.href}>{n.label}</a>)}
+            {visibleNav.filter(n=> n.href!==active && ["/dashboard","/backtest","/admin","/"].includes(n.href)).map(n=> <a key={n.href} href={n.href}>{n.label}</a>)}
           </div>
         </div>
         {children}
