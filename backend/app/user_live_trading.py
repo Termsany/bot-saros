@@ -57,6 +57,31 @@ from app.execution_safety import (  # noqa: E402
 STRATEGY = "trend_daily"
 STOP_SHARE = 0.8  # same stop model as strategies_trend.py / bot.py's trend_daily (no shared mutable global)
 
+# Sane absolute bounds for percent-of-equity sizing — a user with $3 of equity must
+# never try to place a sub-exchange-minimum order, and a user with $5M of equity must
+# never have a single cycle size a position larger than this ceiling by formula alone.
+MIN_MARGIN_USDT_FLOOR = 10.0
+MAX_MARGIN_USDT_CEILING = 5000.0
+
+
+def percent_equity_margin_usdt(equity_usdt, risk_per_trade_pct, *,
+                                floor_usdt: float = MIN_MARGIN_USDT_FLOOR,
+                                ceiling_usdt: float = MAX_MARGIN_USDT_CEILING) -> float:
+    """Position margin sized as a percent of the user's own live equity (the same
+    consented risk_per_trade_pct already recorded in their user_live_activation
+    record), clamped to a sane absolute floor/ceiling. Fails closed to the floor
+    (never to zero/negative) on bad inputs so callers still get a usable size — the
+    exchange-minimum-notional check downstream is what actually blocks an entry."""
+    try:
+        equity_usdt = float(equity_usdt)
+        risk_per_trade_pct = float(risk_per_trade_pct)
+    except (TypeError, ValueError):
+        return floor_usdt
+    if equity_usdt <= 0 or risk_per_trade_pct <= 0:
+        return floor_usdt
+    raw = equity_usdt * (risk_per_trade_pct / 100.0)
+    return max(floor_usdt, min(ceiling_usdt, raw))
+
 
 def _now_iso():
     return datetime.now(timezone.utc).isoformat()
@@ -209,7 +234,7 @@ def _place_user_market_order(ex, symbol, side, margin_usdt, leverage, price, cli
 
 
 def run_trend_daily_live_cycle(*, user_id: str, symbol: str, ex, bot_dir, analysis: dict,
-                                activation_path=None, margin_usdt: float = 50.0):
+                                activation_path=None, margin_usdt: "float | None" = None):
     """One live cycle of the single-leg trend_daily strategy for exactly one user.
 
     `analysis` is the same shape bot.analyze()/strategies_trend produces:
@@ -243,6 +268,11 @@ def run_trend_daily_live_cycle(*, user_id: str, symbol: str, ex, bot_dir, analys
             return {"fired": False, "reason": "trend still on, holding"}
         return _exit_position(user_id, symbol, ex, bot_dir, state, state_path, risk_path, price)
 
+    # Restart reconciliation: a disagreement between exchange and local state for this
+    # symbol is never auto-resolved — it blocks new entries until a human clears it.
+    if (state.get("recovery_required") or {}).get(symbol):
+        return {"fired": False, "reason": f"recovery_required for {symbol} — blocked pending reconciliation"}
+
     if not sig.get("on"):
         return {"fired": False, "reason": "no entry signal"}
     seen = state.setdefault("trend_seen", {})
@@ -252,6 +282,8 @@ def run_trend_daily_live_cycle(*, user_id: str, symbol: str, ex, bot_dir, analys
     equity = botmod._fetch_equity_usdt(ex)
     if equity is None:
         return {"fired": False, "reason": "equity unavailable — fail closed, no entry"}
+    if margin_usdt is None:
+        margin_usdt = percent_equity_margin_usdt(equity, risk_per_trade_pct)
     try:
         min_cost = float(((ex.market(symbol).get("limits") or {}).get("cost") or {}).get("min") or 5)
     except Exception:
