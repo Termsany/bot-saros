@@ -502,7 +502,7 @@ export default function AdminPage() {
         {section === "health" && (
           <div className="grid gap-4 lg:grid-cols-2">
             <Panel title="حالة الخدمات">
-              <KeyValueGrid value={data.health || {}} empty="لا توجد بيانات صحة متاحة" />
+              <HealthGrid components={data.health?.components || data.health || {}} />
             </Panel>
             <Panel title="حالة التفعيل">
               <KeyValueGrid value={data.activation || {}} empty="لا توجد بيانات تفعيل متاحة" />
@@ -581,6 +581,11 @@ function AuditList({ items }: { items: Json[] }) {
   const [query, setQuery] = useState("")
   const visible = items.filter(item => !query || JSON.stringify(item).toLowerCase().includes(query.toLowerCase()))
   return <div className="space-y-3"><input value={query} onChange={e => setQuery(e.target.value)} placeholder="ابحث في سجل التدقيق..." className="w-full max-w-sm rounded-xl border border-line bg-surface2 px-3 py-2 text-xs outline-none focus:border-corona/50" />{visible.map((x: Json) => <div key={x.id} className="rounded-xl border border-line bg-surface2 p-3 text-xs"><div className="flex flex-wrap items-center justify-between gap-2"><b>{x.action}</b><span className="text-muted font-mono" dir="ltr">{x.at}</span></div><div className="mt-1 text-muted">المنفذ: {x.actor || "—"} · النتيجة: {x.result || "—"}</div></div>)}{!visible.length && <div className="rounded-xl border border-dashed border-line p-6 text-center text-xs text-muted">لا توجد نتائج.</div>}</div>
+}
+function HealthGrid({ components }: { components: Json }) {
+  const entries = Object.entries(components || {})
+  if (!entries.length) return <div className="rounded-xl border border-dashed border-line p-6 text-center text-xs text-muted">لا توجد بيانات صحة متاحة.</div>
+  return <div className="grid gap-3 sm:grid-cols-2">{entries.map(([name, value]) => { const healthy = ["healthy", "available", "locked", "ok", "running"].includes(String(value)); return <div key={name} className="rounded-2xl border border-line bg-surface2 p-4"><div className="flex items-center justify-between gap-2"><b className="text-sm">{name.replaceAll("_", " ")}</b><span className={`rounded-full px-2 py-1 text-[10px] font-bold ${healthy ? "bg-emerald-400/10 text-emerald-300" : "bg-red-400/10 text-red-300"}`}>{String(value)}</span></div><div className="mt-2 text-[11px] text-muted">آخر فحص من endpoint صحة النظام المصادق.</div></div>})}</div>
 }
 function Panel({ title, children }: { title: string; children: any }) {
   return <section className="rounded-2xl border border-line bg-surface p-4 sm:p-5 shadow-[0_8px_30px_rgba(0,0,0,0.12)]"><div className="mb-4 flex items-center justify-between gap-3 border-b border-line pb-3"><h2 className="font-black text-sm">{title}</h2><span className="h-1.5 w-1.5 rounded-full bg-corona" /></div>{children}</section>
