@@ -94,8 +94,6 @@ class RatioTrendLiveTests(unittest.TestCase):
         ex = RatioFakeBinance()
         self.run_with(ex, sig=1)                            # long A / short B
         state = botmod.load_state()
-        for pos in state["positions"].values():
-            pos["funding_verified"] = True                 # see momentum_ls test: unrelated restart-migration gate
         state["recovery_required"] = {}
         state["ratio_day"] = None                           # force the daily check to run again
         botmod.save_state(state)

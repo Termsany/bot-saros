@@ -91,13 +91,6 @@ class MomentumLsLiveTests(unittest.TestCase):
             botmod.run_once_momentum(ex)
         state = botmod.load_state()
         state["mom_last"] = "2020-01-01T00:00:00+00:00"       # force the rebalance clock to fire again
-        # Pre-existing, strategy-agnostic gap (also affects trend_daily): load_state() flags any
-        # position missing funding_verified as needing recovery, but that flag is only ever set
-        # during a close (_refresh_funding_evidence), never at entry — so a bare reload right after
-        # opening always trips it. Out of this task's scope; stub it so this test stays focused on
-        # the rebalance basket's own atomicity, not that unrelated restart-migration check.
-        for pos in state["positions"].values():
-            pos["funding_verified"] = True
         state["recovery_required"] = {}
         botmod.save_state(state)
         new_ranked = [(sym, (i - 10) / 100.0) for i, sym in enumerate(reversed(SYMS))]

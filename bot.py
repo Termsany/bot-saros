@@ -1004,8 +1004,16 @@ def load_state():
             data.setdefault("recovery_required", {})
             if not CONFIG.get("paper_trading"):
                 for symbol, pos in data["positions"].items():
-                    if pos.get("type") == "paper" or pos.get("contract_size_verified") is not True or pos.get("entry_fee_rate") is None or pos.get("funding_verified") is not True:
-                        data["recovery_required"].setdefault(symbol, {"reason": "legacy live position lacks verified contract, fee, or funding metadata", "at": datetime.now(timezone.utc).isoformat()})
+                    # contract_size_verified and entry_fee_rate are set at ENTRY time (every live entry
+                    # path writes them) — missing them means genuinely pre-verification legacy state.
+                    # funding_verified is deliberately close-only (set exclusively by
+                    # _refresh_funding_evidence when a position is closed, never at entry) — requiring
+                    # it here would flag every freshly-opened, perfectly healthy live position as
+                    # needing recovery on every single restart, for any of the 9 strategies. PnL
+                    # accounting still fails closed on missing funding evidence at close time via
+                    # _funding_pnl(required=True); this load-time gate must not duplicate that check.
+                    if pos.get("type") == "paper" or pos.get("contract_size_verified") is not True or pos.get("entry_fee_rate") is None:
+                        data["recovery_required"].setdefault(symbol, {"reason": "legacy live position lacks verified contract or fee metadata", "at": datetime.now(timezone.utc).isoformat()})
             return data
         except: pass
     return {"positions":{},"last_trade":{},"stats":{"trades":0,"wins":0,"losses":0,"pnl":0},"history":[],"pending_orders":{},"recovery_required":{}}
