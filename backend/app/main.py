@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from . import admin_control
 from app import risk_manager
 from app import live_bots_feed
+from app import admin_users
 
 try:
     from dotenv import load_dotenv; load_dotenv()
@@ -1327,6 +1328,36 @@ async def admin_recovery(user: dict = Depends(require_admin)):
 @app.get("/api/admin/health")
 async def admin_health(user: dict = Depends(require_admin)):
     return {"available":True,"at":datetime.now(timezone.utc).isoformat(),"components":_health_snapshot()}
+
+class UserBanReq(AdminModel):
+    banned: bool
+    confirm: bool = False
+
+@app.get("/api/admin/users")
+async def admin_users_list(user: dict = Depends(require_admin)):
+    """Users & Plans tab: Supabase account identity + plan tier + local per-user bot settings,
+    merged read-only. Supabase being unreachable degrades to available=False — never fabricated."""
+    rate_limit(user["id"], "admin_users", 20, 60)
+    gotrue = await admin_users.fetch_gotrue_users()
+    tiers = await admin_users.fetch_profile_tiers()
+    async with async_session() as sess:
+        rows = (await sess.execute(select(UserSetting))).scalars().all()
+    local = {r.user_id: {"capital": r.capital, "strategy": r.strategy, "started_at": r.started_at, "updated_at": r.updated_at} for r in rows}
+    return admin_users.merge_users(gotrue, tiers, local)
+
+@app.post("/api/admin/users/{target_user_id}/ban")
+async def admin_user_ban(target_user_id: str, req: UserBanReq, user: dict = Depends(require_admin)):
+    """Ban/unban a Supabase account (GoTrue admin ban_duration). Local per-user settings/tier are untouched."""
+    rate_limit(user["id"], "admin_mutation", 30, 60)
+    if not req.confirm: raise HTTPException(400, "confirmation required")
+    actor = await _admin_actor(user)
+    result = await admin_users.set_user_ban(target_user_id, req.banned)
+    admin_control.audit(BOT_DIR, actor, "user_ban" if req.banned else "user_unban",
+                         "ok" if result.get("ok") else "failed", {"target_user_id": target_user_id})
+    if not result.get("ok"):
+        raise HTTPException(502, result.get("error") or "ban update failed")
+    return {"ok": True, "user_id": target_user_id, "banned": req.banned}
+
 
 @app.get("/api/admin/readiness")
 async def admin_readiness(user: dict = Depends(require_admin)):
