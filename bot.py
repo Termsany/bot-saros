@@ -1916,7 +1916,12 @@ def reconcile_live(state, ex):
     try:
         live = {}
         positions = ex.fetch_positions()
-        if not isinstance(positions, list) or not positions:
+        # An empty list is a NORMAL, valid answer — a flat account (no open positions) — not a bad read.
+        # Only a non-list response (None, a dict error body ccxt didn't raise on, etc.) is actually
+        # incomplete/untrustworthy and should block entries. Blocking on a merely-empty list meant a bot
+        # could never take its very first trade from a clean account (every fresh demo/testnet/live account
+        # starts flat) — discovered during Testnet E2E validation (Phase 1 of the live-trading roadmap).
+        if not isinstance(positions, list):
             _ENTRY_BLOCK["reason"] = "exchange position snapshot is empty or incomplete"
             log(f"⚠️ {_ENTRY_BLOCK['reason']}")
             save_state(state)
