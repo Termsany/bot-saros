@@ -212,6 +212,17 @@ class TrendLiveTests(unittest.TestCase):
         botmod.reconcile_live(self.state, ex)
         self.assertIn("equity", botmod._ENTRY_BLOCK["reason"])
 
+    def test_restart_after_a_fresh_entry_does_not_force_recovery(self):
+        """A bare restart right after opening a live position must not trip recovery_required —
+        funding_verified is only ever set at close (_refresh_funding_evidence), never at entry, so
+        requiring it at load time would flag every healthy freshly-opened position on every restart."""
+        ex = FakeBinance()
+        botmod.try_enter("SOL/USDT:USDT", SIG_ON, self.state, ex)
+        botmod.save_state(self.state)
+        reloaded = botmod.load_state()
+        self.assertEqual(reloaded["recovery_required"], {})
+        self.assertIn("SOL/USDT:USDT", reloaded["positions"])
+
 
 class StartupGateTests(unittest.TestCase):
     def _run(self, *args, env=None):
