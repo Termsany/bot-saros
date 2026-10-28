@@ -1,6 +1,6 @@
 "use client"
 import { useEffect, useMemo, useRef, useState } from "react"
-import { Activity, BarChart3, Bot, ClipboardList, Gauge, LockKeyhole, Settings2, ShieldAlert, ShieldCheck, WalletCards } from "lucide-react"
+import { Activity, BarChart3, Bot, ClipboardList, Gauge, History, LockKeyhole, Settings2, ShieldAlert, ShieldCheck, WalletCards } from "lucide-react"
 import { Logo } from "@/components/Logo"
 import { TIERS } from "@/lib/strategies"
 import { apiIsAdmin } from "@/lib/api"
@@ -19,6 +19,7 @@ const sections: [string, string, React.ComponentType<{ size?: number; strokeWidt
   ["readiness", "جاهزية التشغيل", LockKeyhole],
   ["health", "صحة النظام", Activity],
   ["recovery", "Recovery & Reconciliation", ShieldAlert],
+  ["timeline", "الخط الزمني", History],
   ["audit", "سجل التدقيق", ClipboardList],
   ["settings", "الإعدادات", Settings2],
 ]
@@ -224,6 +225,7 @@ export default function AdminPage() {
   const [endpointErrors, setEndpointErrors] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [paletteOpen, setPaletteOpen] = useState(false)
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null)
   const [autoRefresh, setAutoRefresh] = useState(true)
   const [access, setAccess] = useState<"checking" | "allowed" | "denied">("checking")
@@ -272,7 +274,7 @@ export default function AdminPage() {
     url.searchParams.set("tab", id)
     window.history.replaceState({}, "", `${url.pathname}?${url.searchParams.toString()}`)
   }
-  const sectionEndpoints: Record<string, string[]> = { overview: ["overview", "recovery"], live: ["paper"], strategies: ["strategies"], paper: ["paper"], risk: ["risk", "recovery"], readiness: ["readiness"], health: ["health", "recovery", "activation"], recovery: ["recovery"], audit: ["audit"], settings: [] }
+  const sectionEndpoints: Record<string, string[]> = { overview: ["overview", "recovery"], live: ["paper"], strategies: ["strategies"], paper: ["paper"], risk: ["risk", "recovery"], readiness: ["readiness"], health: ["health", "recovery", "activation"], recovery: ["recovery"], timeline: ["audit", "recovery"], audit: ["audit"], settings: [] }
   const currentSectionErrors = sectionEndpoints[section]?.map(key => endpointErrors[key]).filter(Boolean) as string[] || []
   useEffect(() => {
     const requested = new URLSearchParams(window.location.search).get("tab")
@@ -292,6 +294,13 @@ export default function AdminPage() {
     return () => clearInterval(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoRefresh, access])
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setPaletteOpen(o => !o) }
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [])
 
   const action = async (path: string, method: string, body: Json) => {
     setBusy(true)
@@ -312,16 +321,29 @@ export default function AdminPage() {
   const liveSummaryOverview: Json = o.live_bots?.summary || liveBotsPortfolio.aggregate || {}
   const dashboardBot: Json = data.paper?.dashboard_bot || { positions: data.paper?.positions || [], history: data.paper?.history || [] }
   const recoveryRequired = recovery.recovery_required || {}
-  const recoveryAlerts = Object.entries(recoveryRequired).map(([symbol, item]: [string, any]) => ({ title: `Recovery مطلوب · ${symbol}`, message: item?.reason || "يوجد وضع يحتاج مراجعة", severity: "critical" }))
-  if (recovery.reconciliation?.state && recovery.reconciliation.state !== "ok") recoveryAlerts.push({ title: "Reconciliation", message: `الحالة الحالية: ${recovery.reconciliation.state}`, severity: "warning" })
-  const operationalAlerts = [
-    ...recoveryAlerts,
+  const recoveryAlerts = Object.entries(recoveryRequired).map(([symbol, item]: [string, any]) => ({ title: `Recovery مطلوب · ${symbol}`, message: item?.reason || "يوجد وضع يحتاج مراجعة", severity: "critical", at: item?.at }))
+  const reconciliationStale = recovery.reconciliation?.state && recovery.reconciliation.state !== "ok"
+  if (reconciliationStale) recoveryAlerts.push({ title: "Reconciliation", message: `الحالة الحالية: ${recovery.reconciliation.state}`, severity: "warning", at: recovery.reconciliation?.at })
+  const otherAlerts = [
     ...(Array.isArray(o.alerts) ? o.alerts : []),
     ...(Array.isArray(o.warnings) ? o.warnings : []),
     ...(Array.isArray(o.recovery_warnings) ? o.recovery_warnings : []),
     ...(Array.isArray(data.health?.alerts) ? data.health.alerts : []),
     ...(risk.kill_switch?.tripped ? [{ title: "Kill switch", message: "مفعل حاليًا ويمنع الإدخالات الجديدة.", severity: "critical" }] : []),
     ...(o.entry_paused?.paused ? [{ title: "إيقاف الإدخالات", message: "الإدخالات الجديدة متوقفة.", severity: "warning" }] : []),
+  ]
+  const operationalAlerts = [...recoveryAlerts, ...otherAlerts]
+  const globalSeverity: "ok" | "warning" | "critical" = operationalAlerts.some(a => a.severity === "critical" || a.severity === "error")
+    ? "critical" : operationalAlerts.length > 0 ? "warning" : "ok"
+  const timelineEvents: TimelineEvent[] = [
+    ...(data.audit?.items || []).map((x: Json) => ({ at: x.at, title: x.action || "إجراء إداري", detail: `${x.actor || "—"} · ${x.result || "—"}`, kind: "audit" as const })),
+    ...otherAlerts.map((a: Json) => ({ title: a.title || "تنبيه", detail: a.message || "", kind: "alert" as const })),
+    ...Object.entries(recoveryRequired).map(([symbol, item]: [string, any]) => ({ at: item?.at, title: `Recovery · ${symbol}`, detail: item?.reason || "مراجعة مطلوبة", kind: "recovery" as const })),
+    ...(reconciliationStale ? [{ at: recovery.reconciliation?.at, title: "Reconciliation", detail: `الحالة الحالية: ${recovery.reconciliation.state}`, kind: "recovery" as const }] : []),
+  ]
+  const paletteItems: CommandItem[] = [
+    ...sections.map(([id, label]) => ({ id: `tab-${id}`, label: `فتح تبويب: ${label}`, hint: "تبويب", onSelect: () => selectSection(id) })),
+    ...ALL_STRATEGY_IDS.map(id => ({ id: `strategy-${id}`, label: STRATEGY_LABELS_AR[id] || id, hint: "استراتيجية · البوتات الحية", onSelect: () => selectSection("live") })),
   ]
 
   if (access !== "allowed") {
@@ -338,6 +360,8 @@ export default function AdminPage() {
   }
 
   return (
+    <>
+    <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} items={paletteItems} />
     <div dir="rtl" className="min-h-screen bg-void text-ink p-4 lg:p-8">
       <div className="max-w-[1480px] mx-auto space-y-5">
         <header className="rounded-2xl border border-line bg-surface p-4 sm:p-5">
@@ -353,6 +377,8 @@ export default function AdminPage() {
               </div>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
+              <GlobalHealthDot severity={globalSeverity} />
+              <button onClick={() => setPaletteOpen(true)} className="rounded-xl border border-line bg-surface2 px-3 py-2 text-[11px] text-muted hover:border-corona/50">بحث سريع <span className="font-mono mx-1" dir="ltr">Ctrl+K</span></button>
               <div className="rounded-xl border border-line bg-surface2 px-3 py-2 text-[11px] text-muted flex items-center gap-2">
                 <span className="inline-block w-2 h-2 rounded-full bg-emerald-400" />
                 <span>آخر تحديث</span><b className="font-mono tabular text-ink">{lastRefreshed ? lastRefreshed.toLocaleTimeString("ar-EG") : "—"}</b>
@@ -417,7 +443,11 @@ export default function AdminPage() {
         )}
 
         {section === "strategies" && (
-          <Panel title="تسع استراتيجيات · Paper only · التحكم هنا للبوت الذي تديره هذه اللوحة فقط">
+          <div className="space-y-4">
+            <Panel title="مقارنة سريعة بين كل الاستراتيجيات — بيانات VPS الحقيقية">
+              <StrategyComparisonTable strategyIds={ALL_STRATEGY_IDS} liveStrategies={liveStrategies} />
+            </Panel>
+            <Panel title="تسع استراتيجيات · Paper only · التحكم هنا للبوت الذي تديره هذه اللوحة فقط">
             <div className="overflow-auto">
               <table className="w-full text-xs">
                 <thead><tr className="text-muted"><th className="p-2 text-right">الاستراتيجية</th><th>حالة Dashboard</th><th>حالة VPS الحقيقية</th><th>آخر تحديث VPS</th><th>النمط</th><th>إجراء Dashboard</th></tr></thead>
@@ -439,6 +469,7 @@ export default function AdminPage() {
             </div>
             <p className="text-xs text-amber-300/90 mt-3">هذا التحكم (تشغيل/إيقاف) يخص فقط بوت Dashboard التجريبي (bot_loop/SQL) — لا يوجد تحكم في بوتات VPS الحقيقية السبعة من هنا؛ راجع تبويب "البوتات الحية".</p>
           </Panel>
+          </div>
         )}
 
         {section === "paper" && (
@@ -525,6 +556,12 @@ export default function AdminPage() {
           </div>
         )}
 
+        {section === "timeline" && (
+          <Panel title="الخط الزمني الموحّد — تدقيق + تنبيهات + Recovery">
+            <UnifiedTimeline events={timelineEvents} />
+          </Panel>
+        )}
+
         {section === "audit" && (
           <Panel title="سجل التدقيق الإداري">
             <div className="mb-4 rounded-xl border border-line bg-surface2 p-3 text-xs text-muted">كل إجراء حساس يجب أن يظهر هنا مع المنفذ والنتيجة. السجل للقراءة فقط من هذه الصفحة.</div>
@@ -548,6 +585,7 @@ export default function AdminPage() {
         )}
       </div>
     </div>
+    </>
   )
 }
 
@@ -563,6 +601,59 @@ function KeyValueGrid({ value, empty }: { value: Json; empty: string }) {
 function CheckPill({ label, value }: { label: string; value: any }) {
   const ok = value === true
   return <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-bold ${ok ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300" : "border-red-400/30 bg-red-400/10 text-red-300"}`}><span>{ok ? "✓" : "×"}</span>{label}</span>
+}
+/** A small always-visible dot in the header summarizing worst-case operational state across the whole center. */
+function GlobalHealthDot({ severity }: { severity: "ok" | "warning" | "critical" }) {
+  const meta = { ok: ["bg-emerald-400", "سليم"], warning: ["bg-amber-400", "تحذير"], critical: ["bg-red-400", "حرج"] }[severity]
+  return <span className="flex items-center gap-1.5 rounded-xl border border-line bg-surface2 px-3 py-2 text-[11px] text-muted"><span className={`inline-block h-2 w-2 rounded-full ${meta[0]} ${severity !== "ok" ? "animate-pulse" : ""}`} />{meta[1]}</span>
+}
+type CommandItem = { id: string; label: string; hint?: string; onSelect: () => void }
+/** Ctrl/Cmd+K palette: jump to any tab or strategy without hunting through nav. Pure client-side, no network calls. */
+function CommandPalette({ open, onClose, items }: { open: boolean; onClose: () => void; items: CommandItem[] }) {
+  const [query, setQuery] = useState("")
+  const inputRef = useRef<HTMLInputElement>(null)
+  useEffect(() => { if (open) { setQuery(""); setTimeout(() => inputRef.current?.focus(), 0) } }, [open])
+  if (!open) return null
+  const visible = items.filter(item => !query || item.label.toLowerCase().includes(query.toLowerCase()) || item.hint?.toLowerCase().includes(query.toLowerCase()))
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 p-4 pt-24" onClick={onClose}>
+      <div className="w-full max-w-lg rounded-2xl border border-line bg-surface p-3 shadow-2xl" onClick={e => e.stopPropagation()}>
+        <input ref={inputRef} value={query} onChange={e => setQuery(e.target.value)} placeholder="بحث سريع · تبويب أو استراتيجية... (Esc للإغلاق)"
+          onKeyDown={e => { if (e.key === "Escape") onClose(); if (e.key === "Enter" && visible[0]) { visible[0].onSelect(); onClose() } }}
+          className="w-full rounded-xl border border-line bg-surface2 px-3 py-2 text-sm outline-none focus:border-corona/50" />
+        <div className="mt-2 max-h-80 overflow-auto space-y-1">
+          {visible.map(item => (
+            <button key={item.id} onClick={() => { item.onSelect(); onClose() }} className="w-full flex items-center justify-between gap-2 rounded-xl px-3 py-2.5 text-right text-xs hover:bg-surface2">
+              <span className="font-bold">{item.label}</span>{item.hint && <span className="text-muted">{item.hint}</span>}
+            </button>
+          ))}
+          {!visible.length && <div className="p-4 text-center text-xs text-muted">لا توجد نتائج.</div>}
+        </div>
+      </div>
+    </div>
+  )
+}
+/** Side-by-side comparison of every strategy's live PnL/positions/trade count — faster than opening each card. */
+function StrategyComparisonTable({ strategyIds, liveStrategies }: { strategyIds: string[]; liveStrategies: Json }) {
+  const [sortKey, setSortKey] = useState<"pnl" | "open" | "closed">("pnl")
+  const rows = strategyIds.map(id => {
+    const e = liveStrategies[id] || {}
+    const stats = e.stats || {}
+    const pnl = (Number(stats.realized) || 0) + (Number(stats.unrealized) || 0)
+    return { id, status: e.status || "unavailable", pnl, open: (e.positions || []).length, closed: stats.closed ?? 0, winRate: stats.closed ? Math.round((Number(stats.wins) || 0) / stats.closed * 100) : null }
+  }).sort((a, b) => (b[sortKey] || 0) - (a[sortKey] || 0))
+  return (
+    <div className="overflow-auto">
+      <table className="w-full text-xs">
+        <thead><tr className="text-muted"><th className="p-2 text-right">الاستراتيجية</th><th>الحالة</th>
+          {(["open", "closed", "pnl"] as const).map(k => <th key={k} onClick={() => setSortKey(k)} className="cursor-pointer select-none">{k === "open" ? "مفتوحة" : k === "closed" ? "مغلقة" : "PnL"}{sortKey === k ? " ▼" : ""}</th>)}
+          <th>نسبة الفوز</th></tr></thead>
+        <tbody>
+          {rows.map(r => <tr key={r.id} className="border-t border-line"><td className="p-2 font-bold">{STRATEGY_LABELS_AR[r.id] || r.id}</td><td><StatusBadge status={r.status} /></td><td>{r.open}</td><td>{r.closed}</td><td className={pnlColor(r.pnl)}>{fmtNum(r.pnl)}</td><td>{r.winRate != null ? `${r.winRate}%` : "—"}</td></tr>)}
+        </tbody>
+      </table>
+    </div>
+  )
 }
 function AlertCenter({ alerts }: { alerts: any[] }) {
   const [filter, setFilter] = useState<"all" | "critical" | "warning">("all")
@@ -581,6 +672,30 @@ function AuditList({ items }: { items: Json[] }) {
   const [query, setQuery] = useState("")
   const visible = items.filter(item => !query || JSON.stringify(item).toLowerCase().includes(query.toLowerCase()))
   return <div className="space-y-3"><input value={query} onChange={e => setQuery(e.target.value)} placeholder="ابحث في سجل التدقيق..." className="w-full max-w-sm rounded-xl border border-line bg-surface2 px-3 py-2 text-xs outline-none focus:border-corona/50" />{visible.map((x: Json) => <div key={x.id} className="rounded-xl border border-line bg-surface2 p-3 text-xs"><div className="flex flex-wrap items-center justify-between gap-2"><b>{x.action}</b><span className="text-muted font-mono" dir="ltr">{x.at}</span></div><div className="mt-1 text-muted">المنفذ: {x.actor || "—"} · النتيجة: {x.result || "—"}</div></div>)}{!visible.length && <div className="rounded-xl border border-dashed border-line p-6 text-center text-xs text-muted">لا توجد نتائج.</div>}</div>
+}
+type TimelineEvent = { at?: string; title: string; detail: string; kind: "audit" | "alert" | "recovery" }
+/** Merges audit log + operational alerts + recovery items into one chronological, filterable feed. */
+function UnifiedTimeline({ events }: { events: TimelineEvent[] }) {
+  const [kind, setKind] = useState<"all" | "audit" | "alert" | "recovery">("all")
+  const dated = events.filter(e => e.at).sort((a, b) => (b.at || "").localeCompare(a.at || ""))
+  const undated = events.filter(e => !e.at)
+  const sorted = [...dated, ...undated]
+  const visible = sorted.filter(e => kind === "all" || e.kind === kind)
+  const kindMeta: Record<string, [string, string]> = { audit: ["سجل تدقيق", "border-line bg-surface2 text-ink"], alert: ["تنبيه", "border-amber-400/30 bg-amber-400/10 text-amber-200"], recovery: ["Recovery", "border-red-400/30 bg-red-400/10 text-red-200"] }
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2"><span className="text-[11px] text-muted">{visible.length} حدث</span>
+        {(["all", "audit", "alert", "recovery"] as const).map(k => <button key={k} onClick={() => setKind(k)} className={`rounded-full px-2.5 py-1 text-[10px] font-bold ${kind === k ? "bg-corona text-void" : "border border-line text-muted"}`}>{k === "all" ? "الكل" : kindMeta[k][0]}</button>)}
+      </div>
+      <div className="space-y-2">
+        {visible.slice(0, 50).map((e, i) => <div key={i} className={`rounded-xl border p-3 text-xs ${kindMeta[e.kind][1]}`}>
+          <div className="flex flex-wrap items-center justify-between gap-2"><b>{e.title}</b>{e.at && <span className="font-mono text-muted" dir="ltr">{e.at}</span>}</div>
+          <div className="mt-1 text-muted">{e.detail}</div>
+        </div>)}
+        {!visible.length && <div className="rounded-xl border border-dashed border-line p-6 text-center text-xs text-muted">لا توجد أحداث لهذا التصنيف.</div>}
+      </div>
+    </div>
+  )
 }
 function HealthGrid({ components }: { components: Json }) {
   const entries = Object.entries(components || {})
