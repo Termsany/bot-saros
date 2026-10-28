@@ -1,6 +1,6 @@
 "use client"
 import { useEffect, useMemo, useRef, useState } from "react"
-import { Activity, BarChart3, Bot, ClipboardList, Gauge, LockKeyhole, Settings2, ShieldCheck, WalletCards } from "lucide-react"
+import { Activity, BarChart3, Bot, ClipboardList, Gauge, LockKeyhole, Settings2, ShieldAlert, ShieldCheck, WalletCards } from "lucide-react"
 import { Logo } from "@/components/Logo"
 import { TIERS } from "@/lib/strategies"
 import { apiIsAdmin } from "@/lib/api"
@@ -18,6 +18,7 @@ const sections: [string, string, React.ComponentType<{ size?: number; strokeWidt
   ["risk", "المخاطر والأمان", ShieldCheck],
   ["readiness", "جاهزية التشغيل", LockKeyhole],
   ["health", "صحة النظام", Activity],
+  ["recovery", "Recovery & Reconciliation", ShieldAlert],
   ["audit", "سجل التدقيق", ClipboardList],
   ["settings", "الإعدادات", Settings2],
 ]
@@ -271,7 +272,7 @@ export default function AdminPage() {
     url.searchParams.set("tab", id)
     window.history.replaceState({}, "", `${url.pathname}?${url.searchParams.toString()}`)
   }
-  const sectionEndpoints: Record<string, string[]> = { overview: ["overview", "recovery"], live: ["paper"], strategies: ["strategies"], paper: ["paper"], risk: ["risk", "recovery"], readiness: ["readiness"], health: ["health", "recovery", "activation"], audit: ["audit"], settings: [] }
+  const sectionEndpoints: Record<string, string[]> = { overview: ["overview", "recovery"], live: ["paper"], strategies: ["strategies"], paper: ["paper"], risk: ["risk", "recovery"], readiness: ["readiness"], health: ["health", "recovery", "activation"], recovery: ["recovery"], audit: ["audit"], settings: [] }
   const currentSectionErrors = sectionEndpoints[section]?.map(key => endpointErrors[key]).filter(Boolean) as string[] || []
   useEffect(() => {
     const requested = new URLSearchParams(window.location.search).get("tab")
@@ -506,6 +507,21 @@ export default function AdminPage() {
             <Panel title="حالة التفعيل">
               <KeyValueGrid value={data.activation || {}} empty="لا توجد بيانات تفعيل متاحة" />
             </Panel>
+          </div>
+        )}
+
+        {section === "recovery" && (
+          <div className="space-y-4">
+            <div className="grid gap-3 sm:grid-cols-3">
+              <Card title="Recovery مطلوب" value={String(Object.keys(recovery.recovery_required || {}).length)} tone={Object.keys(recovery.recovery_required || {}).length ? "loss" : "profit"} />
+              <Card title="Reconciliation" value={recovery.reconciliation?.state || "غير متاح"} tone={recovery.reconciliation?.state === "ok" ? "profit" : "loss"} />
+              <Card title="Risk reservations" value={String(Object.keys(recovery.risk_reservations || {}).length)} />
+            </div>
+            <Panel title="حالات تحتاج مراجعة">
+              {Object.entries(recovery.recovery_required || {}).map(([symbol, item]: [string, any]) => <div key={symbol} className="rounded-xl border border-red-400/30 bg-red-400/10 p-3 text-xs text-red-200"><b>{symbol}</b><span className="mx-2">·</span>{item?.reason || "مراجعة مطلوبة"}</div>)}
+              {!Object.keys(recovery.recovery_required || {}).length && <div className="rounded-xl border border-emerald-400/20 bg-emerald-400/5 p-4 text-xs text-emerald-300">لا توجد حالات Recovery معلقة.</div>}
+            </Panel>
+            <Panel title="تفاصيل Reconciliation وRisk reservations"><KeyValueGrid value={{ reconciliation: recovery.reconciliation || {}, risk_reservations: recovery.risk_reservations || {} }} empty="لا توجد بيانات" /></Panel>
           </div>
         )}
 
