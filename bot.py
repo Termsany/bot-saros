@@ -65,6 +65,14 @@ LOG_PATH   = Path(__file__).parent / CONFIG["log_file"]
 RISK_PATH  = Path(__file__).parent / "risk_state.json"   # shared Central Risk Manager ledger across ALL strategy processes
 ACTIVATION_PATH = Path(__file__).parent / "live_activation.sqlite3"
 
+# All 9 strategies route real orders through the same proven primitives (place_order + OCO stop/TP,
+# risk_manager.pre_trade_gate/register_open_risk, reconcile_live, close_live_position/check_sl_tp):
+# single-leg ones via _single_leg_live_entry/_single_leg_live_exit (or try_enter_trend/try_enter for
+# trend_daily/ict), multi-leg ones via the durable basket engine (_phase2_live_basket). --live is
+# gated on this list, not on a single hardcoded strategy name.
+LIVE_READY_STRATEGIES = {"ict", "trend_daily", "wave_flats", "vol_breakout", "rsi2_pullback",
+                          "trend_breakout", "listing_short", "momentum_ls", "ratio_trend"}
+
 # Crude correlation grouping for the correlated-risk cap: nearly every altcoin trades as
 # BTC-beta, so "majors" vs "alts" is the conservative default until a real correlation
 # matrix is computed. Override via CONFIG["correlation_groups"] = {symbol: group}.
@@ -3341,7 +3349,9 @@ if __name__=="__main__":
     if args.expect_env and binance_env() != args.expect_env:
         p.error(f"BINANCE_ENV={binance_env()} لكن الخدمة متظبطة على {args.expect_env} — مش هيشتغل")
     if args.live:
-        if not trend_mode(): p.error("--live متاح للترند اليومي بس (--strategy trend_daily)")
+        unsupported = [s for s in (CONFIG.get("enabled_strategies") or []) if s not in LIVE_READY_STRATEGIES]
+        if unsupported:
+            p.error(f"--live مش متاح لـ {', '.join(unsupported)} — الاستراتيجيات المتاحة: {', '.join(sorted(LIVE_READY_STRATEGIES))}")
         if binance_env() == "live" and os.getenv("ALLOW_LIVE_TRADING", "").strip().lower() != "true":
             p.error("فلوس حقيقية محتاجة ALLOW_LIVE_TRADING=true — أو BINANCE_ENV=demo للتجربة بفلوس وهمية على Binance")
         CONFIG["paper_trading"]=False
