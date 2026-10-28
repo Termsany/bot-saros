@@ -2442,6 +2442,7 @@ def try_enter(symbol, analysis, state, ex):
                 if pnl>0: state["stats"]["wins"]+=1
                 else: state["stats"]["losses"]+=1
                 state["positions"].pop(symbol,None); state["last_trade"][symbol]=datetime.now(timezone.utc).isoformat(); save_state(state)
+                if not CONFIG["paper_trading"]: _release_position_risk(symbol, pos)
             except Exception as e:
                 if not CONFIG["paper_trading"]:
                     state.setdefault("recovery_required", {})[symbol] = {"reason": f"reversal close accounting or protective cleanup unconfirmed: {e}", "at": datetime.now(timezone.utc).isoformat()}
