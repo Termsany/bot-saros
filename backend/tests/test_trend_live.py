@@ -153,6 +153,16 @@ class TrendLiveTests(unittest.TestCase):
         self.assertNotIn("SOL/USDT:USDT", self.state["positions"])
         h = self.state["history"][-1]; self.assertEqual(h["reason"], "وقف المنصة"); self.assertAlmostEqual(h["exit"], 82.0)
 
+    def test_clean_flat_account_does_not_block_entries(self):
+        """A brand-new/clean account with zero open positions returns [] from fetch_positions() —
+        that's a normal, valid flat state, not an incomplete read, and must not block the first trade."""
+        ex = FakeBinance()   # ex.positions stays empty -> fetch_positions() returns []
+        botmod.reconcile_live(self.state, ex)
+        self.assertEqual(botmod._ENTRY_BLOCK["reason"], "")
+        botmod.try_enter("SOL/USDT:USDT", SIG_ON, self.state, ex)
+        self.assertIn("SOL/USDT:USDT", self.state["positions"])
+        self.assertEqual(len(ex.orders), 2)   # entry + stop, not blocked
+
     def test_unknown_position_blocks_new_entries(self):
         ex = FakeBinance(); ex.positions["DOGE/USDT"] = 100.0                           # opened by hand on the same account
         botmod.reconcile_live(self.state, ex)
@@ -189,7 +199,7 @@ class TrendLiveTests(unittest.TestCase):
         self.assertNotIn("trend_daily:SOL/USDT:USDT", riskmgr_mod.load_risk_state(botmod.RISK_PATH)["open_risk"])
 
     def test_tripped_kill_switch_blocks_new_entries_via_reconcile(self):
-        ex = FakeBinance(); ex.positions["BTC/USDT"] = 0.0   # keep fetch_positions() non-empty, contributes nothing to `live`
+        ex = FakeBinance()
         riskmgr_mod.trip_kill_switch(botmod.RISK_PATH, "pre-tripped for this test")
         botmod.reconcile_live(self.state, ex)
         self.assertIn("kill switch", botmod._ENTRY_BLOCK["reason"])
@@ -197,7 +207,7 @@ class TrendLiveTests(unittest.TestCase):
         self.assertEqual(ex.orders, [])
 
     def test_missing_equity_blocks_new_entries_via_reconcile(self):
-        ex = FakeBinance(); ex.positions["BTC/USDT"] = 0.0   # keep fetch_positions() non-empty, contributes nothing to `live`
+        ex = FakeBinance()
         ex.fetch_balance = lambda: (_ for _ in ()).throw(Exception("network down"))
         botmod.reconcile_live(self.state, ex)
         self.assertIn("equity", botmod._ENTRY_BLOCK["reason"])
