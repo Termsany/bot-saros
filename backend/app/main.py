@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from . import admin_control
 from app import risk_manager
 from app import live_bots_feed
+from app import admin_users
 
 try:
     from dotenv import load_dotenv; load_dotenv()
@@ -1327,6 +1328,92 @@ async def admin_recovery(user: dict = Depends(require_admin)):
 @app.get("/api/admin/health")
 async def admin_health(user: dict = Depends(require_admin)):
     return {"available":True,"at":datetime.now(timezone.utc).isoformat(),"components":_health_snapshot()}
+
+class UserBanReq(AdminModel):
+    banned: bool
+    confirm: bool = False
+
+class UserSettingsPatch(AdminModel):
+    """Admin-only edit of a user's LOCAL per-user bot allocation (user_settings table).
+
+    This never touches the 7 shared VPS paper bots (systemd services, unrelated to any
+    single user) — it only edits the row this dashboard already reads/writes for that user.
+    """
+    capital: Optional[float] = Field(None, ge=0, le=10_000_000)
+    strategy: Optional[str] = None
+    confirm: bool = False
+
+@app.get("/api/admin/users")
+async def admin_users_list(user: dict = Depends(require_admin)):
+    """Users & Plans tab: Supabase account identity + plan tier + local per-user bot settings,
+    merged read-only. Supabase being unreachable degrades to available=False — never fabricated."""
+    rate_limit(user["id"], "admin_users", 20, 60)
+    gotrue = await admin_users.fetch_gotrue_users()
+    tiers = await admin_users.fetch_profile_tiers()
+    async with async_session() as sess:
+        rows = (await sess.execute(select(UserSetting))).scalars().all()
+    local = {r.user_id: {"capital": r.capital, "strategy": r.strategy, "started_at": r.started_at, "updated_at": r.updated_at} for r in rows}
+    return admin_users.merge_users(gotrue, tiers, local)
+
+@app.post("/api/admin/users/{target_user_id}/ban")
+async def admin_user_ban(target_user_id: str, req: UserBanReq, user: dict = Depends(require_admin)):
+    """Ban/unban a Supabase account (GoTrue admin ban_duration). Local per-user settings/tier are untouched."""
+    rate_limit(user["id"], "admin_mutation", 30, 60)
+    if not req.confirm: raise HTTPException(400, "confirmation required")
+    actor = await _admin_actor(user)
+    result = await admin_users.set_user_ban(target_user_id, req.banned)
+    admin_control.audit(BOT_DIR, actor, "user_ban" if req.banned else "user_unban",
+                         "ok" if result.get("ok") else "failed", {"target_user_id": target_user_id})
+    if not result.get("ok"):
+        raise HTTPException(502, result.get("error") or "ban update failed")
+    return {"ok": True, "user_id": target_user_id, "banned": req.banned}
+
+
+@app.patch("/api/admin/users/{target_user_id}/settings")
+async def admin_user_settings_patch(target_user_id: str, req: UserSettingsPatch, user: dict = Depends(require_admin)):
+    """Admin edit of ONE user's allocated capital and/or active strategy in the local
+    user_settings table (per-user bot allocation). This is NOT the 7 shared VPS paper
+    bots (systemd services unrelated to individual users) — no real bot is started,
+    stopped, or reconfigured by this endpoint."""
+    rate_limit(user["id"], "admin_mutation", 30, 60)
+    if not req.confirm: raise HTTPException(400, "confirmation required")
+    if req.capital is None and req.strategy is None:
+        raise HTTPException(400, "nothing to update — provide capital and/or strategy")
+    if req.strategy is not None and req.strategy not in STRATEGY_ORDER:
+        raise HTTPException(400, f"unknown strategy — must be one of {STRATEGY_ORDER}")
+    actor = await _admin_actor(user)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    async with async_session() as sess:
+        row = (await sess.execute(select(UserSetting).where(UserSetting.user_id == target_user_id))).scalar_one_or_none()
+        if row is None:
+            row = UserSetting(user_id=target_user_id, started_at=now_iso)
+            sess.add(row)
+        if req.capital is not None: row.capital = req.capital
+        if req.strategy is not None: row.strategy = req.strategy
+        row.updated_at = now_iso
+        await sess.commit()
+        result = {"capital": row.capital, "strategy": row.strategy, "updated_at": row.updated_at}
+    admin_control.audit(BOT_DIR, actor, "user_settings_update", "ok",
+                         {"target_user_id": target_user_id, "capital": req.capital, "strategy": req.strategy})
+    return {"ok": True, "user_id": target_user_id, **result}
+
+
+@app.get("/api/admin/finance")
+async def admin_finance(user: dict = Depends(require_admin)):
+    """المالية (Finance) tab: MRR + per-tier revenue computed purely from plan_counts x
+    admin_users.TIER_PRICES_USD (mirrors lib/strategies.ts TIERS.price). No Stripe/network
+    calls — degrades to available=False (never a fabricated number) if Supabase/GoTrue is
+    unreachable, same as /api/admin/users."""
+    rate_limit(user["id"], "admin_users", 20, 60)
+    gotrue = await admin_users.fetch_gotrue_users()
+    tiers = await admin_users.fetch_profile_tiers()
+    async with async_session() as sess:
+        rows = (await sess.execute(select(UserSetting))).scalars().all()
+    local = {r.user_id: {"capital": r.capital, "strategy": r.strategy, "started_at": r.started_at, "updated_at": r.updated_at} for r in rows}
+    merged = admin_users.merge_users(gotrue, tiers, local)
+    finance = admin_users.compute_finance_summary(merged["plan_counts"])
+    return {"available": merged["available"], "error": merged["error"], "plan_counts": merged["plan_counts"], "finance": finance}
+
 
 @app.get("/api/admin/readiness")
 async def admin_readiness(user: dict = Depends(require_admin)):

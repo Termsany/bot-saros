@@ -1,6 +1,6 @@
 "use client"
-import { useEffect, useMemo, useRef, useState } from "react"
-import { Activity, BarChart3, Bot, ClipboardList, Gauge, History, LockKeyhole, Settings2, ShieldAlert, ShieldCheck, WalletCards } from "lucide-react"
+import { Fragment, useEffect, useMemo, useRef, useState } from "react"
+import { Activity, BarChart3, Bot, CircleDollarSign, ClipboardList, Gauge, History, LockKeyhole, Settings2, ShieldAlert, ShieldCheck, Users as UsersIcon, WalletCards } from "lucide-react"
 import { Logo } from "@/components/Logo"
 import { TIERS } from "@/lib/strategies"
 import { apiIsAdmin } from "@/lib/api"
@@ -12,6 +12,8 @@ const AUTO_REFRESH_MS = 30000
 
 const sections: [string, string, React.ComponentType<{ size?: number; strokeWidth?: number }>][] = [
   ["overview", "نظرة عامة", Gauge],
+  ["users", "المستخدمون والباقات", UsersIcon],
+  ["finance", "المالية", CircleDollarSign],
   ["live", "البوتات الحية", Bot],
   ["strategies", "الاستراتيجيات", BarChart3],
   ["paper", "المحفظة الورقية", WalletCards],
@@ -237,7 +239,7 @@ export default function AdminPage() {
     setLoading(true)
     const endpoints: [string, string][] = [
       ["overview", "overview"], ["strategies", "strategies"], ["paper", "paper/portfolio"],
-      ["risk", "risk"], ["readiness", "readiness"], ["health", "health"], ["recovery", "recovery"], ["activation", "activation"], ["audit", "audit"],
+      ["risk", "risk"], ["readiness", "readiness"], ["health", "health"], ["recovery", "recovery"], ["activation", "activation"], ["audit", "audit"], ["users", "users"], ["finance", "finance"],
     ]
     try {
       const h = await authHeaders()
@@ -274,7 +276,7 @@ export default function AdminPage() {
     url.searchParams.set("tab", id)
     window.history.replaceState({}, "", `${url.pathname}?${url.searchParams.toString()}`)
   }
-  const sectionEndpoints: Record<string, string[]> = { overview: ["overview", "recovery"], live: ["paper"], strategies: ["strategies"], paper: ["paper"], risk: ["risk", "recovery"], readiness: ["readiness"], health: ["health", "recovery", "activation"], recovery: ["recovery"], timeline: ["audit", "recovery"], audit: ["audit"], settings: [] }
+  const sectionEndpoints: Record<string, string[]> = { overview: ["overview", "recovery"], users: ["users"], finance: ["finance"], live: ["paper"], strategies: ["strategies"], paper: ["paper"], risk: ["risk", "recovery"], readiness: ["readiness"], health: ["health", "recovery", "activation"], recovery: ["recovery"], timeline: ["audit", "recovery"], audit: ["audit"], settings: [] }
   const currentSectionErrors = sectionEndpoints[section]?.map(key => endpointErrors[key]).filter(Boolean) as string[] || []
   useEffect(() => {
     const requested = new URLSearchParams(window.location.search).get("tab")
@@ -422,6 +424,75 @@ export default function AdminPage() {
               ["Kill switch", o.kill_switch?.tripped ? "مفعل" : "غير مفعل"],
             ].map(([k, v]) => <Card key={k} title={k} value={String(v)} />)}
             </div>
+          </div>
+        )}
+
+        {section === "users" && (
+          <div className="space-y-3">
+            <Panel title="المستخدمون — هوية Supabase + الباقة + إعدادات البوت المحلية">
+              <p className="text-xs text-muted mb-1">
+                الهوية (البريد، تاريخ التسجيل، الحظر) من Supabase Auth Admin API، والباقة من جدول profiles، وإعدادات البوت (رأس المال/الاستراتيجية) من قاعدة البيانات المحلية لهذه اللوحة. لا علاقة بهذه القائمة ببوتات VPS السبعة (خدمات مشتركة وليست لكل مستخدم).
+              </p>
+              {data.users && !data.users.available && (
+                <div className="rounded-xl border border-red-400/30 bg-red-400/10 p-3 text-xs text-red-200 mt-2">
+                  تعذر الوصول إلى Supabase الآن{data.users.error ? ` (${data.users.error})` : ""}. لا تُعرض بيانات ملفّقة — أعد المحاولة بعد قليل.
+                </div>
+              )}
+            </Panel>
+            <div className="grid sm:grid-cols-4 gap-3">
+              {Object.entries((data.users?.plan_counts || {}) as Record<string, number>).map(([tier, count]) => (
+                <Card key={tier} title={`باقة ${tier}`} value={String(count)} />
+              ))}
+              {!Object.keys(data.users?.plan_counts || {}).length && <Card title="إجمالي المستخدمين" value={String(data.users?.total ?? "—")} />}
+            </div>
+            <Panel title={`قائمة المستخدمين (${data.users?.total ?? 0})`}>
+              <UsersTable users={data.users?.users || []} busy={busy}
+                onToggleBan={(id, nextBanned) => confirmAction(
+                  nextBanned ? "تأكيد حظر هذا المستخدم من تسجيل الدخول؟" : "تأكيد إلغاء حظر هذا المستخدم؟",
+                  () => action(`/api/admin/users/${id}/ban`, "POST", { banned: nextBanned, confirm: true }))}
+                onUpdateSettings={(id, patch) => confirmAction(
+                  "تأكيد تعديل رأس المال/الاستراتيجية المخصصة لهذا المستخدم؟ (إعدادات محلية فقط — لا علاقة ببوتات VPS السبعة)",
+                  () => action(`/api/admin/users/${id}/settings`, "PATCH", { ...patch, confirm: true }))} />
+            </Panel>
+          </div>
+        )}
+
+        {section === "finance" && (
+          <div className="space-y-3">
+            <Panel title="المالية — MRR وإيراد كل باقة">
+              <p className="text-xs text-muted mb-1">
+                محسوبة فقط من عدد المستخدمين في كل باقة (plan_counts) × سعر الباقة من lib/strategies.ts TIERS —
+                لا يوجد اتصال حقيقي بـ Stripe هنا.
+              </p>
+              {data.finance && !data.finance.available && (
+                <div className="rounded-xl border border-red-400/30 bg-red-400/10 p-3 text-xs text-red-200 mt-2">
+                  تعذر الوصول إلى Supabase الآن{data.finance.error ? ` (${data.finance.error})` : ""}. لا تُعرض أرقام ملفّقة.
+                </div>
+              )}
+            </Panel>
+            <div className="grid sm:grid-cols-4 gap-3">
+              <Card title="MRR (دولار/شهر)" value={String(data.finance?.finance?.mrr_usd ?? "—")} tone="profit" />
+              <Card title="مستخدمون مدفوعون" value={String(data.finance?.finance?.paying_users ?? "—")} />
+              <Card title="مستخدمون مجانيون" value={String(data.finance?.finance?.free_users ?? "—")} />
+              <Card title="إجمالي المستخدمين" value={String(data.finance?.finance?.total_users ?? "—")} />
+            </div>
+            <Panel title="الإيراد حسب الباقة">
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                {TIERS.map(t => {
+                  const row = data.finance?.finance?.per_tier?.[t.id]
+                  return (
+                    <div key={t.id} className="rounded-2xl border border-line bg-surface2 p-4">
+                      <div className="flex items-center justify-between gap-2">
+                        <b className="text-sm">{t.name}</b>
+                        <span className="text-[10px] text-muted font-mono" dir="ltr">{t.price}/شهر</span>
+                      </div>
+                      <div className="mt-2 text-xs text-muted">مستخدمون: <b className="text-ink">{row?.users ?? 0}</b></div>
+                      <div className="mt-1 text-xs text-muted">الإيراد: <b className="text-emerald-400 font-mono" dir="ltr">${row?.revenue_usd ?? 0}</b></div>
+                    </div>
+                  )
+                })}
+              </div>
+            </Panel>
           </div>
         )}
 
@@ -672,6 +743,103 @@ function AuditList({ items }: { items: Json[] }) {
   const [query, setQuery] = useState("")
   const visible = items.filter(item => !query || JSON.stringify(item).toLowerCase().includes(query.toLowerCase()))
   return <div className="space-y-3"><input value={query} onChange={e => setQuery(e.target.value)} placeholder="ابحث في سجل التدقيق..." className="w-full max-w-sm rounded-xl border border-line bg-surface2 px-3 py-2 text-xs outline-none focus:border-corona/50" />{visible.map((x: Json) => <div key={x.id} className="rounded-xl border border-line bg-surface2 p-3 text-xs"><div className="flex flex-wrap items-center justify-between gap-2"><b>{x.action}</b><span className="text-muted font-mono" dir="ltr">{x.at}</span></div><div className="mt-1 text-muted">المنفذ: {x.actor || "—"} · النتيجة: {x.result || "—"}</div></div>)}{!visible.length && <div className="rounded-xl border border-dashed border-line p-6 text-center text-xs text-muted">لا توجد نتائج.</div>}</div>
+}
+/** Per-user admin edit form for LOCAL bot allocation (capital + strategy in user_settings).
+ *  Explicitly distinct from the 7 shared VPS paper bots: saving here never starts/stops a real bot. */
+function UserSettingsEditRow({ user, busy, onSave }: { user: Json; busy: boolean; onSave: (patch: { capital?: number; strategy?: string }) => void }) {
+  const [capital, setCapital] = useState(user.capital != null ? String(user.capital) : "")
+  const [strategy, setStrategy] = useState(user.strategy || "")
+  const strategies = ["trend_daily", "momentum_ls", "listing_short", "ratio_trend"]
+  return (
+    <tr className="border-t border-line bg-surface2/40">
+      <td colSpan={8} className="p-3">
+        <div className="rounded-xl border border-dashed border-line p-3 space-y-2">
+          <p className="text-[11px] text-amber-300/90">
+            هذا تعديل لإعدادات رأس المال/الاستراتيجية المخصصة لهذا المستخدم فقط في قاعدة البيانات المحلية —
+            منفصل تمامًا عن بوتات VPS الحقيقية السبعة (خدمات مشتركة)، ولا يشغّل أو يوقف أي بوت حقيقي.
+          </p>
+          <div className="flex flex-wrap items-end gap-2">
+            <label className="text-[11px] text-muted">
+              رأس المال
+              <input type="number" min={0} value={capital} onChange={e => setCapital(e.target.value)}
+                className="mt-1 block w-28 rounded-lg border border-line bg-void px-2 py-1 text-xs" />
+            </label>
+            <label className="text-[11px] text-muted">
+              الاستراتيجية
+              <select value={strategy} onChange={e => setStrategy(e.target.value)}
+                className="mt-1 block rounded-lg border border-line bg-void px-2 py-1 text-xs">
+                <option value="">— بدون تغيير —</option>
+                {strategies.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </label>
+            <button disabled={busy || (!capital && !strategy)} onClick={() => {
+              const patch: { capital?: number; strategy?: string } = {}
+              if (capital !== "") patch.capital = Number(capital)
+              if (strategy) patch.strategy = strategy
+              onSave(patch)
+            }} className="px-3 py-1.5 rounded-lg bg-corona text-void text-xs font-bold disabled:opacity-50">حفظ</button>
+          </div>
+        </div>
+      </td>
+    </tr>
+  )
+}
+
+/** Users & Plans table: identity + tier + local bot settings, with a confirm-gated ban/unban action per row. */
+function UsersTable({ users, busy, onToggleBan, onUpdateSettings }: { users: Json[]; busy: boolean; onToggleBan: (id: string, nextBanned: boolean) => void; onUpdateSettings: (id: string, patch: { capital?: number; strategy?: string }) => void }) {
+  const [query, setQuery] = useState("")
+  const [tierFilter, setTierFilter] = useState<string>("all")
+  const [expanded, setExpanded] = useState<string | null>(null)
+  const tiers = useMemo(() => Array.from(new Set(users.map(u => u.tier || "free"))), [users])
+  const visible = users.filter(u =>
+    (tierFilter === "all" || u.tier === tierFilter) &&
+    (!query || JSON.stringify(u).toLowerCase().includes(query.toLowerCase())))
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <input value={query} onChange={e => setQuery(e.target.value)} placeholder="ابحث بالبريد أو المعرف..."
+          className="rounded-xl border border-line bg-surface2 px-3 py-2 text-xs outline-none focus:border-corona/50 max-w-[240px]" />
+        <button onClick={() => setTierFilter("all")} className={`rounded-full px-2.5 py-1 text-[10px] font-bold ${tierFilter === "all" ? "bg-corona text-void" : "border border-line text-muted"}`}>الكل</button>
+        {tiers.map(t => <button key={t} onClick={() => setTierFilter(t)} className={`rounded-full px-2.5 py-1 text-[10px] font-bold ${tierFilter === t ? "bg-corona text-void" : "border border-line text-muted"}`}>{t}</button>)}
+      </div>
+      <div className="overflow-auto">
+        <table className="w-full text-[11px]">
+          <thead><tr className="text-muted">
+            <th className="p-1.5 text-right">البريد</th><th>الباقة</th><th>تاريخ التسجيل</th><th>آخر دخول</th>
+            <th>رأس المال</th><th>استراتيجية البوت</th><th>الحالة</th><th>إجراء</th>
+          </tr></thead>
+          <tbody>
+            {visible.map(u => (
+              <Fragment key={u.id}>
+                <tr className="border-t border-line">
+                  <td className="p-1.5 whitespace-nowrap">{u.email || "—"}</td>
+                  <td><span className="rounded-full border border-line px-2 py-0.5 text-[10px]">{u.tier || "free"}</span></td>
+                  <td className="text-muted whitespace-nowrap">{timeAgo(u.created_at)}</td>
+                  <td className="text-muted whitespace-nowrap">{u.last_sign_in_at ? timeAgo(u.last_sign_in_at) : "—"}</td>
+                  <td>{u.capital != null ? fmtNum(u.capital) : "—"}</td>
+                  <td>{u.strategy || "—"}</td>
+                  <td>{u.banned
+                    ? <span className="rounded-full border border-red-400/30 bg-red-400/10 px-2 py-0.5 text-[10px] font-bold text-red-300">محظور</span>
+                    : <span className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2 py-0.5 text-[10px] font-bold text-emerald-300">نشط</span>}</td>
+                  <td className="flex gap-1">
+                    <button disabled={busy} onClick={() => onToggleBan(u.id, !u.banned)}
+                      className="px-2 py-1 rounded-lg border border-line disabled:opacity-50">{u.banned ? "إلغاء الحظر" : "حظر"}</button>
+                    <button disabled={busy} onClick={() => setExpanded(expanded === u.id ? null : u.id)}
+                      className="px-2 py-1 rounded-lg border border-line disabled:opacity-50">{expanded === u.id ? "إغلاق" : "تعديل البوت"}</button>
+                  </td>
+                </tr>
+                {expanded === u.id && (
+                  <UserSettingsEditRow user={u} busy={busy}
+                    onSave={patch => onUpdateSettings(u.id, patch)} />
+                )}
+              </Fragment>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {!visible.length && <div className="rounded-xl border border-dashed border-line p-6 text-center text-xs text-muted">لا توجد نتائج.</div>}
+    </div>
+  )
 }
 type TimelineEvent = { at?: string; title: string; detail: string; kind: "audit" | "alert" | "recovery" }
 /** Merges audit log + operational alerts + recovery items into one chronological, filterable feed. */
