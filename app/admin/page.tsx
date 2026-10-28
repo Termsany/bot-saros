@@ -493,10 +493,7 @@ export default function AdminPage() {
             </div>
             <Panel title="مصفوفة الجاهزية لكل استراتيجية">
               <div className="mb-4 rounded-xl border border-amber-400/30 bg-amber-400/10 p-3 text-xs text-amber-200">البيئة الحالية: <b>{data.readiness?.environment || "غير متاحة"}</b> · لا يوجد زر لتفعيل التداول الحقيقي من الواجهة.</div>
-              <div className="space-y-3">
-                {Object.entries(data.readiness?.strategies || {}).map(([id, item]: [string, any]) => <div key={id} className="rounded-2xl border border-line bg-surface2 p-4"><div className="flex flex-wrap items-center justify-between gap-2"><b>{STRATEGY_LABELS_AR[id] || id}</b><span className={`rounded-full px-2 py-1 text-[10px] font-bold ${item.live_ready ? "bg-emerald-400/10 text-emerald-300" : "bg-red-400/10 text-red-300"}`}>{item.live_ready ? "Live-ready" : "مقفل"}</span></div><div className="mt-3 flex flex-wrap gap-2"><CheckPill label="Adapter" value={item.adapter_implemented} /><CheckPill label="Recovery" value={item.recovery_tests} /><CheckPill label="Security" value={item.security_approved} /><CheckPill label="Testnet" value={item.testnet_validated} /></div>{Array.isArray(item.reasons) && item.reasons.length > 0 && <div className="mt-3 text-xs text-muted">السبب: {item.reasons.join(" · ")}</div>}</div>)}
-                {!Object.keys(data.readiness?.strategies || {}).length && <KeyValueGrid value={data.readiness?.checks || {}} empty="لا توجد أدلة جاهزية متاحة" />}
-              </div>
+              {Object.keys(data.readiness?.strategies || {}).length ? <ReadinessMatrix strategies={data.readiness.strategies} /> : <KeyValueGrid value={data.readiness?.checks || {}} empty="لا توجد أدلة جاهزية متاحة" />}
             </Panel>
           </div>
         )}
@@ -515,12 +512,7 @@ export default function AdminPage() {
         {section === "audit" && (
           <Panel title="سجل التدقيق الإداري">
             <div className="mb-4 rounded-xl border border-line bg-surface2 p-3 text-xs text-muted">كل إجراء حساس يجب أن يظهر هنا مع المنفذ والنتيجة. السجل للقراءة فقط من هذه الصفحة.</div>
-            <div className="space-y-2">
-              {(data.audit?.items || []).map((x: Json) => (
-                <div key={x.id} className="rounded-xl border border-line bg-surface2 p-3 text-xs"><div className="flex flex-wrap items-center justify-between gap-2"><b>{x.action}</b><span className="text-muted font-mono" dir="ltr">{x.at}</span></div><div className="mt-1 text-muted">المنفذ: {x.actor || "—"} · النتيجة: {x.result || "—"}</div></div>
-              ))}
-              {!(data.audit?.items || []).length && <div className="rounded-xl border border-dashed border-line p-6 text-center text-xs text-muted">لا توجد أحداث تدقيق متاحة.</div>}
-            </div>
+            <AuditList items={data.audit?.items || []} />
           </Panel>
         )}
 
@@ -557,9 +549,22 @@ function CheckPill({ label, value }: { label: string; value: any }) {
   return <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-bold ${ok ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300" : "border-red-400/30 bg-red-400/10 text-red-300"}`}><span>{ok ? "✓" : "×"}</span>{label}</span>
 }
 function AlertCenter({ alerts }: { alerts: any[] }) {
+  const [filter, setFilter] = useState<"all" | "critical" | "warning">("all")
   const normalized = alerts.filter(Boolean).map(item => typeof item === "string" ? { message: item, severity: "warning" } : item)
+  const visible = normalized.filter(item => filter === "all" || (item.severity === filter || (filter === "critical" && item.severity === "error")))
   if (!normalized.length) return <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/5 p-4 text-xs text-emerald-300">لا توجد تنبيهات تشغيلية حالية.</div>
-  return <div className="space-y-2">{normalized.slice(0, 8).map((item, i) => <div key={i} className={`rounded-xl border p-3 text-xs ${item.severity === "error" || item.severity === "critical" ? "border-red-400/30 bg-red-400/10 text-red-200" : "border-amber-400/30 bg-amber-400/10 text-amber-200"}`}><b>{item.title || (item.severity === "error" ? "خطأ تشغيلي" : "تنبيه")}</b><span className="mx-2">·</span>{item.message || item.reason || JSON.stringify(item)}</div>)}</div>
+  return <div className="space-y-3"><div className="flex flex-wrap items-center gap-2"><span className="text-[11px] text-muted">{normalized.length} تنبيه</span>{(["all", "critical", "warning"] as const).map(item => <button key={item} onClick={() => setFilter(item)} className={`rounded-full px-2.5 py-1 text-[10px] font-bold ${filter === item ? "bg-corona text-void" : "border border-line text-muted"}`}>{item === "all" ? "الكل" : item === "critical" ? "حرج" : "تحذير"}</button>)}</div>{visible.slice(0, 8).map((item, i) => <div key={i} className={`rounded-xl border p-3 text-xs ${item.severity === "error" || item.severity === "critical" ? "border-red-400/30 bg-red-400/10 text-red-200" : "border-amber-400/30 bg-amber-400/10 text-amber-200"}`}><b>{item.title || (item.severity === "error" ? "خطأ تشغيلي" : "تنبيه")}</b><span className="mx-2">·</span>{item.message || item.reason || JSON.stringify(item)}</div>)}{!visible.length && <div className="rounded-xl border border-dashed border-line p-4 text-center text-xs text-muted">لا توجد تنبيهات بهذا التصنيف.</div>}</div>
+}
+function ReadinessMatrix({ strategies }: { strategies: Json }) {
+  const [filter, setFilter] = useState<"all" | "ready" | "blocked">("all")
+  const entries = Object.entries(strategies || {})
+  const visible = entries.filter(([, item]: [string, any]) => filter === "all" || (filter === "ready" ? item.live_ready === true : item.live_ready !== true))
+  return <div className="space-y-3"><div className="flex flex-wrap items-center gap-2"><span className="text-[11px] text-muted">{entries.length} استراتيجية</span>{(["all", "ready", "blocked"] as const).map(item => <button key={item} onClick={() => setFilter(item)} className={`rounded-full px-2.5 py-1 text-[10px] font-bold ${filter === item ? "bg-corona text-void" : "border border-line text-muted"}`}>{item === "all" ? "الكل" : item === "ready" ? "جاهزة" : "مقفلة"}</button>)}</div>{visible.map(([id, item]: [string, any]) => <div key={id} className="rounded-2xl border border-line bg-surface2 p-4"><div className="flex flex-wrap items-center justify-between gap-2"><b>{STRATEGY_LABELS_AR[id] || id}</b><span className={`rounded-full px-2 py-1 text-[10px] font-bold ${item.live_ready ? "bg-emerald-400/10 text-emerald-300" : "bg-red-400/10 text-red-300"}`}>{item.live_ready ? "Live-ready" : "مقفل"}</span></div><div className="mt-3 flex flex-wrap gap-2"><CheckPill label="Adapter" value={item.adapter_implemented} /><CheckPill label="Recovery" value={item.recovery_tests} /><CheckPill label="Security" value={item.security_approved} /><CheckPill label="Testnet" value={item.testnet_validated} /></div>{Array.isArray(item.reasons) && item.reasons.length > 0 && <div className="mt-3 text-xs text-muted">السبب: {item.reasons.join(" · ")}</div>}</div>)}{!visible.length && <div className="rounded-xl border border-dashed border-line p-6 text-center text-xs text-muted">لا توجد نتائج بهذا التصنيف.</div>}</div>
+}
+function AuditList({ items }: { items: Json[] }) {
+  const [query, setQuery] = useState("")
+  const visible = items.filter(item => !query || JSON.stringify(item).toLowerCase().includes(query.toLowerCase()))
+  return <div className="space-y-3"><input value={query} onChange={e => setQuery(e.target.value)} placeholder="ابحث في سجل التدقيق..." className="w-full max-w-sm rounded-xl border border-line bg-surface2 px-3 py-2 text-xs outline-none focus:border-corona/50" />{visible.map((x: Json) => <div key={x.id} className="rounded-xl border border-line bg-surface2 p-3 text-xs"><div className="flex flex-wrap items-center justify-between gap-2"><b>{x.action}</b><span className="text-muted font-mono" dir="ltr">{x.at}</span></div><div className="mt-1 text-muted">المنفذ: {x.actor || "—"} · النتيجة: {x.result || "—"}</div></div>)}{!visible.length && <div className="rounded-xl border border-dashed border-line p-6 text-center text-xs text-muted">لا توجد نتائج.</div>}</div>
 }
 function Panel({ title, children }: { title: string; children: any }) {
   return <section className="rounded-2xl border border-line bg-surface p-4 sm:p-5 shadow-[0_8px_30px_rgba(0,0,0,0.12)]"><div className="mb-4 flex items-center justify-between gap-3 border-b border-line pb-3"><h2 className="font-black text-sm">{title}</h2><span className="h-1.5 w-1.5 rounded-full bg-corona" /></div>{children}</section>
