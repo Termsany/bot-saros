@@ -321,10 +321,10 @@ export default function AdminPage() {
   const liveSummaryOverview: Json = o.live_bots?.summary || liveBotsPortfolio.aggregate || {}
   const dashboardBot: Json = data.paper?.dashboard_bot || { positions: data.paper?.positions || [], history: data.paper?.history || [] }
   const recoveryRequired = recovery.recovery_required || {}
-  const recoveryAlerts = Object.entries(recoveryRequired).map(([symbol, item]: [string, any]) => ({ title: `Recovery مطلوب · ${symbol}`, message: item?.reason || "يوجد وضع يحتاج مراجعة", severity: "critical" }))
-  if (recovery.reconciliation?.state && recovery.reconciliation.state !== "ok") recoveryAlerts.push({ title: "Reconciliation", message: `الحالة الحالية: ${recovery.reconciliation.state}`, severity: "warning" })
-  const operationalAlerts = [
-    ...recoveryAlerts,
+  const recoveryAlerts = Object.entries(recoveryRequired).map(([symbol, item]: [string, any]) => ({ title: `Recovery مطلوب · ${symbol}`, message: item?.reason || "يوجد وضع يحتاج مراجعة", severity: "critical", at: item?.at }))
+  const reconciliationStale = recovery.reconciliation?.state && recovery.reconciliation.state !== "ok"
+  if (reconciliationStale) recoveryAlerts.push({ title: "Reconciliation", message: `الحالة الحالية: ${recovery.reconciliation.state}`, severity: "warning", at: recovery.reconciliation?.at })
+  const otherAlerts = [
     ...(Array.isArray(o.alerts) ? o.alerts : []),
     ...(Array.isArray(o.warnings) ? o.warnings : []),
     ...(Array.isArray(o.recovery_warnings) ? o.recovery_warnings : []),
@@ -332,12 +332,14 @@ export default function AdminPage() {
     ...(risk.kill_switch?.tripped ? [{ title: "Kill switch", message: "مفعل حاليًا ويمنع الإدخالات الجديدة.", severity: "critical" }] : []),
     ...(o.entry_paused?.paused ? [{ title: "إيقاف الإدخالات", message: "الإدخالات الجديدة متوقفة.", severity: "warning" }] : []),
   ]
+  const operationalAlerts = [...recoveryAlerts, ...otherAlerts]
   const globalSeverity: "ok" | "warning" | "critical" = operationalAlerts.some(a => a.severity === "critical" || a.severity === "error")
     ? "critical" : operationalAlerts.length > 0 ? "warning" : "ok"
   const timelineEvents: TimelineEvent[] = [
     ...(data.audit?.items || []).map((x: Json) => ({ at: x.at, title: x.action || "إجراء إداري", detail: `${x.actor || "—"} · ${x.result || "—"}`, kind: "audit" as const })),
-    ...operationalAlerts.map((a: Json) => ({ title: a.title || "تنبيه", detail: a.message || "", kind: "alert" as const })),
-    ...Object.entries(recoveryRequired).map(([symbol, item]: [string, any]) => ({ title: `Recovery · ${symbol}`, detail: item?.reason || "مراجعة مطلوبة", kind: "recovery" as const })),
+    ...otherAlerts.map((a: Json) => ({ title: a.title || "تنبيه", detail: a.message || "", kind: "alert" as const })),
+    ...Object.entries(recoveryRequired).map(([symbol, item]: [string, any]) => ({ at: item?.at, title: `Recovery · ${symbol}`, detail: item?.reason || "مراجعة مطلوبة", kind: "recovery" as const })),
+    ...(reconciliationStale ? [{ at: recovery.reconciliation?.at, title: "Reconciliation", detail: `الحالة الحالية: ${recovery.reconciliation.state}`, kind: "recovery" as const }] : []),
   ]
   const paletteItems: CommandItem[] = [
     ...sections.map(([id, label]) => ({ id: `tab-${id}`, label: `فتح تبويب: ${label}`, hint: "تبويب", onSelect: () => selectSection(id) })),
@@ -675,7 +677,9 @@ type TimelineEvent = { at?: string; title: string; detail: string; kind: "audit"
 /** Merges audit log + operational alerts + recovery items into one chronological, filterable feed. */
 function UnifiedTimeline({ events }: { events: TimelineEvent[] }) {
   const [kind, setKind] = useState<"all" | "audit" | "alert" | "recovery">("all")
-  const sorted = [...events].sort((a, b) => (b.at || "").localeCompare(a.at || ""))
+  const dated = events.filter(e => e.at).sort((a, b) => (b.at || "").localeCompare(a.at || ""))
+  const undated = events.filter(e => !e.at)
+  const sorted = [...dated, ...undated]
   const visible = sorted.filter(e => kind === "all" || e.kind === kind)
   const kindMeta: Record<string, [string, string]> = { audit: ["سجل تدقيق", "border-line bg-surface2 text-ink"], alert: ["تنبيه", "border-amber-400/30 bg-amber-400/10 text-amber-200"], recovery: ["Recovery", "border-red-400/30 bg-red-400/10 text-red-200"] }
   return (
