@@ -220,9 +220,19 @@ class StartupGateTests(unittest.TestCase):
         return subprocess.run([sys.executable, str(ROOT / "bot.py"), *args], capture_output=True, text=True, env=e,
                               cwd=tempfile.gettempdir(), timeout=60, encoding="utf-8")
 
-    def test_live_only_for_the_daily_trend(self):
-        r = self._run("--live", "--strategy", "momentum_ls", "--once", env={"BINANCE_ENV": "demo"})
-        self.assertNotEqual(r.returncode, 0); self.assertIn("trend_daily", r.stderr)
+    def test_live_requires_a_known_live_ready_strategy(self):
+        r = self._run("--live", "--strategy", "no_such_strategy", "--once", env={"BINANCE_ENV": "demo"})
+        self.assertNotEqual(r.returncode, 0); self.assertIn("no_such_strategy", r.stderr)
+
+    def test_live_now_works_for_every_strategy_argparse_gate(self):
+        # Use the default (unset) BINANCE_ENV so each run fails fast on the ALLOW_LIVE_TRADING
+        # check (like test_real_money_needs_the_server_switch) instead of reaching the network —
+        # this only proves the strategy-name gate itself no longer refuses these names.
+        for strat in ("trend_daily", "ict", "wave_flats", "vol_breakout", "rsi2_pullback",
+                      "trend_breakout", "listing_short", "momentum_ls", "ratio_trend"):
+            r = self._run("--live", "--strategy", strat, "--once")
+            self.assertNotIn("--live مش متاح", r.stderr, msg=f"{strat}: {r.stderr}")
+            self.assertIn("ALLOW_LIVE_TRADING", r.stderr, msg=f"{strat}: {r.stderr}")
 
     def test_real_money_needs_the_server_switch(self):
         r = self._run("--live", "--strategy", "trend_daily", "--once")
