@@ -143,6 +143,36 @@ def _public_user_fields(raw: dict, tier: str, settings: dict) -> dict:
     }
 
 
+# Mirror of the `price` field in lib/strategies.ts TIERS (source of truth for pricing —
+# never edit a number here without editing it there too). Parsed as whole USD/month.
+# test_admin_finance.py parses the TypeScript source and asserts these stay in sync.
+TIER_PRICES_USD: dict[str, int] = {"free": 0, "starter": 29, "pro": 59, "elite": 99}
+
+
+def compute_finance_summary(plan_counts: dict[str, int]) -> dict:
+    """MRR + per-tier revenue from plan_counts (tier -> user count) x TIER_PRICES_USD.
+
+    Pure arithmetic, no network/DB access — deterministic and trivial to unit test.
+    Unknown tier ids (should never happen; merge_users defaults to "free") are priced at 0
+    rather than raising, so a bad/old tier value degrades instead of crashing the endpoint.
+    """
+    per_tier = {
+        tier: {"users": count, "price_usd": TIER_PRICES_USD.get(tier, 0),
+               "revenue_usd": count * TIER_PRICES_USD.get(tier, 0)}
+        for tier, count in plan_counts.items()
+    }
+    mrr_usd = sum(t["revenue_usd"] for t in per_tier.values())
+    free_users = plan_counts.get("free", 0)
+    paying_users = sum(count for tier, count in plan_counts.items() if tier != "free")
+    return {
+        "mrr_usd": mrr_usd,
+        "per_tier": per_tier,
+        "paying_users": paying_users,
+        "free_users": free_users,
+        "total_users": paying_users + free_users,
+    }
+
+
 def merge_users(gotrue_result: dict, tiers_result: dict, local_settings: dict[str, dict]) -> dict:
     """Combine the three sources into the admin-facing user list + per-plan counts.
 

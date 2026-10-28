@@ -192,6 +192,95 @@ class AdminUsersEndpointTests(unittest.TestCase):
         self.assertEqual(audit[0]["action"], "user_ban")
         self.assertEqual(audit[0]["result"], "failed")
 
+    # ── PATCH /api/admin/users/{id}/settings ─────────────────────────
+    def test_settings_patch_requires_admin(self):
+        r = self.client.patch("/api/admin/users/u1/settings", json={"capital": 1000, "confirm": True})
+        self.assertEqual(r.status_code, 401)
+        r2 = self.client.patch("/api/admin/users/u1/settings", headers=self._user_headers(),
+                                json={"capital": 1000, "confirm": True})
+        self.assertEqual(r2.status_code, 403)
+
+    def test_settings_patch_requires_confirmation(self):
+        r = self.client.patch("/api/admin/users/u1/settings", headers=self._admin_headers(),
+                               json={"capital": 1000})
+        self.assertEqual(r.status_code, 400)
+        audit = self.client.get("/api/admin/audit", headers=self._admin_headers()).json()["items"]
+        self.assertEqual(audit, [])
+
+    def test_settings_patch_requires_at_least_one_field(self):
+        r = self.client.patch("/api/admin/users/u1/settings", headers=self._admin_headers(),
+                               json={"confirm": True})
+        self.assertEqual(r.status_code, 400)
+
+    def test_settings_patch_rejects_unknown_strategy(self):
+        r = self.client.patch("/api/admin/users/u1/settings", headers=self._admin_headers(),
+                               json={"strategy": "not_a_real_strategy", "confirm": True})
+        self.assertEqual(r.status_code, 400)
+
+    def test_settings_patch_updates_existing_row_and_audits(self):
+        r = self.client.patch("/api/admin/users/u1/settings", headers=self._admin_headers(),
+                               json={"capital": 1234.5, "strategy": "momentum_ls", "confirm": True})
+        self.assertEqual(r.status_code, 200)
+        j = r.json()
+        self.assertTrue(j["ok"])
+        self.assertEqual(j["capital"], 1234.5)
+        self.assertEqual(j["strategy"], "momentum_ls")
+        audit = self.client.get("/api/admin/audit", headers=self._admin_headers()).json()["items"]
+        self.assertEqual(audit[0]["action"], "user_settings_update")
+        self.assertEqual(audit[0]["result"], "ok")
+        # confirm it actually persisted, not just echoed
+        r2 = self.client.get("/api/admin/users", headers=self._admin_headers())
+        by_id = {u["id"]: u for u in r2.json()["users"]}
+        self.assertEqual(by_id["u1"]["capital"], 1234.5)
+        self.assertEqual(by_id["u1"]["strategy"], "momentum_ls")
+
+    def test_settings_patch_creates_row_for_user_with_no_prior_settings(self):
+        r = self.client.patch("/api/admin/users/u2/settings", headers=self._admin_headers(),
+                               json={"capital": 50.0, "confirm": True})
+        self.assertEqual(r.status_code, 200)
+        j = r.json()
+        self.assertEqual(j["capital"], 50.0)
+        self.assertIsNone(j["strategy"])
+
+    def test_settings_patch_partial_update_keeps_other_field(self):
+        self.client.patch("/api/admin/users/u1/settings", headers=self._admin_headers(),
+                           json={"capital": 777.0, "confirm": True})
+        r = self.client.patch("/api/admin/users/u1/settings", headers=self._admin_headers(),
+                               json={"strategy": "ratio_trend", "confirm": True})
+        self.assertEqual(r.status_code, 200)
+        j = r.json()
+        self.assertEqual(j["capital"], 777.0)
+        self.assertEqual(j["strategy"], "ratio_trend")
+
+    # ── GET /api/admin/finance ────────────────────────────────────────
+    def test_finance_requires_admin(self):
+        r = self.client.get("/api/admin/finance")
+        self.assertEqual(r.status_code, 401)
+        r2 = self.client.get("/api/admin/finance", headers=self._user_headers())
+        self.assertEqual(r2.status_code, 403)
+
+    def test_finance_computes_mrr_from_plan_counts(self):
+        # fixture tiers: u1 -> pro, u2 -> free (default) => plan_counts {pro:1, free:1}
+        r = self.client.get("/api/admin/finance", headers=self._admin_headers())
+        self.assertEqual(r.status_code, 200)
+        j = r.json()
+        self.assertTrue(j["available"])
+        self.assertEqual(j["plan_counts"], {"pro": 1, "free": 1})
+        self.assertEqual(j["finance"]["mrr_usd"], 59)
+        self.assertEqual(j["finance"]["per_tier"]["pro"]["revenue_usd"], 59)
+        self.assertEqual(j["finance"]["paying_users"], 1)
+        self.assertEqual(j["finance"]["free_users"], 1)
+
+    def test_finance_degrades_gracefully_when_supabase_unreachable(self):
+        self.mainmod.admin_users.fetch_gotrue_users = mock.AsyncMock(
+            return_value={"available": False, "error": "ConnectError", "users": []})
+        r = self.client.get("/api/admin/finance", headers=self._admin_headers())
+        self.assertEqual(r.status_code, 200)
+        j = r.json()
+        self.assertFalse(j["available"])
+        self.assertEqual(j["plan_counts"], {})
+        self.assertEqual(j["finance"]["mrr_usd"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()
