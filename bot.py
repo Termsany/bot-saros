@@ -2934,6 +2934,7 @@ def _single_leg_live_exit(ex, state, symbol, price, reason):
         state["stats"]["wins" if pnl > 0 else "losses"] += 1
         state["positions"].pop(symbol, None); state["last_trade"][symbol] = datetime.now(timezone.utc).isoformat()
         save_state(state)
+        _release_position_risk(symbol, pos)
         return True
     except Exception as exc:
         state.setdefault("recovery_required", {})[symbol] = {"reason": f"live exit requires recovery: {exc}", "at": datetime.now(timezone.utc).isoformat()}
