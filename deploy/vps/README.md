@@ -23,14 +23,14 @@ signal twice.
 
 ## API (api.da3m.io) — replaces Render
 
-FastAPI backend in `/opt/raqm-api` (user `raqmapi`): a git checkout of this repo + venv, uvicorn on 127.0.0.1:8100
+FastAPI backend in `/opt/raqm-api` (folder owned by root, group `raqmapi`; `app/`, `venv/` and `.env` belong to `raqmapi`): a git checkout of this repo + venv, uvicorn on 127.0.0.1:8100
 behind nginx, secrets in `/opt/raqm-api/.env` (`api/env.example` lists them). Vercel's `NEXT_PUBLIC_API_URL` points here.
 
 | file | installed as |
 |---|---|
 | `api/raqm-api.service` | `/etc/systemd/system/raqm-api.service` |
 | `api/nginx-api.da3m.io.conf` | `/etc/nginx/sites-available/api.da3m.io` (+ certbot) |
-| `api/update.sh` + `api/raqm-api-update.{service,timer}` | pulls `main` every 5 minutes, restarts the API when `backend/` or a root `.py` changed |
+| `api/update.sh` + `api/raqm-api-update.{service,timer}` | `/usr/local/sbin/raqm-api-update` (root-owned) + units, by `sh api/install-updater.sh` from a root-owned checkout: pulls `main` every 5 minutes, restarts the API when `backend/` or a root `.py` changed; frozen when `ALLOW_LIVE_TRADING=true` or a real-money bot unit is installed |
 
 Logs: `journalctl -u raqm-api -f` · deploys: `journalctl -u raqm-api-update`.
 
