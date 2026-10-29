@@ -17,6 +17,9 @@ git -C "$SRC" cat-file -e "$SHA^{commit}" || { echo "commit $SHA not found on Gi
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 git -C "$SRC" archive "$SHA" | tar -x -C "$T"
 id raqmlive >/dev/null 2>&1 || useradd --system --home-dir "$L" --no-create-home --shell /usr/sbin/nologin raqmlive
+# group PERMISSION bits on the shared setgid dirs (/opt/raqm-risk, /opt/raqm-ipc) are useless without group
+# MEMBERSHIP: raqmlive must also be in raqmapi's group, or whichever side didn't create a file first can't open it.
+usermod -aG raqmapi raqmlive
 install -d -o root -g raqmlive -m 750 "$L"
 install -d -o raqmlive -g raqmlive -m 700 "$L/state"
 for f in bot.py strategies_trend.py strategies_advanced.py strategies_wave.py; do install -m 644 -o root -g root "$T/$f" "$L/$f"; done
@@ -39,6 +42,16 @@ if [ -L "$B/.env.demo" ] || [ -L "$L/.env.live" ]; then echo "refusing: a key fi
 SRCENV="$L/.env.live"; [ -e "$SRCENV" ] || SRCENV="$B/.env.demo"
 if [ -f "$SRCENV" ]; then
     umask 077; grep -E "$KEYS" "$SRCENV" > "$T/env.live" || true          # values are never printed
+    # A re-run whose source lines don't match $KEYS exactly (different quoting, leading whitespace, a
+    # renamed variable, CRLF...) extracts nothing — "|| true" above swallows that. Installing an empty
+    # extraction would silently destroy the existing, presumably-correct key file. First-time setup
+    # ($L/.env.live not created yet) has nothing to destroy, so it's fine to proceed with an empty one.
+    if [ -s "$L/.env.live" ]; then
+        if ! grep -q '^BINANCE_API_KEY=' "$T/env.live" 2>/dev/null || ! grep -q '^BINANCE_SECRET=' "$T/env.live" 2>/dev/null; then
+            echo "refusing: extracted key file from $SRCENV is empty or missing required keys — not overwriting the existing $L/.env.live" >&2
+            exit 4
+        fi
+    fi
     install -o raqmlive -g raqmlive -m 600 "$T/env.live" "$L/.env.live"
     if [ "$SRCENV" = "$B/.env.demo" ]; then rm -f "$B/.env.demo"; fi
 fi
