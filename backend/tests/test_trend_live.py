@@ -15,11 +15,16 @@ class FakeBinance:
     """Enough of ccxt.binanceusdm for the trend's live path."""
     id = "binance"
 
-    def __init__(self, fail_stop=False, fail_close=False, balance=1000.0, min_cost=5.0):
+    def __init__(self, fail_stop=False, fail_close=False, balance=1000.0, min_cost=5.0, hedged=False):
         self.options = {}
         self.orders, self.cancelled, self.positions = [], [], {}
-        self.fail_stop, self.fail_close, self.balance, self.min_cost = fail_stop, fail_close, balance, min_cost
+        self.fail_stop, self.fail_close, self.balance, self.min_cost, self.hedged = fail_stop, fail_close, balance, min_cost, hedged
         self.set_leverage = mock.Mock(); self.set_margin_mode = mock.Mock(); self.set_position_mode = mock.Mock()
+
+    def fetch_position_mode(self, symbol=None):
+        # Real ccxt's unified key is 'hedged' (confirmed live against Binance Demo Trading:
+        # {'info': {'dualSidePosition': False}, 'hedged': False}) — not 'hedgeMode'.
+        return {"info": {"dualSidePosition": self.hedged}, "hedged": self.hedged}
 
     def market(self, sym): return {"contract": True, "linear": True, "inverse": False, "contractSize": 1.0, "limits": {"cost": {"min": self.min_cost}}}
     def amount_to_precision(self, sym, q): return str(round(float(q), 6))
@@ -222,6 +227,75 @@ class TrendLiveTests(unittest.TestCase):
         reloaded = botmod.load_state()
         self.assertEqual(reloaded["recovery_required"], {})
         self.assertIn("SOL/USDT:USDT", reloaded["positions"])
+
+
+class LiveSymbolResolutionTests(unittest.TestCase):
+    """CONFIG['symbols'] (trend_daily/wave_flats/ict's fixed list) is bare 'BTC/USDT'; Binance USDT-M
+    futures' real ccxt market key is 'BTC/USDT:USDT'. Discovered live against Binance Demo Trading:
+    ex.market('BTC/USDT') raised 'does not have market symbol', tripping recovery_required on the very
+    first live entry attempt for any fixed-list strategy."""
+
+    class _MarketsOnly:
+        def __init__(self, markets): self.markets = markets
+
+    def test_bare_symbol_resolves_to_the_colon_suffixed_perpetual_key(self):
+        ex = self._MarketsOnly({"BTC/USDT:USDT": {}, "ETH/USDT:USDT": {}})
+        self.assertEqual(botmod._resolve_live_symbol(ex, "BTC/USDT"), "BTC/USDT:USDT")
+
+    def test_already_correct_symbol_is_left_unchanged(self):
+        ex = self._MarketsOnly({"SOL/USDT:USDT": {}})
+        self.assertEqual(botmod._resolve_live_symbol(ex, "SOL/USDT:USDT"), "SOL/USDT:USDT")
+
+    def test_unresolvable_symbol_is_returned_as_is_not_dropped(self):
+        ex = self._MarketsOnly({"BTC/USDT:USDT": {}})
+        self.assertEqual(botmod._resolve_live_symbol(ex, "NOPE/USDT"), "NOPE/USDT")
+
+    def test_resolves_the_whole_symbols_and_allowed_list(self):
+        ex = self._MarketsOnly({"BTC/USDT:USDT": {}, "ETH/USDT:USDT": {}})
+        symbols, allowed = botmod._resolve_live_symbols(ex, ["BTC/USDT", "ETH/USDT"], {"BTC/USDT"})
+        self.assertEqual(symbols, ["BTC/USDT:USDT", "ETH/USDT:USDT"])
+        self.assertEqual(allowed, {"BTC/USDT:USDT"})
+
+    def test_allowed_none_stays_none(self):
+        ex = self._MarketsOnly({"BTC/USDT:USDT": {}})
+        _, allowed = botmod._resolve_live_symbols(ex, ["BTC/USDT"], None)
+        self.assertIsNone(allowed)
+
+
+class HedgeModeVerificationTests(unittest.TestCase):
+    """ensure_futures_setup's read-back verification of ex.fetch_position_mode() — previously
+    untested by any FakeBinance double, so a key-name bug (checking 'hedgeMode' instead of ccxt's
+    real 'hedged' key) went unnoticed: it always fell back to the whole non-empty dict, so
+    bool(mode) was always True, meaning EVERY live entry attempt on a real account — hedged or
+    not — raised 'still in Hedge Mode', discovered live against Binance Demo Trading."""
+
+    def setUp(self):
+        self._cfg = dict(botmod.CONFIG)
+        botmod.CONFIG.update({"market": "future", "leverage": 5, "margin_type": "ISOLATED"})
+
+    def tearDown(self):
+        botmod.CONFIG.clear(); botmod.CONFIG.update(self._cfg)
+
+    def test_one_way_account_does_not_raise(self):
+        ex = FakeBinance(hedged=False)
+        botmod.ensure_futures_setup(ex, "BTC/USDT:USDT")   # must not raise
+
+    def test_genuinely_hedged_account_still_raises(self):
+        ex = FakeBinance(hedged=True)
+        with self.assertRaises(RuntimeError) as ctx:
+            botmod.ensure_futures_setup(ex, "BTC/USDT:USDT")
+        self.assertIn("Hedge Mode", str(ctx.exception))
+
+    def test_set_position_mode_is_skipped_once_already_one_way(self):
+        """set_position_mode is account-wide, not per-symbol. Binance rejects a redundant call with
+        -4067 'Position side cannot be changed if there exists open orders' as soon as ANY symbol has
+        an open position/order — discovered live right after a real first entry succeeded. Once
+        fetch_position_mode confirms one-way, the call must be skipped entirely, not retried."""
+        ex = FakeBinance(hedged=False)
+        ex.set_position_mode = mock.Mock(side_effect=Exception(
+            'binanceusdm {"code":-4067,"msg":"Position side cannot be changed if there exists open orders."}'))
+        botmod.ensure_futures_setup(ex, "ADA/USDT:USDT")   # must not raise: never calls set_position_mode
+        ex.set_position_mode.assert_not_called()
 
 
 class StartupGateTests(unittest.TestCase):
