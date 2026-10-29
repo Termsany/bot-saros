@@ -106,5 +106,43 @@ class RealMoneyBotDetectionTests(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
 
 
+class ManualDeployShaTests(unittest.TestCase):
+    """Third pre-production review, finding 6 MEDIUM: '--manual' used to skip the freeze check but still
+    fall through to the script's unconditional tail, which always deploys origin/main's CURRENT tip —
+    not the commit a human actually reviewed. The invocation contract must become
+    'raqm-api-update --manual <full 40-char sha>', mirroring setup-live.sh's own <sha> convention,
+    with the same sha validation setup-live.sh already uses."""
+    S = (VPS / "api" / "update.sh").read_text(encoding="utf-8")
+
+    def test_manual_requires_a_sha_argument_like_setup_live_sh_does(self):
+        self.assertIn("--manual", self.S)
+        self.assertRegex(self.S, r"\$\{2:-\}")                    # a second positional argument is read
+        self.assertRegex(self.S, r"\^\[0-9a-f\]\{40\}\$")         # same 40-hex-char sha pattern setup-live.sh uses
+
+    def test_manual_path_exits_before_the_unconditional_main_tip_merge(self):
+        # the manual branch must exit on its own before the script's shared tail, which always deploys
+        # origin/main's current tip regardless of what sha was reviewed
+        m = re.search(r'if \[ "\$\{1:-\}" = "--manual" \].*?\nfi\n', self.S, re.S)
+        self.assertIsNotNone(m, "no dedicated --manual branch found")
+        manual_block = m.group(0)
+        self.assertIn("exit 0", manual_block)
+        self.assertNotIn("git merge -q --ff-only origin/main", manual_block)
+
+    def test_sha_validation_rejects_missing_and_malformed_shas_but_accepts_a_well_formed_one(self):
+        m = re.search(r"grep -qE '(\^\[0-9a-f\]\{40\}\$)'", self.S)
+        self.assertIsNotNone(m, "sha validation regex not found")
+        pattern = m.group(1)
+
+        def matches(sha):
+            r = subprocess.run(["sh", "-c", f"echo \"$1\" | grep -qE '{pattern}'", "sh", sha], capture_output=True)
+            return r.returncode == 0
+
+        self.assertFalse(matches(""))                 # missing
+        self.assertFalse(matches("not-a-sha"))        # malformed
+        self.assertFalse(matches("a" * 39))           # one char short
+        self.assertFalse(matches("g" * 40))           # right length, not hex
+        self.assertTrue(matches("a" * 40))             # well-formed
+
+
 if __name__ == "__main__":
     unittest.main()
