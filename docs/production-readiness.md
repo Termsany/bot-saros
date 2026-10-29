@@ -2,7 +2,8 @@
 
 Status is **NO-GO**. Paper mode remains the only permitted operating mode for real money.
 
-_Last updated 2026-10-29 after the Phase 1 Demo run of `scripts/demo_e2e.py` (PR #19).
+_Last updated 2026-10-29 after the pre-production review (PRs #21–#23), the deploy of `dc4ecb9` and the Demo run through
+the bot's own cycle._
 Previous version: 2026-10-26 (28a8249), written before PRs #12–#16._
 
 ## Where the roadmap stands
@@ -69,10 +70,37 @@ sizing (fail-closed on missing equity), scheduler with per-user failure isolatio
 reconciliation and kill-switch polling, `/settings/live` UI. **Not wired:** `backend/app/user_live_scheduler.py` is not
 started by any service, cron or startup path. It must not be until Phase 1 is complete for the strategies it runs.
 
-## Deployment gap
+## Pre-production review (2026-10-29)
 
-The VPS paper bots run `bot.py` from 2026-10-25 (before PRs #12–#16). The live and multi-leg code validated above is
-not what runs on the server. Deploying it is part of finishing Phase 1, after review.
+An independent review of `main` at 9088004 (three reviewers: single-leg path, basket engine, safety gates) found
+15 defects, all reproduced before fixing. The fake-exchange tests had passed through all of them. Fixed in
+PR #21 (order path), PR #22 (baskets, risk ledger) and PR #23 (history paging, fees, coin sharing, deploy script). The
+critical one: in live mode the cycle handed six strategies a **keyless** exchange client, so they could not trade at
+all. The adapter-level Demo run could not see this, because it called the adapters directly.
+
+Demo run after the fixes (`scripts/demo_e2e.py`, 18 scenarios, all passed, nothing left open):
+- the 8 adapter scenarios again;
+- `loop:` vol_breakout / rsi2_pullback / trend_breakout through their own `run_once_*` on the exchange that
+  `strategy_exchange()` hands them: entry from a signal, size = margin × leverage once, stop on the exchange, no
+  duplicate on the next cycle, exit on the next day's signal, flat, stop gone, risk released;
+- `cli:` every strategy's real command line (`bot.py --live --expect-env demo --once`) with a tripped kill switch:
+  keys, equity and reconciliation on the Demo account, nothing traded. This stops at the kill switch, so it does not
+  exercise the basket strategies' signal code.
+
+Open items from the review:
+- while an entry block is set, the portfolio `run_once_*` return early and skip their signal exits too (the
+  exchange stops still protect);
+- the equity freshness check is a no-op;
+- live activation readiness is self-declared and the risk allocation is not enforced as a cap.
+
+## Deployment (2026-10-29)
+
+`dc4ecb9` runs on the VPS:
+- the 7 paper bots;
+- the API (now with `RAQM_RISK_DIR=/opt/raqm-risk`, shared with the live bot);
+- the real-orders copy in `/opt/raqm-live`, installed by `setup-live.sh dc4ecb9…` from a root-owned clone.
+
+`raqm-trend-demo.service` is installed but disabled, and `ALLOW_LIVE_TRADING` is off.
 
 ## Required sequence before any Live GO
 
@@ -85,7 +113,8 @@ not what runs on the server. Deploying it is part of finishing Phase 1, after re
    out-of-band manual close, and for the multi-leg strategies a leg that fails on purpose.
 5. Fail-closed administrator / strategy / account activation workflow and audit trail — partial: per-user consent and
    audit exist (PR #12); the scheduler that would act on them is not wired.
-6. Fresh independent review of the exact final head — not done (each PR had its own review; the combined head has not).
+6. Fresh independent review of the exact final head — first pass done (9088004, fixed in #21–#23); a second pass on
+   the fixed head is next.
 
 Then: deploy the reviewed head to the VPS paper bots, watch it, and only after that consider real money, one strategy
 at a time, small size.

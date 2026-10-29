@@ -5,7 +5,6 @@ Runs each adapter the strategies use for real orders against the real exchange, 
 exchange says at every step (not what the bot thinks):
 
   single-leg adapter (_single_leg_live_entry / _single_leg_live_exit): vol_breakout, rsi2_pullback, trend_breakout
-  single-leg entry + close_live_position exit: wave_flats
   basket engine, one leg (_phase2_live_basket): listing_short (short)
   basket engine, two legs: momentum_ls, ratio_trend — plus a second leg that the exchange rejects on purpose
   an out-of-band close in the exchange (as if closed by hand in the app), detected by reconcile_live
@@ -14,13 +13,18 @@ Per scenario: entry -> position and protective stop on the exchange -> restart (
 twice) with no duplicate and no false recovery -> exit -> exchange flat, own stop gone, risk released, trade recorded.
 Always finishes by closing anything left on the symbols it touched and cancelling its own orders.
 
-Refuses to run unless BINANCE_ENV=demo and the private endpoint is demo-fapi.binance.com. Signals are not part of
-this test (they run on paper every day); only order execution, protection, restart and reconciliation are.
+Then the bot's own cycle ("loop:" scenarios): run_once_breakout / run_once_rsi2 / run_once_tbreak on the exchange
+strategy_exchange() hands them, with candles shaped to fire the entry, then the exit, on DOGE — the orders, sizing,
+stop and reconciliation are the real cycle's. And every strategy's real command line (bot.py --live --once) with a
+tripped kill switch: the whole cycle runs on the Demo account (keys, reconcile, equity, signals) and must not trade.
+The adapter scenarios alone missed that the cycle handed six strategies a keyless client.
+
+Refuses to run unless BINANCE_ENV=demo and the private endpoint is demo-fapi.binance.com.
 
   sudo -u raqmlive sh -c 'set -a; . /opt/raqm-live/.env.live; set +a; cd /opt/raqm-live && \\
       BINANCE_ENV=demo venv/bin/python scripts/demo_e2e.py --out state/demo_e2e.json'
 """
-import argparse, json, os, sys, tempfile, time, traceback
+import argparse, json, os, subprocess, sys, tempfile, time, traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -184,6 +188,79 @@ def out_of_band_close(ex, steps):
     check(steps, "no false recovery", OOB not in (state.get("recovery_required") or {}))
 
 
+DAY_MS = 86_400_000
+
+
+def candles(strategy, phase, px, n):
+    """Daily candles ending with today's open candle, shaped so the strategy's rule fires (prices around px)."""
+    want = int(n or 220); n = max(want, 230); today = int(botmod._utc_day(datetime.now(timezone.utc)).timestamp() * 1000)
+    closes = [px * (0.6 + 0.35 * i / (n - 2)) for i in range(n - 1)]                 # a steady uptrend
+    if strategy == "rsi2_pullback" and phase == "entry": closes[-2:] = [px * 0.93, px * 0.90]   # two down days in it
+    if strategy == "rsi2_pullback" and phase == "exit": closes[-1] = px * 1.02                  # close above the 5-day mean
+    if strategy == "trend_breakout" and phase == "exit": closes[-1] = px * 0.5                  # close below the 20-day mean
+    rows = [[today - (n - 1 - i) * DAY_MS, c, c * 1.002, c * 0.998, c, 1e6] for i, c in enumerate(closes)]
+    if strategy == "trend_breakout" and phase == "entry":                                       # today's close breaks the 20-day high
+        rows = [[t, c, c, c * 0.998, c, v] for t, _, _, _, c, v in rows]
+    return (rows + [[today, px * 0.95, px * 0.95, px * 0.95, px * 0.95, 1e5]])[-want:]
+
+
+def cycle(ex_unused, steps, strategy):
+    """The bot's own cycle on the Demo account: entry from a signal, then the exit from the next day's signal."""
+    botmod.CONFIG["enabled_strategies"] = [strategy]
+    run, day_key = {"vol_breakout": (botmod.run_once_breakout, "vb_day"), "rsi2_pullback": (botmod.run_once_rsi2, "rsi2_day"),
+                    "trend_breakout": (botmod.run_once_tbreak, "tb_day")}[strategy]
+    lx = botmod.strategy_exchange()
+    check(steps, "the cycle runs on the keyed Demo account", lx.apiKey and "demo-fapi" in str(lx.urls["api"].get("fapiPrivate", "")))
+    px = price(lx, SINGLE); real_ohlcv, real_universe = lx.fetch_ohlcv, botmod.volume_universe
+    try:
+        botmod.volume_universe = lambda ex, n: [SINGLE]
+        lx.fetch_ohlcv = lambda sym, tf="1d", since=None, limit=None, params=None: candles(strategy, "entry", px, limit)
+        run(lx)
+        state = botmod.load_state()
+        check(steps, "the cycle opened the trade", SINGLE in state["positions"], state.get("recovery_required") or botmod._ENTRY_BLOCK["reason"])
+        pos = state["positions"][SINGLE]; q = qty(lx, SINGLE, "long")
+        check(steps, "position on the exchange", q and abs(q - float(pos["qty"])) < 1e-6 * max(1, q), f"exchange {q} vs bot {pos['qty']}")
+        notional = q * px
+        check(steps, "size = margin x leverage, applied once", abs(notional - MARGIN * LEV) / (MARGIN * LEV) < 0.15, f"${notional:.2f} vs ${MARGIN * LEV}")
+        check(steps, "protective stop on the exchange", own_trigger_orders(lx, SINGLE, pos["oco_ids"]["pos_id"]))
+        check(steps, "risk reserved", risk_open(strategy, SINGLE))
+        run(lx)                                                    # same day again: no second order
+        check(steps, "no duplicate on the next cycle", abs((qty(lx, SINGLE, "long") or 0) - q) < 1e-9, qty(lx, SINGLE, "long"))
+        state = botmod.load_state(); state[day_key] = "2000-01-01"; botmod.save_state(state)        # next day
+        botmod.volume_universe = lambda ex, n: [SINGLE] if strategy != "vol_breakout" else []
+        lx.fetch_ohlcv = lambda sym, tf="1d", since=None, limit=None, params=None: candles(strategy, "exit", px, limit)
+        run(lx)
+        state = botmod.load_state()
+        check(steps, "the cycle closed the trade", SINGLE not in state["positions"], state.get("recovery_required") or botmod._ENTRY_BLOCK["reason"])
+        check(steps, "exchange flat", qty(lx, SINGLE, "long") == 0.0)
+        check(steps, "own stop cancelled", not own_trigger_orders(lx, SINGLE, pos["oco_ids"]["pos_id"]))
+        check(steps, "risk released", not risk_open(strategy, SINGLE))
+        last = (state.get("history") or [{}])[-1]
+        check(steps, "trade recorded with an exchange price", last.get("symbol") == SINGLE and float(last.get("exit") or 0) > 0, last)
+        check(steps, "no recovery left", not state.get("recovery_required"), state.get("recovery_required"))
+    finally:
+        lx.fetch_ohlcv, botmod.volume_universe = real_ohlcv, real_universe
+
+
+def command_line(ex, steps, strategy):
+    """bot.py --live --once exactly as a service would start it, on Demo, with the kill switch tripped: the whole
+    cycle must run on the keyed account and place nothing."""
+    tmp = Path(tempfile.mkdtemp(prefix=f"cli_{strategy}_"))
+    riskmgr.save_risk_state(tmp / "risk_state.json", riskmgr._default_state())
+    riskmgr.trip_kill_switch(tmp / "risk_state.json", "demo e2e: command-line smoke must not trade", by="demo_e2e")
+    before = {p["symbol"]: p.get("contracts") for p in ex.fetch_positions() if float(p.get("contracts") or 0)}
+    env = {**os.environ, "BINANCE_ENV": "demo", "RAQM_RISK_DIR": str(tmp), "PYTHONIOENCODING": "utf-8", "TELEGRAM_BOT_TOKEN": "", "TELEGRAM_CHAT_ID": ""}
+    r = subprocess.run([sys.executable, str(ROOT / "bot.py"), "--live", "--expect-env", "demo", "--strategy", strategy, "--once",
+                        "--leverage", str(LEV), "--amount", str(int(MARGIN)), "--state", str(tmp / "state.json")],
+                       capture_output=True, text=True, env=env, cwd=str(ROOT), timeout=900, encoding="utf-8")
+    out = (r.stdout or "") + (r.stderr or "")
+    check(steps, "cycle finished", r.returncode == 0, out[-300:])
+    check(steps, "no missing-credentials error", "apiKey" not in out, [l for l in out.splitlines() if "apiKey" in l][:2])
+    check(steps, "no traceback", "Traceback" not in out, out[out.find("Traceback"):][:300])
+    after = {p["symbol"]: p.get("contracts") for p in ex.fetch_positions() if float(p.get("contracts") or 0)}
+    check(steps, "nothing traded with the kill switch on", after == before, {"before": before, "after": after})
+
+
 SCENARIOS = [
     ("vol_breakout", lambda ex, s: single_leg(ex, s, "vol_breakout")),
     ("rsi2_pullback", lambda ex, s: single_leg(ex, s, "rsi2_pullback")),
@@ -193,6 +270,11 @@ SCENARIOS = [
     ("ratio_trend", lambda ex, s: basket(ex, s, "ratio_trend", [(PAIR[0], "long"), (PAIR[1], "short")], "ratio")),
     ("ratio_trend: rejected leg unwound", lambda ex, s: basket_leg_rejected(ex, s, "ratio_trend")),
     ("out-of-band close detected", out_of_band_close),
+    ("loop: vol_breakout", lambda ex, s: cycle(ex, s, "vol_breakout")),
+    ("loop: rsi2_pullback", lambda ex, s: cycle(ex, s, "rsi2_pullback")),
+    ("loop: trend_breakout", lambda ex, s: cycle(ex, s, "trend_breakout")),
+    *[(f"cli: {st}", lambda ex, s, st=st: command_line(ex, s, st))
+      for st in ("trend_daily", "vol_breakout", "rsi2_pullback", "trend_breakout", "listing_short", "momentum_ls", "ratio_trend")],
 ]
 
 
@@ -223,7 +305,8 @@ def main():
     a = ap.parse_args()
     if botmod.binance_env() != "demo":
         sys.exit("refusing: BINANCE_ENV must be demo (Binance Futures Demo Trading)")
-    botmod.CONFIG.update({"paper_trading": False, "market": "future", "leverage": LEV, "trade_amount_usdt": MARGIN, "notify": False})
+    botmod.CONFIG.update({"paper_trading": False, "market": "future", "leverage": LEV, "trade_amount_usdt": MARGIN, "notify": False,
+                          "use_percent_risk": False, "public_dir": None})
     ex, err = botmod.get_exchange(auth=True)
     if err: sys.exit(f"no keys: {err}")
     host = str(ex.urls["api"].get("fapiPrivate", ""))
@@ -237,7 +320,7 @@ def main():
     only = {x.strip() for x in a.only.split(",") if x.strip()}
     try:
         for name, fn in SCENARIOS:
-            if only and name.split(":")[0] not in only: continue
+            if only and name.split(":")[0] not in only and name not in only: continue
             print(f"\n▶ {name}", flush=True); steps = []
             # own books per scenario: "ratio_trend" and "ratio_trend: rejected leg unwound" must not share a state file
             fresh_books(tmp, f"{len(report['scenarios'])}_" + "".join(c if c.isalnum() else "_" for c in name))
