@@ -1099,12 +1099,21 @@ def _build_futures_params(ex, side, cid, reduceOnly=False):
             params["positionSide"] = ps
     return params
 
+def _fetch_order_by_cid(ex, cid, symbol):
+    """Look an order up by OUR client id. Binance needs origClientOrderId for that — without it ccxt sends the id as the
+    exchange's orderId and never finds the order. (Exchanges / test fakes without params fall back to the plain call.)"""
+    try:
+        return ex.fetch_order(cid, symbol, {"origClientOrderId": cid})
+    except TypeError:
+        return ex.fetch_order(cid, symbol)
+
+
 def _reconcile_fills_by_client_id(ex, symbol, cid):
     for fn in ("fetch_order", "fetch_open_orders", "fetch_closed_orders", "fetch_orders"):
         try:
             if fn == "fetch_order":
                 try:
-                    o = ex.fetch_order(cid, symbol)
+                    o = _fetch_order_by_cid(ex, cid, symbol)
                     if o and (o.get("clientOrderId")==cid or o.get("orderLinkId")==cid or o.get("id")==cid):
                         return o
                 except:
@@ -1709,6 +1718,42 @@ def _release_position_risk(symbol, pos):
         riskmgr.release_open_risk(RISK_PATH, strategy=pos.get("strategy") or _current_strategy_name(), symbol=symbol)
     except Exception as e:
         log(f"risk ledger release failed {symbol}: {e}")
+
+ENTRY_RECHECK_S = 2.0   # pause before the second flat reading after an entry error
+
+
+def _entry_order_outcome(ex, symbol, cid):
+    """What the exchange says about our entry order, by its client id: "not_filled" (cancelled / rejected / expired
+    with nothing filled), "not_found" (Binance -2013: it never reached the book), "filled" (some quantity), or
+    "unknown" (still open, odd answer, or the lookup itself failed)."""
+    try:
+        o = _fetch_order_by_cid(ex, cid, symbol)
+    except Exception as e:
+        if isinstance(e, getattr(ccxt, "OrderNotFound", ())) or "-2013" in str(e) or "Order does not exist" in str(e):
+            return "not_found"
+        return "unknown"
+    if not isinstance(o, dict) or (o.get("clientOrderId") not in (None, cid) and o.get("id") != cid):
+        return "unknown"
+    try: filled = float(o.get("filled") or 0)
+    except (TypeError, ValueError): return "unknown"
+    if filled > 0: return "filled"
+    return "not_filled" if str(o.get("status") or "").lower() in ("canceled", "cancelled", "rejected", "expired") else "unknown"
+
+
+def _entry_failed_flat(ex, symbol, cid, side=None):
+    """After an entry order raised: is it proven that nothing was opened? Same standard as the close path, which never
+    trusts a flat position reading without fill evidence — here: flat, the order itself confirmed unfilled, and flat
+    again a moment later. Anything short of that is recovery (the reservation stays, new entries stop)."""
+    if _exchange_position_qty(ex, symbol, side=side) != 0.0:
+        return False, "position not proven flat"
+    outcome = _entry_order_outcome(ex, symbol, cid)
+    if outcome not in ("not_filled", "not_found"):
+        return False, f"entry order outcome {outcome}"
+    if ENTRY_RECHECK_S: time.sleep(ENTRY_RECHECK_S)
+    if _exchange_position_qty(ex, symbol, side=side) != 0.0:
+        return False, "position appeared on the second reading"
+    return True, outcome
+
 
 def _authoritative_close_fill(ex, symbol, pos):
     """Require exchange trade evidence before treating an already-flat position as closed."""
@@ -2369,10 +2414,18 @@ def _enter_trend_live(symbol, analysis, state, ex, margin, lev, price):
             state.setdefault("recovery_required", {})[symbol] = {"cid": cid, "reason": f"entry error, position unknown: {e}", "at": datetime.now(timezone.utc).isoformat()}
             save_state(state)
             notify(f"🚨 {symbol}: أمر الدخول رجّع خطأ ومقدرناش نعرف اتنفذ ولا لأ — راجع المنصة. البوت وقف أي دخول جديد."); return
-        if q == 0:
+        flat_ok, why = _entry_failed_flat(ex, symbol, cid, side="long") if q == 0 else (False, "")
+        if flat_ok:
             riskmgr.rollback_reservation(RISK_PATH, strategy="trend_daily", symbol=symbol)
             state["pending_orders"].pop(symbol, None); save_state(state)
             log(f"فشل دخول {symbol}: {e}"); return
+        if q == 0:   # one flat reading only — the order may have filled and the position not shown yet
+            riskmgr.mark_reservation_recovery(RISK_PATH, strategy="trend_daily", symbol=symbol, reason=f"entry error, not proven flat: {why}")
+            state.setdefault("recovery_required", {})[symbol] = {"cid": cid, "reason": f"entry error, not proven flat ({why}): {e}", "at": datetime.now(timezone.utc).isoformat()}
+            _ENTRY_BLOCK["reason"] = "live entry outcome requires recovery"
+            save_state(state)
+            notify(f"🚨 {symbol}: أمر الدخول رجّع خطأ ومش متأكدين إنه ما اتنفذش ({why}) — راجع المنصة. البوت وقف أي دخول جديد.")
+            return
         state.setdefault("recovery_required", {})[symbol] = {"cid": cid, "reason": f"entry error with an open position but no authoritative entry fill: {e}", "qty": q, "at": datetime.now(timezone.utc).isoformat()}
         riskmgr.mark_reservation_recovery(RISK_PATH, strategy="trend_daily", symbol=symbol, reason="open position without authoritative fill")
         _ENTRY_BLOCK["reason"] = "live entry fill evidence unavailable"
@@ -2917,12 +2970,12 @@ def _single_leg_live_entry(ex, state, symbol, side, margin, price, sl, tp, strat
             raise RuntimeError("entry returned no filled quantity")
     except Exception as exc:
         try:
-            q = _exchange_position_qty(ex, symbol, side=side)
-            if q == 0:
+            flat_ok, why = _entry_failed_flat(ex, symbol, cid, side=side)
+            if flat_ok:
                 riskmgr.rollback_reservation(RISK_PATH, strategy=strategy, symbol=symbol)
                 state["pending_orders"].pop(symbol, None); save_state(state)
                 return None
-            riskmgr.mark_reservation_recovery(RISK_PATH, strategy=strategy, symbol=symbol, reason="entry outcome unknown")
+            riskmgr.mark_reservation_recovery(RISK_PATH, strategy=strategy, symbol=symbol, reason=f"entry outcome unknown: {why}")
         except Exception:
             pass
         state.setdefault("recovery_required", {})[symbol] = {"cid": cid, "reason": f"entry outcome unknown: {exc}", "at": datetime.now(timezone.utc).isoformat()}
