@@ -178,7 +178,7 @@ class WriteJsonAtomicPermissionsTests(unittest.TestCase):
             # same convention risk_manager.py / live_activation.py already use for their sqlite files
             self.assertTrue(any(c.args[1] == 0o660 for c in chmod_mock.call_args_list),
                              f"expected a chmod(..., 0o660) call, got {chmod_mock.call_args_list}")
-        self.assertTrue(path.exists())   # the mocked chmod must not have broken the normal write/replace
+            self.assertTrue(path.exists())   # the mocked chmod must not have broken the normal write/replace
 
 
 if __name__ == "__main__":

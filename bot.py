@@ -2315,11 +2315,15 @@ def _ipc_dir():
 
 def _write_json_atomic(path, data):
     """New temp file with an unpredictable name (O_EXCL: never follows a link someone planted), then rename over the
-    target (rename replaces a link instead of writing through it)."""
+    target (rename replaces a link instead of writing through it). mkstemp() defaults to mode 0600 (owner only);
+    chmod to 0660 before the rename so the API (group raqmapi on the shared setgid dir) can read it too — the
+    same convention risk_manager.py/live_activation.py already use for their sqlite files."""
     import tempfile
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".w-", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh: fh.write(json.dumps(data, ensure_ascii=False, default=str))
+        try: os.chmod(tmp, 0o660)
+        except OSError: pass
         os.replace(tmp, path)
     except Exception:
         try: os.unlink(tmp)
