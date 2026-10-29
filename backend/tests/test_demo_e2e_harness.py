@@ -25,24 +25,37 @@ class Sim(FakeBinance):
         self.positions[base] = self.positions.get(base, 0.0) + signed
         if abs(self.positions[base]) < 1e-12: self.positions[base] = 0.0
         self.orders.append({"symbol": sym, "side": side, "qty": float(qty), "params": p})
-        self.fills.append({"symbol": sym, "side": side, "filled": float(qty), "price": 100.0, "fee": {"cost": float(qty) * 100 * 0.0004}, "timestamp": 2e12})
-        return {"id": "o", "clientOrderId": p.get("clientOrderId"), "filled": float(qty), "average": 100.0, "fee": {"cost": float(qty) * 100 * 0.0004}}
+        oid = f"o{len(self.orders)}"
+        # like Binance (seen on Demo): the fill is split, and only the fills carry the price and the fee
+        for part in (float(qty) * 0.4, float(qty) * 0.6):
+            self.fills.append({"symbol": sym, "side": side, "order": oid, "amount": part, "filled": part, "price": 100.0,
+                               "fee": {"cost": part * 100 * 0.0004, "currency": "USDT"}, "timestamp": 2e12})
+        return {"id": oid, "clientOrderId": p.get("clientOrderId"), "filled": float(qty), "average": None, "fee": None, "status": "closed"}
     def fetch_positions(self, syms=None):
         out = []
         for b, q in self.positions.items():
             if q and (not syms or b in [x.split(":")[0] for x in syms]):
                 out.append({"symbol": b + ":USDT", "contracts": abs(q), "side": "long" if q > 0 else "short"})
         return out
-    def fetch_open_orders(self, sym, *a):
+    # like Binance USDT-M (seen on Demo): stop/take-profit orders only show in the trigger/stop views, and a plain
+    # cancel of one answers -2011 "Unknown order sent"
+    def _stops(self, sym):
         return [{"id": "stop-" + o["params"]["clientOrderId"], "clientOrderId": o["params"]["clientOrderId"]}
                 for o in self.orders if o["symbol"] == sym and ("stopLossPrice" in o["params"] or "takeProfitPrice" in o["params"])
                 and "stop-" + o["params"]["clientOrderId"] not in self.cancelled]
-    def cancel_order(self, oid, sym, *a): self.cancelled.append(oid)
+    def fetch_open_orders(self, sym, since=None, limit=None, params=None):
+        return self._stops(sym) if (params or {}).get("trigger") or (params or {}).get("stop") else []
+    def cancel_order(self, oid, sym, params=None):
+        if oid.startswith("stop-") and not ((params or {}).get("trigger") or (params or {}).get("stop")):
+            import ccxt; raise ccxt.OrderNotFound('binanceusdm {"code":-2011,"msg":"Unknown order sent."}')
+        self.cancelled.append(oid)
     def fetch_order(self, oid, sym, params=None):
-        for o in self.fetch_open_orders(sym):
+        for o in self._stops(sym):
             if o["id"] == oid or o["clientOrderId"] == oid: return {**o, "status": "open"}
         raise Exception("not found")
-    def fetch_my_trades(self, sym, since=None, limit=100): return [f for f in self.fills if f["symbol"] == sym]
+    def fetch_my_trades(self, sym, since=None, limit=100, params=None):
+        oid = (params or {}).get("orderId")
+        return [f for f in self.fills if f["symbol"] == sym and (oid is None or f["order"] == oid)]
     def fetch_funding_rate_history(self, *a, **k): return []
 
 

@@ -239,7 +239,9 @@ def main():
     try:
         for name, fn in SCENARIOS:
             if only and name.split(":")[0] not in only: continue
-            print(f"\n▶ {name}", flush=True); steps = []; fresh_books(tmp, name.split(":")[0].replace(" ", "_"))
+            print(f"\n▶ {name}", flush=True); steps = []
+            # own books per scenario: "ratio_trend" and "ratio_trend: rejected leg unwound" must not share a state file
+            fresh_books(tmp, f"{len(report['scenarios'])}_" + "".join(c if c.isalnum() else "_" for c in name))
             try: fn(ex, steps); ok, err_txt = True, ""
             except Fail as f: ok, err_txt = False, f"failed at: {f}"
             except Exception as e: ok, err_txt = False, f"{type(e).__name__}: {e}"; traceback.print_exc()

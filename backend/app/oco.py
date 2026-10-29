@@ -185,7 +185,11 @@ def cancel_oco_orders(ex, symbol, pos_id: str = None, sl_id: str = None, tp_id: 
             cancel_name = {"algo": "cancel_algo_order", "conditional": "cancel_conditional_order", "trigger_api": "cancel_trigger_order"}.get(view)
             cancel_fn = getattr(ex, cancel_name, None) if cancel_name else None
             if not callable(cancel_fn) or (cancel_name and cancel_name not in dir(ex)):
-                cancel_fn = ex.cancel_order
+                # an order found in the trigger/stop view must be cancelled through that view: Binance keeps
+                # conditional orders apart and answers a plain cancel with -2011 "Unknown order sent"
+                # (seen on Binance Demo by scripts/demo_e2e.py — every exit ended in recovery)
+                view_params = {"trigger": {"trigger": True}, "stop": {"stop": True}}.get(view)
+                cancel_fn = (lambda o, s, p=view_params: ex.cancel_order(o, s, p)) if view_params else ex.cancel_order
             cancel_fn(oid, symbol)
         except Exception:
             ok = False
