@@ -617,6 +617,21 @@ def run_once_ratio(ex):
                 log(f"🔝 ratio: أعلى {R['top']}: {', '.join(m.split('/')[0] for m in members)}")
         members = state.get("ratio_members") or []
         wanted = {f"{a}|{b}" for i, a in enumerate(members) for b in members[i + 1:]}
+        if not CONFIG["paper_trading"]:
+            # reconcile_live books a leg the exchange closed but leaves the pair: the other leg is then an unhedged
+            # position the strategy no longer manages, and the pair's next exit failed for good on the missing leg
+            for key, pair in list(state["pairs"].items()):
+                held = [leg for leg in pair["legs"] if leg["sym"] in state["positions"]]
+                if len(held) == len(pair["legs"]): continue
+                if held:
+                    out = [{"symbol": leg["sym"], "side": "close_" + leg["side"], "action": "exit", "position": state["positions"][leg["sym"]],
+                            "price": float(ex.fetch_ticker(leg["sym"])["last"]), "order": i, "risk_usdt": 0, "notional_usdt": 0,
+                            "correlation_group": _correlation_group(leg["sym"])} for i, leg in enumerate(held)]
+                    result = _phase2_live_basket(ex, state, "ratio_trend", f"ratio-orphan-exit:{key}", out, reserve=False)
+                    if not result or result.get("status") != "filled": continue
+                    notify(f"⚠️ ratio {key}: رجل اتقفلت على المنصة — الرجل التانية اتقفلت كمان")
+                state["pairs"].pop(key, None)
+            save_state(state)
         closed = 0.0; flips = 0
         for key in list(state["pairs"]):
             if CONFIG["paper_trading"] and key not in wanted: closed += _ratio_close_pair(ex, state, key, prices, "عملة خرجت من القائمة", fcache)
@@ -626,7 +641,8 @@ def run_once_ratio(ex):
             for key, pair in list(state["pairs"].items()):
                 if key not in wanted:
                     for leg in pair["legs"]:
-                        exits.append({"symbol": leg["sym"], "side": "close_" + leg["side"], "action": "exit", "position": state["positions"].get(leg["sym"], leg),
+                        if leg["sym"] not in state["positions"]: continue   # already closed and booked
+                        exits.append({"symbol": leg["sym"], "side": "close_" + leg["side"], "action": "exit", "position": state["positions"][leg["sym"]],
                                       "price": float(ex.fetch_ticker(leg["sym"])["last"]), "order": len(exits), "risk_usdt": 0, "notional_usdt": 0,
                                       "correlation_group": _correlation_group(leg["sym"])})
             if exits:
@@ -644,7 +660,8 @@ def run_once_ratio(ex):
                 if cur:
                     legs_out = []
                     for leg in cur["legs"]:
-                        legs_out.append({"symbol": leg["sym"], "side": "close_" + leg["side"], "action": "exit", "position": state["positions"].get(leg["sym"], leg),
+                        if leg["sym"] not in state["positions"]: continue   # already closed and booked
+                        legs_out.append({"symbol": leg["sym"], "side": "close_" + leg["side"], "action": "exit", "position": state["positions"][leg["sym"]],
                                          "price": float(ex.fetch_ticker(leg["sym"])["last"]), "order": len(legs_out), "risk_usdt": 0, "notional_usdt": 0,
                                          "correlation_group": _correlation_group(leg["sym"])})
                     result = _phase2_live_basket(ex, state, "ratio_trend", f"ratio-flip-exit:{key}", legs_out, reserve=False)
@@ -1682,6 +1699,10 @@ def _fill_from_trades(ex, symbol, order):
         qty = sum(float(t.get("amount") or 0) for t in rows)
         if qty <= 0:
             continue
+        try: said = float(order.get("filled") or 0)
+        except (TypeError, ValueError): said = 0.0
+        if said > 0 and qty + 1e-9 < said:
+            continue   # some fills not visible yet: a stop sized on them would leave the rest unprotected
         fees = [t.get("fee") or {} for t in rows]
         out = dict(order)
         out["filled"] = qty
@@ -1902,6 +1923,8 @@ def close_live_position(ex, symbol, pos, price):
             if evidence is None:
                 return _close_failure(f"close errored and no authoritative fill proves closure for {symbol}", by_exchange=True)
             log(f"{symbol}: المنصة قفلت الصفقة بالفعل (وقف/هدف) — {e}")
+            if _cancel_all_protective_orders(ex, symbol, pos) is False:   # else its reduceOnly stop outlives it
+                return _close_failure(f"protective cleanup is unconfirmed for {symbol}", by_exchange=True)
             try:
                 _refresh_fee_evidence(ex, symbol, pos, evidence.get("raw")); _refresh_funding_evidence(ex, symbol, pos)
             except Exception as evidence_error:
@@ -2215,6 +2238,7 @@ def reconcile_live(state, ex):
             if sym not in state.setdefault("recovery_required", {}):
                 state["recovery_required"][sym] = {"reason": f"الكمية على المنصة {q} مش {pos['qty']}", "at": datetime.now(timezone.utc).isoformat()}
                 notify(f"🚨 {sym}: الكمية على المنصة {q} مختلفة عن البوت {pos['qty']} — راجعها. البوت وقف أي دخول جديد.")
+    _protect_pending(ex, state, live)
     mine = {k.split(":")[0] for k in state["positions"]}
     unknown = sorted(set(live) - mine)
     if unknown:
@@ -2224,6 +2248,48 @@ def reconcile_live(state, ex):
         state["_unknown_seen"] = unknown
     else:
         state.pop("_unknown_seen", None)
+    save_state(state)
+
+def _expect_stop(state, symbol, side, sl, cid):
+    """Before an entry order goes out: until its stop is confirmed, reconcile_live puts a reduceOnly stop on whatever
+    the exchange holds for this coin (a crash between order and stop, a fill whose outcome was unclear, a stop the
+    exchange refused). Saved before the order, so it survives a restart."""
+    if sl is None: return
+    state.setdefault("protect", {})[symbol] = {"side": side, "sl": float(sl), "cid": cid, "at": datetime.now(timezone.utc).isoformat()}
+    save_state(state)
+
+def _stop_confirmed(state, symbol):
+    (state.get("protect") or {}).pop(symbol, None)
+
+def _protect_pending(ex, state, live):
+    """reconcile_live, every live cycle: give each expected-but-unconfirmed position its stop."""
+    book = state.get("protect") or {}
+    if not book: return
+    from backend.app.oco import place_oco_orders, _owned_orders, _oco_id
+    for sym, info in list(book.items()):
+        pos = state["positions"].get(sym)
+        if pos and not pos.get("unprotected") and not pos.get("sl_unverified"):
+            book.pop(sym, None); continue                       # recorded with its stop: nothing left to do
+        q = live.get(sym.split(":")[0])
+        if not q:
+            book.pop(sym, None); continue                       # nothing on the exchange to protect
+        if info.get("protected"): continue
+        try:
+            found, _ = _owned_orders(ex, sym, {_oco_id(info["cid"], "sl")})
+            if found: ok = True                                 # placed before a crash: don't send a second one
+            else:
+                oco = place_oco_orders(ex, sym, info["side"], q, info["sl"], None, paper=False, pos_id=info["cid"])
+                ok = not oco.get("protection_missing") and not oco.get("verify_failed")
+        except Exception as exc:
+            ok = False; log(f"⚠️ {sym}: وقف الحماية فشل تاني: {exc}")
+        if not ok: continue                                     # next cycle again
+        info.update(protected=True, qty=q)
+        if pos:
+            pos["unprotected"] = False; pos["sl_unverified"] = False
+            pos.setdefault("oco_ids", {}).update({"pos_id": info["cid"], "sl": _oco_id(info["cid"], "sl")})
+        else:
+            state.setdefault("recovery_required", {}).setdefault(sym, {"reason": "position on the exchange without a recorded entry", "qty": q, "at": datetime.now(timezone.utc).isoformat()})
+        notify(f"🛡️ {sym}: اتحط وقف على المنصة عند {info['sl']:.6g} لكمية {q} — الصفقة لسه محتاجة مراجعة")
     save_state(state)
 
 def _ipc_dir():
@@ -2502,6 +2568,7 @@ def _enter_trend_live(symbol, analysis, state, ex, margin, lev, price):
         log(f"⛔ {symbol} رفض بوابة المخاطر المركزية — {reason}"); return
     cid = "raqm-" + uuid.uuid4().hex[:27]   # per attempt — a fixed id per symbol matched trade #1's order on trade #2
     state.setdefault("pending_orders", {})[symbol] = cid; save_state(state)   # survives a crash between order and record
+    _expect_stop(state, symbol, "long", sl_estimate, cid)
     try:
         res = place_order(ex, symbol, "long", margin, price, client_order_id=cid)
     except Exception as e:
@@ -2542,6 +2609,8 @@ def _enter_trend_live(symbol, analysis, state, ex, margin, lev, price):
         oco = {"sl_error": str(e), "protection_missing": True}
     pos["oco_ids"]["sl"] = oco.get("sl_id")
     state["pending_orders"].pop(symbol, None)
+    if not oco.get("protection_missing") and not oco.get("verify_failed"): _stop_confirmed(state, symbol)
+    else: state["protect"][symbol]["sl"] = float(sl)               # retried at the real stop level
     if oco.get("protection_missing"):
         notify(f"🚨 {symbol}: أمر الوقف اترفض ({oco.get('sl_error')}) — بيقفل الصفقة فورا")
         try:
@@ -2965,6 +3034,8 @@ def _phase2_live_basket(ex, state, strategy, intent, legs, *, reserve=True):
     for row in pending:
         if (row.get("resolution") or {}).get("status") == "compensated":
             recovery.pop(f"execution:{row['execution_id']}", None)
+            token = (row.get("payload") or {}).get("cycle_token")
+            for key in [k for k, v in cycles.items() if v == token]: cycles.pop(key, None)
             for key in [k for k, v in recovery.items() if isinstance(v, dict) and v.get("execution_id") == row["execution_id"]]:
                 recovery.pop(key, None)
     unresolved = [row for row in pending if (row.get("resolution") or {}).get("status") == "recovery_required"]
@@ -2979,6 +3050,7 @@ def _phase2_live_basket(ex, state, strategy, intent, legs, *, reserve=True):
         if leg.get("action", "entry") == "exit":
             result = close_live_position(ex, leg["symbol"], leg["position"], leg.get("price")); _require_verified_close(result)
             fills[leg["symbol"]] = result; return {**result, "qty": result.get("qty", leg["position"].get("qty"))}
+        _expect_stop(state, leg["symbol"], leg["side"], leg.get("sl"), leg["client_order_id"])   # a crash from here on: reconcile_live protects it
         result = place_order(ex, leg["symbol"], leg["side"], leg["margin"], leg["price"], client_order_id=leg["client_order_id"])
         if float(result.get("qty", 0) or 0) <= 0: raise RuntimeError("leg returned no filled quantity")
         from backend.app.oco import place_oco_orders
@@ -2993,14 +3065,21 @@ def _phase2_live_basket(ex, state, strategy, intent, legs, *, reserve=True):
         """The leg raised after its order may have gone through. Flat + order not filled = nothing to undo;
         an open position on the exchange is closed and its stop removed; anything unclear stays residual."""
         q = _exchange_position_qty(ex, leg["symbol"], side=leg["side"])
-        if q is None: return {"confirmed": False, "reason": "position unknown after the leg failed"}
+        def unclear(reason):   # whatever is open there gets a stop now, and again every cycle until it has one
+            q2, protected = _protect_unrecorded_entry(ex, leg["symbol"], leg["side"], leg.get("sl"), leg["client_order_id"])
+            notify(f"🚨 {leg['symbol']}: رجل في سلة {strategy} وقعت ومش متأكدين من حالتها ({reason}) — " +
+                   (f"اتحط وقف طوارئ ({q2})" if protected else "البوت هيحاول يحط وقف كل دورة") + ". راجع المنصة.")
+            return {"confirmed": False, "reason": reason}
+        if q is None: return unclear("position unknown after the leg failed")
         if float(q) == 0:
             flat_ok, why = _entry_failed_flat(ex, leg["symbol"], leg["client_order_id"], side=leg["side"])
-            return {"confirmed": True, "flat": True} if flat_ok else {"confirmed": False, "reason": f"not proven flat: {why}"}
+            if flat_ok: _stop_confirmed(state, leg["symbol"]); return {"confirmed": True, "flat": True}
+            return unclear(f"not proven flat: {why}")
         try:
-            return compensate(leg, {"qty": q, "price": leg["price"]})
+            out = compensate(leg, {"qty": q, "price": leg["price"]})
         except Exception as exc:
-            return {"confirmed": False, "reason": f"closing the failed leg: {exc}"}
+            return unclear(f"closing the failed leg: {exc}")
+        return out if out.get("confirmed") else unclear(out.get("reason") or "unwind not confirmed")
     def compensate(leg, result):
         if leg.get("action", "entry") == "exit": return {"confirmed": False, "reason": "closed exit leg cannot be compensated automatically"}
         close_side = "close_long" if leg["side"] == "long" else "close_short"
@@ -3019,6 +3098,7 @@ def _phase2_live_basket(ex, state, strategy, intent, legs, *, reserve=True):
             log(f"⚠️ {leg['symbol']}: الرجل اتقفلت بس أوامر الحماية بتاعتها ما اتلغتش: {cancel_error}")
             notify(f"⚠️ {leg['symbol']}: رجل اتقفلت تلقائياً بس أمر الوقف بتاعها ممكن يكون لسه على المنصة — راجعه")
             return {"confirmed": False, "reason": f"leg closed but its stop is not confirmed cancelled: {cancel_error}", "close": closed}
+        _stop_confirmed(state, leg["symbol"])
         return {"confirmed": True, "close": closed}
     for leg in legs:
         if leg.get("action", "entry") == "exit":
@@ -3047,6 +3127,7 @@ def _phase2_live_basket(ex, state, strategy, intent, legs, *, reserve=True):
                 "oco_ids": {"pos_id": leg["client_order_id"], "sl": oco.get("sl_id"), "tp": oco.get("tp_id")}, "strategy": strategy, **(leg.get("extra") or {})}
             riskmgr.register_open_risk(RISK_PATH, strategy=strategy, symbol=sym, side=leg["side"], risk_usdt=leg["risk_usdt"],
                 notional_usdt=leg["notional_usdt"], correlation_group=leg.get("correlation_group"))
+            _stop_confirmed(state, sym)
         save_state(state)
         if len(filled) == len(legs): cycles.pop(cycle_key, None)   # partial (closed exits of a failed basket): keep the cycle
         return True
@@ -3056,6 +3137,8 @@ def _phase2_live_basket(ex, state, strategy, intent, legs, *, reserve=True):
     result = engine.execute(strategy=strategy, intent=intent, legs=legs, equity_usdt=equity, execute_leg=execute_leg,
                             compensate_leg=compensate, verify_protection=protected, state=state, reserve=reserve,
                             persist_fills=_persist_fills, cycle_token=cycle_token, unwind_failed_leg=unwind_failed_leg)
+    if result.get("status") in ("compensated", "risk_blocked"):
+        cycles.pop(cycle_key, None); save_state(state)
     if result.get("status") == "recovery_required":
         for item in result.get("residual", []):
             sym = item["leg"]["symbol"]
@@ -3098,6 +3181,9 @@ def _single_leg_live_entry(ex, state, symbol, side, margin, price, sl, tp, strat
         return None
     if _ENTRY_BLOCK.get("reason") or state.get("recovery_required"):
         return None
+    refused = state.get("stop_refused") or {}
+    if symbol in refused and datetime.now(timezone.utc) - datetime.fromisoformat(refused[symbol]) < pd.Timedelta(days=1):
+        return None   # the exchange refused this coin's stop today: buying again would only buy, refuse, sell again
     equity = _fetch_equity_usdt(ex)
     if equity is None:
         _ENTRY_BLOCK["reason"] = "account equity unavailable — blocking new entries"
@@ -3121,7 +3207,7 @@ def _single_leg_live_entry(ex, state, symbol, side, margin, price, sl, tp, strat
         return None
     cid = "raqm-" + uuid.uuid4().hex[:27]   # per attempt; pending_orders keeps it across a crash
     state.setdefault("pending_orders", {})[symbol] = cid
-    save_state(state)
+    _expect_stop(state, symbol, side, sl, cid)
     try:
         res = place_order(ex, symbol, side, margin, price, client_order_id=cid)
         if float(res.get("qty", 0) or 0) <= 0:
@@ -3131,7 +3217,7 @@ def _single_leg_live_entry(ex, state, symbol, side, margin, price, sl, tp, strat
             flat_ok, why = _entry_failed_flat(ex, symbol, cid, side=side)
             if flat_ok:
                 riskmgr.rollback_reservation(RISK_PATH, strategy=strategy, symbol=symbol)
-                state["pending_orders"].pop(symbol, None); save_state(state)
+                state["pending_orders"].pop(symbol, None); _stop_confirmed(state, symbol); save_state(state)
                 return None
             riskmgr.mark_reservation_recovery(RISK_PATH, strategy=strategy, symbol=symbol, reason=f"entry outcome unknown: {why}")
         except Exception:
@@ -3160,6 +3246,7 @@ def _single_leg_live_entry(ex, state, symbol, side, margin, price, sl, tp, strat
         oco = {"protection_missing": True, "sl_error": str(exc)}
     pos["oco_ids"].update({"sl": oco.get("sl_id"), "tp": oco.get("tp_id")})
     state["pending_orders"].pop(symbol, None)
+    if not oco.get("protection_missing") and not oco.get("verify_failed"): _stop_confirmed(state, symbol)
     if oco.get("protection_missing"):
         try:
             closed = close_live_position(ex, symbol, pos, price)
@@ -3167,8 +3254,13 @@ def _single_leg_live_entry(ex, state, symbol, side, margin, price, sl, tp, strat
         except Exception as exc:
             close_error = exc
         if close_error is None:   # the exchange refused the stop and the position is verified closed: nothing is open
-            riskmgr.rollback_reservation(RISK_PATH, strategy=strategy, symbol=symbol)
-            log(f"⛔ {symbol}: الوقف اترفض فاتقفلت الصفقة على طول"); notify(f"⛔ {symbol}: المنصة رفضت أمر الوقف — الصفقة اتقفلت على طول")
+            riskmgr.rollback_reservation(RISK_PATH, strategy=strategy, symbol=symbol); _stop_confirmed(state, symbol)
+            now = datetime.now(timezone.utc); refused = state.setdefault("stop_refused", {}); refused[symbol] = now.isoformat()
+            recent = [k for k, t in refused.items() if now - datetime.fromisoformat(t) < pd.Timedelta(days=1)]
+            if len(recent) >= 3:   # not one coin's filter: the account or the order format — stop entering
+                _ENTRY_BLOCK["reason"] = f"the exchange refused the stop on {len(recent)} coins today"
+                state.setdefault("recovery_required", {})["stop_refused"] = {"reason": _ENTRY_BLOCK["reason"], "coins": recent, "at": now.isoformat()}
+            log(f"⛔ {symbol}: الوقف اترفض فاتقفلت الصفقة على طول"); notify(f"⛔ {symbol}: المنصة رفضت أمر الوقف ({oco.get('sl_error')}) — الصفقة اتقفلت على طول، والعملة دي متوقفة يوم")
             save_state(state); return None
         pos["unprotected"] = True
         state["positions"][symbol] = pos
@@ -3193,7 +3285,8 @@ def _single_leg_live_exit(ex, state, symbol, price, reason):
     pos = state["positions"].get(symbol)
     if not pos:
         return False
-    if symbol in (state.get("recovery_required") or {}):   # its state is in doubt: a person decides (its exchange stop stays)
+    if symbol in (state.get("recovery_required") or {}) and not (pos.get("unprotected") or pos.get("sl_unverified")):
+        # its state is in doubt but its exchange stop is in place: a person decides. Without a stop it is closed.
         log(f"⏸️ {symbol}: خروج ({reason}) متأجل — الصفقة محتاجة مراجعة"); return False
     try:
         result = close_live_position(ex, symbol, pos, price)
