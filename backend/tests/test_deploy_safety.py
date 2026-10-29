@@ -1,5 +1,5 @@
 """Nothing that root runs may sit where a less privileged user can write (second pre-production review, 2026-10-29)."""
-import re, unittest
+import re, subprocess, tempfile, unittest
 from pathlib import Path
 VPS = Path(__file__).resolve().parent.parent.parent / "deploy" / "vps"
 
@@ -58,6 +58,52 @@ class GroupMembershipTests(unittest.TestCase):
     def test_paper_bot_joins_the_api_group(self):
         s = (VPS / "setup-paper-ipc.sh").read_text(encoding="utf-8")
         self.assertRegex(s, r"(?m)^usermod -aG raqmapi raqm$")
+
+
+class RealMoneyBotDetectionTests(unittest.TestCase):
+    """Third pre-production review, finding 3 HIGH: real_money_bot()'s SECOND grep scanned the WHOLE
+    unit file for the literal text '--expect-env demo', including comments — not just the ExecStart
+    line. A copied-and-edited real-money unit file that still has that text in a leftover comment made
+    this wrongly return 1 (not real-money), leaving automatic GitHub-triggered updates ON for it.
+
+    Runs the actual real_money_bot() function body extracted from update.sh (not a reimplementation)
+    against a fixture unit file, with the hardcoded /etc/systemd/system glob parameterized so this can
+    run without touching any real systemd state."""
+
+    def _real_money_bot(self, unit_glob):
+        s = (VPS / "api" / "update.sh").read_text(encoding="utf-8")
+        m = re.search(r"(?ms)^real_money_bot\(\)\s*\{.*?\n\}\n", s)
+        self.assertIsNotNone(m, "real_money_bot() not found in update.sh")
+        func_src = m.group(0).replace("/etc/systemd/system/raqm-*.service", unit_glob)
+        script = func_src + "\nreal_money_bot\n"
+        return subprocess.run(["sh", "-c", script], capture_output=True, text=True)
+
+    def test_copied_demo_comment_does_not_hide_a_real_money_live_flag(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
+            unit = Path(d) / "raqm-newbot.service"
+            unit.write_text(
+                "[Unit]\n"
+                "Description=Copied from raqm-trend-demo.service (--expect-env demo) for the new real-money bot\n"
+                "[Service]\n"
+                "ExecStart=/opt/raqm-live/venv/bin/python bot.py --live --strategy trend_daily\n")
+            r = self._real_money_bot(str(Path(d) / "*.service"))
+        self.assertEqual(r.returncode, 0, "a --live unit with no --expect-env demo on ExecStart must be real-money")
+
+    def test_demo_unit_with_expect_env_on_execstart_is_not_real_money(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
+            unit = Path(d) / "raqm-trend-demo.service"
+            unit.write_text(
+                "[Service]\n"
+                "ExecStart=/opt/raqm-live/venv/bin/python bot.py --live --strategy trend_daily --expect-env demo\n")
+            r = self._real_money_bot(str(Path(d) / "*.service"))
+        self.assertNotEqual(r.returncode, 0)
+
+    def test_no_live_flag_is_not_real_money(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
+            unit = Path(d) / "raqm-paper.service"
+            unit.write_text("[Service]\nExecStart=/opt/raqm-bot/venv/bin/python bot.py --strategy trend_daily\n")
+            r = self._real_money_bot(str(Path(d) / "*.service"))
+        self.assertNotEqual(r.returncode, 0)
 
 
 if __name__ == "__main__":
