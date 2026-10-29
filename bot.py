@@ -2443,7 +2443,7 @@ def _enter_trend_live(symbol, analysis, state, ex, margin, lev, price):
         correlation_group=_correlation_group(symbol))
     if not allowed:
         log(f"⛔ {symbol} رفض بوابة المخاطر المركزية — {reason}"); return
-    cid = "raqm-" + uuid.uuid5(uuid.NAMESPACE_URL, f"trend_daily|{symbol}|long").hex[:27]
+    cid = "raqm-" + uuid.uuid4().hex[:27]   # per attempt — a fixed id per symbol matched trade #1's order on trade #2
     state.setdefault("pending_orders", {})[symbol] = cid; save_state(state)   # survives a crash between order and record
     try:
         res = place_order(ex, symbol, "long", margin, price, client_order_id=cid)
@@ -2466,11 +2466,14 @@ def _enter_trend_live(symbol, analysis, state, ex, margin, lev, price):
             save_state(state)
             notify(f"🚨 {symbol}: أمر الدخول رجّع خطأ ومش متأكدين إنه ما اتنفذش ({why}) — راجع المنصة. البوت وقف أي دخول جديد.")
             return
-        state.setdefault("recovery_required", {})[symbol] = {"cid": cid, "reason": f"entry error with an open position but no authoritative entry fill: {e}", "qty": q, "at": datetime.now(timezone.utc).isoformat()}
+        q, protected = _protect_unrecorded_entry(ex, symbol, "long", sl_estimate, cid)
+        state.setdefault("recovery_required", {})[symbol] = {"cid": cid, "reason": f"entry error with an open position but no authoritative entry fill: {e}", "qty": q,
+                                                             "emergency_stop": protected, "at": datetime.now(timezone.utc).isoformat()}
         riskmgr.mark_reservation_recovery(RISK_PATH, strategy="trend_daily", symbol=symbol, reason="open position without authoritative fill")
         _ENTRY_BLOCK["reason"] = "live entry fill evidence unavailable"
         save_state(state)
-        notify(f"🚨 {symbol}: الصفقة ظهرت على المنصة لكن مفيش fill موثوق — دخلت recovery وممنوع حماية أو تداول جديد")
+        notify(f"🚨 {symbol}: الصفقة ظهرت على المنصة لكن مفيش fill موثوق — دخلت recovery وممنوع تداول جديد. " +
+               (f"اتحط وقف طوارئ عند {sl_estimate:.6g}" if protected else "ومن غير وقف — اقفلها يدوي"))
         return
     sl = res["price"] * (1 - stt.STOP_SHARE / lev)
     pos = {"side":"long","entry":res["price"],"qty":res["qty"],"cost":res["cost"],"notional":res.get("notional"),"contract_size":res.get("contract_size", 1.0),"contract_size_verified":res.get("contract_size_verified", False),"entry_fee_rate":res.get("entry_fee_rate"),"entry_fee_cost":res.get("entry_fee_cost"),"leverage":res.get("leverage",lev),
@@ -2974,6 +2977,19 @@ def _phase2_leg(symbol, side, margin, price, sl, tp, strategy, order=0, extra=No
             "correlation_group": _correlation_group(symbol), "strategy": strategy, "order": order, "extra": extra or {}}
 
 
+def _protect_unrecorded_entry(ex, symbol, side, sl, cid):
+    """An entry raised but the exchange shows a position: put a reduceOnly stop on the exchange quantity now. It can
+    only shrink the position, so it is safe even though the fill isn't recorded; the position stays in recovery.
+    Returns the exchange quantity (None = unknown, 0 = flat) and whether a stop is on the exchange."""
+    q = _exchange_position_qty(ex, symbol, side=side)
+    if not q or sl is None: return q, False
+    try:
+        from backend.app.oco import place_oco_orders
+        oco = place_oco_orders(ex, symbol, side, q, sl, None, paper=False, pos_id=cid)
+        return q, not oco.get("protection_missing") and not oco.get("verify_failed")
+    except Exception as exc:
+        log(f"⚠️ {symbol}: وقف الطوارئ فشل: {exc}"); return q, False
+
 def _single_leg_live_entry(ex, state, symbol, side, margin, price, sl, tp, strategy, extra=None):
 
     """Fail-closed single-leg live entry shared by the Phase 1 adapters."""
@@ -3009,7 +3025,7 @@ def _single_leg_live_entry(ex, state, symbol, side, margin, price, sl, tp, strat
     if not allowed:
         log(f"⛔ {symbol} رفض بوابة المخاطر المركزية — {reason}")
         return None
-    cid = "raqm-" + uuid.uuid5(uuid.NAMESPACE_URL, f"{strategy}|{symbol}|{side}|{extra or {}}").hex[:27][:36]
+    cid = "raqm-" + uuid.uuid4().hex[:27]   # per attempt; pending_orders keeps it across a crash
     state.setdefault("pending_orders", {})[symbol] = cid
     save_state(state)
     try:
@@ -3026,9 +3042,15 @@ def _single_leg_live_entry(ex, state, symbol, side, margin, price, sl, tp, strat
             riskmgr.mark_reservation_recovery(RISK_PATH, strategy=strategy, symbol=symbol, reason=f"entry outcome unknown: {why}")
         except Exception:
             pass
-        state.setdefault("recovery_required", {})[symbol] = {"cid": cid, "reason": f"entry outcome unknown: {exc}", "at": datetime.now(timezone.utc).isoformat()}
+        q, protected = _protect_unrecorded_entry(ex, symbol, side, sl, cid)
+        state.setdefault("recovery_required", {})[symbol] = {"cid": cid, "reason": f"entry outcome unknown: {exc}", "qty": q,
+                                                             "emergency_stop": protected, "at": datetime.now(timezone.utc).isoformat()}
         _ENTRY_BLOCK["reason"] = "live entry outcome requires recovery"
         state["pending_orders"].pop(symbol, None); save_state(state)
+        notify(f"🚨 {symbol}: أمر الدخول رجّع خطأ ومش متأكدين من نتيجته — " +
+               (f"الصفقة ظاهرة على المنصة ({q}) واتحط لها وقف طوارئ عند {sl:.6g}" if protected else
+                f"الصفقة ظاهرة على المنصة ({q}) ومن غير وقف — اقفلها يدوي" if q else "راجع المنصة") +
+               ". البوت وقف أي دخول جديد.")
         return None
     pos = {"side": side, "entry": res["price"], "qty": res["qty"], "cost": res["cost"],
            "notional": res.get("notional"), "contract_size": res.get("contract_size"),
@@ -3109,6 +3131,10 @@ def _guard_stops(ex, state, prices, label):
 
 def run_once_breakout(ex):
     V = VB; state = load_state(); now = datetime.now(timezone.utc); day = _utc_day(now); prices = {}
+    if not CONFIG["paper_trading"]:
+        reconcile_live(state, ex)
+        if _ENTRY_BLOCK.get("reason"):
+            save_state(state); return
     process_paper_closes(state, ex, "breakout")
     _guard_stops(ex, state, prices, "بريك أوت")
     if state.get("vb_day") != day.isoformat():
@@ -3151,7 +3177,7 @@ def run_once_breakout(ex):
                                                     "exit_at": (day + pd.Timedelta(days=1)).isoformat()})
                 state.setdefault("vb_done", []).append(sym); save_state(state)
             else:
-                pos = _single_leg_live_entry(ex, state, sym, "long", position_size(price, ex) * int(CONFIG.get("leverage", 2)),
+                pos = _single_leg_live_entry(ex, state, sym, "long", position_size(price, ex),
                     fill, fill * (1 - V["stop"]), None, "vol_breakout",
                     {"trigger": p["trigger"], "exit_at": (day + pd.Timedelta(days=1)).isoformat()})
                 if pos:
@@ -3166,6 +3192,10 @@ def run_once_breakout(ex):
 
 def run_once_rsi2(ex):
     R = RSI2; state = load_state(); now = datetime.now(timezone.utc); day = _utc_day(now); prices = {}
+    if not CONFIG["paper_trading"]:
+        reconcile_live(state, ex)
+        if _ENTRY_BLOCK.get("reason"):
+            save_state(state); return
     process_paper_closes(state, ex, "rsi2")
     _guard_stops(ex, state, prices, "RSI-2")
     if state.get("rsi2_day") != day.isoformat():
@@ -3199,7 +3229,7 @@ def run_once_rsi2(ex):
                         _paper_open(state, sym, price, now, {"sl": sl, "rsi2": round(r2, 1),
                                                              "exit_at": (day + pd.Timedelta(days=R["max_days"])).isoformat()})
                     else:
-                        _single_leg_live_entry(ex, state, sym, "long", position_size(price, ex) * int(CONFIG.get("leverage", 2)),
+                        _single_leg_live_entry(ex, state, sym, "long", position_size(price, ex),
                             price, sl, None, "rsi2_pullback", {"rsi2": round(r2, 1),
                             "exit_at": (day + pd.Timedelta(days=R["max_days"])).isoformat()})
                     log(f"✅ 🟢 RSI-2 {sym} @ {price} (RSI-2 {r2:.1f} في ترند صاعد)")
@@ -3225,6 +3255,10 @@ def tbreak_mode():
 
 def run_once_tbreak(ex):
     T = TB; state = load_state(); now = datetime.now(timezone.utc); day = _utc_day(now); prices = {}
+    if not CONFIG["paper_trading"]:
+        reconcile_live(state, ex)
+        if _ENTRY_BLOCK.get("reason"):
+            save_state(state); return
     process_paper_closes(state, ex, "tbreak")
     _guard_stops(ex, state, prices, "اختراق الترند")
     if state.get("tb_day") != day.isoformat():
@@ -3256,7 +3290,7 @@ def run_once_tbreak(ex):
                     if CONFIG.get("paper_trading"):
                         _paper_open(state, sym, price, now, {"sl": price * (1 - T["stop"]), "breakout": hi})
                     else:
-                        _single_leg_live_entry(ex, state, sym, "long", position_size(price, ex) * int(CONFIG.get("leverage", 2)),
+                        _single_leg_live_entry(ex, state, sym, "long", position_size(price, ex),
                             price, price * (1 - T["stop"]), None, "trend_breakout", {"breakout": hi})
                     opened.append(f"{sym.split('/')[0]} {price:.6g}")
                     log(f"✅ 🟢 اختراق الترند {sym} @ {price:.6g} (قفل {c[-1]:.6g} فوق أعلى {T['L']} يوم {hi:.6g})")
@@ -3297,23 +3331,32 @@ def write_simple_status(name, state, prices, rules, extra):
         tmp.write_text(json.dumps(data, ensure_ascii=False, default=str), encoding="utf-8"); tmp.replace(d / f"{name}.json")
     except Exception as e: log(f"public {name} status: {e}")
 
+MARKET_DATA_METHODS = ("fetch_ohlcv", "fetch_ticker", "fetch_tickers")
+_strategy_ex = {}
+
+def strategy_exchange():
+    """The exchange the portfolio strategies run on. Paper: Binance's public market (the research data is Binance's).
+    Live / demo: the keyed account for orders, positions and balance — candles and prices still come from Binance's
+    real public market, as in run_once (Demo Trading's own candles are its play-money activity). Before this, live
+    mode handed these strategies the keyless public client: no order, balance or position call could ever work."""
+    if "public" not in _strategy_ex: _strategy_ex["public"] = ccxt.binanceusdm({"enableRateLimit": True})
+    if CONFIG["paper_trading"]: return _strategy_ex["public"]
+    if "keyed" not in _strategy_ex:
+        ex, err = get_exchange(auth=True)
+        if err:
+            log(f"⛔ LIVE من غير مفاتيح: {err} — البوت وقف"); notify(f"⛔ البوت الحقيقي وقف: {err}")
+            raise SystemExit(2)
+        for name in MARKET_DATA_METHODS: setattr(ex, name, getattr(_strategy_ex["public"], name))
+        _strategy_ex["keyed"] = ex
+    return _strategy_ex["keyed"]
+
 def run_once():
-    if breakout_mode() or rsi2_mode() or tbreak_mode():
-        global _rules_ex
-        if "_rules_ex" not in globals(): _rules_ex = ccxt.binanceusdm({"enableRateLimit": True})   # the research data is Binance's
-        return run_once_breakout(_rules_ex) if breakout_mode() else run_once_rsi2(_rules_ex) if rsi2_mode() else run_once_tbreak(_rules_ex)
-    if ratio_mode():
-        global _ratio_ex
-        if "_ratio_ex" not in globals(): _ratio_ex = ccxt.binanceusdm({"enableRateLimit": True})
-        return run_once_ratio(_ratio_ex)
-    if momentum_mode():
-        global _momentum_ex
-        if "_momentum_ex" not in globals(): _momentum_ex = ccxt.binanceusdm({"enableRateLimit": True})   # the backtest's data is Binance's
-        return run_once_momentum(_momentum_ex)
-    if listing_mode():
-        global _listing_ex
-        if "_listing_ex" not in globals(): _listing_ex = ccxt.binanceusdm({"enableRateLimit": True})   # the backtest's listings are Binance's
-        return run_once_listing(_listing_ex)
+    if breakout_mode(): return run_once_breakout(strategy_exchange())
+    if rsi2_mode(): return run_once_rsi2(strategy_exchange())
+    if tbreak_mode(): return run_once_tbreak(strategy_exchange())
+    if ratio_mode(): return run_once_ratio(strategy_exchange())
+    if momentum_mode(): return run_once_momentum(strategy_exchange())
+    if listing_mode(): return run_once_listing(strategy_exchange())
     if trend_mode(): CONFIG["timeframe"]="1d"
     state=load_state()
     ex,err=get_exchange(auth=not CONFIG["paper_trading"])
