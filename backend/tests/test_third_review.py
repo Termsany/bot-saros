@@ -165,5 +165,21 @@ class StaleCycleTokenTests(Base):
         self.assertNotEqual(cycles[cycle_key], stale_token)               # ...never the stale one that was just cleared
 
 
+class WriteJsonAtomicPermissionsTests(unittest.TestCase):
+    """Finding 2(i) HIGH: the API (raqmapi) and the bot (raqm/raqmlive) share these dashboard/status
+    JSON files via group membership on a setgid dir — but tempfile.mkstemp() defaults to 0600 (no group
+    bits at all), so even with correct group membership the API still couldn't read them."""
+
+    def test_write_json_atomic_chmods_the_file_to_group_read_write(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
+            path = Path(d) / "status.json"
+            with mock.patch("os.chmod") as chmod_mock:
+                botmod._write_json_atomic(path, {"a": 1})
+            # same convention risk_manager.py / live_activation.py already use for their sqlite files
+            self.assertTrue(any(c.args[1] == 0o660 for c in chmod_mock.call_args_list),
+                             f"expected a chmod(..., 0o660) call, got {chmod_mock.call_args_list}")
+        self.assertTrue(path.exists())   # the mocked chmod must not have broken the normal write/replace
+
+
 if __name__ == "__main__":
     unittest.main()
