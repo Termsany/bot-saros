@@ -10,7 +10,7 @@ cd "$APP"
 # or a stolen GitHub token — would otherwise run next to the exchange keys within 5 minutes.
 # Same once a real-money bot is installed (a raqm unit started with --live and not pinned to Demo): the API's own
 # flag can be switched back off while that bot keeps trading on its activation record.
-# Deploy by hand after reviewing:  sudo raqm-api-update --manual
+# Deploy by hand after reviewing:  sudo raqm-api-update --manual <full 40-char sha of the reviewed commit>
 real_money_bot() {
     for f in /etc/systemd/system/raqm-*.service; do
         [ -f "$f" ] || continue
@@ -22,9 +22,33 @@ real_money_bot() {
     done
     return 1
 }
-if [ "${1:-}" != "--manual" ] && { grep -qiE '^ALLOW_LIVE_TRADING=["'"'"']?true' /opt/raqm-api/.env 2>/dev/null || real_money_bot; }; then
+if [ "${1:-}" = "--manual" ]; then
+    # The sha is required and validated (same pattern setup-live.sh already uses for its own <sha>
+    # argument): deploying "whatever main currently is" defeats the point of reviewing a specific commit
+    # first — main may have moved between "I reviewed this" and running --manual.
+    SHA=${2:-}
+    echo "$SHA" | grep -qE '^[0-9a-f]{40}$' || { echo "usage: $0 --manual <full commit sha of the reviewed head>" >&2; exit 2; }
     sudo -u raqmapi git fetch -q origin main
-    [ "$(sudo -u raqmapi git rev-parse HEAD)" = "$(sudo -u raqmapi git rev-parse origin/main)" ] ||         echo "live trading on: update available on main, not deployed automatically (run raqm-api-update --manual after review)"
+    sudo -u raqmapi git cat-file -e "$SHA^{commit}" 2>/dev/null || { echo "commit $SHA not found" >&2; exit 2; }
+    sudo -u raqmapi git merge-base --is-ancestor "$SHA" origin/main || { echo "commit $SHA is not on the reviewed main history" >&2; exit 2; }
+    OLD=$(sudo -u raqmapi git rev-parse HEAD)
+    if [ "$OLD" = "$SHA" ]; then echo "already at $SHA"; exit 0; fi
+    sudo -u raqmapi git reset -q --hard "$SHA"
+    CHANGED=$(sudo -u raqmapi git diff --name-only "$OLD" "$SHA")
+    if echo "$CHANGED" | grep -q '^backend/requirements.txt$'; then
+        sudo -u raqmapi /opt/raqm-api/venv/bin/pip install -q --only-binary=:all: -r backend/requirements.txt
+    fi
+    if echo "$CHANGED" | grep -qE '^backend/|^[^/]+\.py$'; then
+        systemctl restart raqm-api
+        echo "deployed $SHA (was $OLD)"
+    else
+        echo "updated to $SHA, no backend change"
+    fi
+    exit 0
+fi
+if grep -qiE '^ALLOW_LIVE_TRADING=["'"'"']?true' /opt/raqm-api/.env 2>/dev/null || real_money_bot; then
+    sudo -u raqmapi git fetch -q origin main
+    [ "$(sudo -u raqmapi git rev-parse HEAD)" = "$(sudo -u raqmapi git rev-parse origin/main)" ] ||         echo "live trading on: update available on main, not deployed automatically (run raqm-api-update --manual <sha> after review)"
     exit 0
 fi
 sudo -u raqmapi git fetch -q origin main
