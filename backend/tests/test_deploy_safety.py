@@ -23,5 +23,24 @@ class UpdaterTests(unittest.TestCase):
         self.assertIn("--expect-env demo", s)
 
 
+class SetupLiveTests(unittest.TestCase):
+    S = (VPS / "setup-live.sh").read_text(encoding="utf-8")
+
+    def test_only_key_lines_reach_the_live_env_file(self):
+        self.assertIn("^(BINANCE_API_KEY|BINANCE_SECRET|BINANCE_LIVE_ACCOUNT)=", self.S)
+        self.assertNotIn('install -o raqmlive -g raqmlive -m 600 "$B/.env.demo"', self.S)   # no whole-file copy
+
+    def test_root_never_writes_through_the_shared_folders(self):
+        code = "\n".join(l for l in self.S.splitlines() if not l.lstrip().startswith("#"))
+        self.assertNotIn("backup(", code)                               # the ledger migration ran root's sqlite there
+        self.assertNotRegex(code, r"(chmod|chown)(?! -h)[^\n]*/opt/raqm-(risk|ipc)")
+        self.assertNotRegex(code, r"install -d[^\n]*/opt/raqm-(risk|ipc)")
+
+    def test_python_environment_is_locked(self):
+        unit = (VPS / "raqm-trend-demo.service").read_text(encoding="utf-8")
+        self.assertRegex(unit, r"(?m)^ExecStart=/opt/raqm-live/venv/bin/python -E -s ")
+        self.assertRegex(unit, r"(?m)^UnsetEnvironment=.*PYTHONPATH")
+
+
 if __name__ == "__main__":
     unittest.main()
