@@ -1,0 +1,6 @@
+# What the real-orders bot imports (bot.py, strategies_*.py, backend/app's stdlib-only modules) — pinned to the
+# versions the API venv runs and the Demo run used. setup-live.sh installs only this, from wheels, as root.
+ccxt==4.5.89
+pandas==3.0.6
+numpy==2.5.4
+python-dotenv==1.2.4

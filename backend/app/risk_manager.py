@@ -182,8 +182,13 @@ def correlated_risk_pct(state, equity_usdt, correlation_group, side):
                if r.get("correlation_group") == correlation_group and r.get("side") == side) / float(equity_usdt) * 100.0
 
 
-def _conflicting_position(state, symbol, side):
-    return next((r for r in _rows(state) if r.get("symbol") == symbol and r.get("side") != side), None)
+def _conflicting_position(state, symbol, side, strategy=None):
+    """Another strategy already on this coin. The account is one-way: two strategies on one coin share a single
+    exchange position — same side, one exit closes both (the other keeps a phantom and a live reduceOnly stop);
+    opposite sides net each other out. So one coin, one strategy, whatever the side."""
+    base = str(symbol).split(":")[0]
+    return next((r for r in _rows(state) if str(r.get("symbol")).split(":")[0] == base
+                 and (r.get("side") != side or (strategy is not None and r.get("strategy") != strategy))), None)
 
 
 def _valid_equity(value):
@@ -248,7 +253,7 @@ def pre_trade_gate(path, *, strategy, symbol, side, risk_usdt, notional_usdt,
                 con.execute("ROLLBACK")
                 return False, f"correlated risk in group '{correlation_group}' {corr:.3f}% + new {pct:.3f}% would exceed limit {corr_cap}%"
         if not allow_strategy_conflicts:
-            conflict = _conflicting_position(state, symbol, side)
+            conflict = _conflicting_position(state, symbol, side, strategy)
             if conflict:
                 con.execute("ROLLBACK")
                 return False, f"strategy conflict: {conflict.get('strategy')} already holds {symbol} {conflict.get('side')}"
@@ -290,7 +295,7 @@ def pre_trade_gate_basket(path, *, strategy, legs, equity_usdt):
             key = f"{strategy}:{leg['symbol']}"
             if key in state["open_risk"]:
                 con.execute("ROLLBACK"); return False, f"risk reservation already exists for {key}"
-            if not leg.get("allow_strategy_conflicts") and _conflicting_position(state, leg["symbol"], leg["side"]):
+            if not leg.get("allow_strategy_conflicts") and _conflicting_position(state, leg["symbol"], leg["side"], strategy):
                 con.execute("ROLLBACK"); return False, f"strategy conflict on {leg['symbol']}"
             pct = risk / float(equity_usdt) * 100.0
             if pct > float(limits.get("risk_per_trade_pct", DEFAULT_LIMITS["risk_per_trade_pct"])) + 1e-9:

@@ -1554,9 +1554,10 @@ def _refresh_fee_evidence(ex, symbol, pos, close_order=None):
     close_price = float(close_order.get("average") or close_order.get("price")) if close_order else 0.0
     close_qty = float(close_order.get("filled") or close_order.get("amount") or 0) if close_order else 0.0
     close_notional = close_price * close_qty * float(pos.get("contract_size", 1))
-    close_cost = float((close_order.get("fee") or {}).get("cost", 0) or 0) if close_order else 0.0
+    close_cost = (_usdt_fee_cost(close_order) or 0.0) if close_order else 0.0
     entry_cost = pos.get("entry_fee_cost")
-    if entry_cost is None:
+    if entry_cost is None:   # unknown is not zero: only an explicit entry fee rate can stand in for it
+        if raw is None: raise RuntimeError("entry fee evidence unavailable for live accounting")
         entry_cost = float(raw) * entry_notional
     if close_rate is None or entry_notional <= 0 or close_notional <= 0 or entry_cost < 0 or close_cost <= 0:
         raise RuntimeError("entry or close fee evidence unavailable for live accounting")
@@ -1564,6 +1565,50 @@ def _refresh_fee_evidence(ex, symbol, pos, close_order=None):
     pos["fee_verified"] = True
     return pos["fee_rate"]
 
+
+TRADE_WINDOW_MS = 7 * 24 * 3600 * 1000   # Binance USDT-M: one userTrades query covers at most 7 days
+HISTORY_PAGE = 1000
+HISTORY_MAX_PAGES = 200
+
+def _now_ms():
+    return int(time.time() * 1000)
+
+def _row_key(r):
+    return r.get("id") or (r.get("timestamp"), r.get("order"), r.get("price"), r.get("amount"), r.get("side"))
+
+def _trades_since(ex, symbol, since):
+    """Our fills on ``symbol`` from ``since`` until now, in 7-day windows. A single fetch_my_trades(since=...) only
+    covers since..since+7d (ccxt sets endTime for linear markets), so the closing fill of a position held more than
+    a week was never found: the exit went to recovery for good and its risk was never released."""
+    out, seen, start, now = [], set(), int(since), _now_ms()
+    for _ in range(HISTORY_MAX_PAGES):
+        if start > now: break
+        end = min(start + TRADE_WINDOW_MS - 1, now)
+        rows = ex.fetch_my_trades(symbol, since=start, limit=HISTORY_PAGE, params={"until": end})
+        if not isinstance(rows, list): raise RuntimeError("trade history answer is not a list")
+        for r in rows:
+            if isinstance(r, dict) and _row_key(r) not in seen:
+                seen.add(_row_key(r)); out.append(r)
+        stamps = [int(r["timestamp"]) for r in rows if isinstance(r, dict) and r.get("timestamp")]
+        # a full page: continue inside this window after its last fill; otherwise move on to the next window
+        start = max(stamps) + 1 if len(rows) >= HISTORY_PAGE and stamps and max(stamps) < end else end + 1
+    else:
+        raise RuntimeError("trade history too long to page")
+    return out
+
+def _funding_since(fn, symbol, since):
+    """Every funding payment since ``since``, page by page (one call returns at most 100 rows by default: about a
+    month at 8h funding, so long holds were booked with part of their funding missing)."""
+    out, seen, start = [], set(), since
+    for _ in range(HISTORY_MAX_PAGES):
+        rows = fn(symbol, since=start, limit=HISTORY_PAGE)
+        if not isinstance(rows, list): raise RuntimeError("funding history answer is not a list")
+        fresh = [r for r in rows if isinstance(r, dict) and _row_key(r) not in seen]
+        for r in fresh: seen.add(_row_key(r)); out.append(r)
+        stamps = [int(r["timestamp"]) for r in rows if isinstance(r, dict) and r.get("timestamp")]
+        if len(rows) < HISTORY_PAGE or not fresh or not stamps: return out
+        start = max(stamps) + 1
+    raise RuntimeError("funding history too long to page")
 
 def _refresh_funding_evidence(ex, symbol, pos):
     """Load authoritative funding cashflows; never infer them as zero."""
@@ -1575,9 +1620,7 @@ def _refresh_funding_evidence(ex, symbol, pos):
             since = None
             if pos.get("time"):
                 since = int(datetime.fromisoformat(pos["time"]).timestamp() * 1000)
-            rows = fn(symbol, since=since)
-            if not isinstance(rows, list):
-                continue
+            rows = _funding_since(fn, symbol, since)
             total = sum(float(r.get("amount", r.get("cost", 0)) or 0) for r in rows if isinstance(r, dict))
             pos["funding_pnl"] = total
             pos["funding_verified"] = True
@@ -1639,16 +1682,25 @@ def _fill_from_trades(ex, symbol, order):
         out["filled"] = qty
         out["average"] = sum(float(t.get("amount") or 0) * float(t.get("price") or 0) for t in rows) / qty
         if all(f.get("cost") is not None for f in fees):
-            out["fee"] = {"cost": sum(float(f["cost"]) for f in fees), "currency": fees[0].get("currency")}
+            currencies = {f.get("currency") for f in fees}
+            out["fee"] = {"cost": sum(float(f["cost"]) for f in fees), "currency": currencies.pop() if len(currencies) == 1 else "mixed"}
         return out
     return order
 
 
+def _usdt_fee_cost(order):
+    """The order's fee in USDT, or None when unknown. A fee paid in another coin (BNB with the fee discount on) is
+    not USDT: counting its BNB amount as dollars understated every fee, so it is unknown — the live accounting then
+    fails closed. Turn the BNB fee discount off on the trading account."""
+    fees = [f for f in ([(order or {}).get("fee")] if (order or {}).get("fee") else ((order or {}).get("fees") or [])) if isinstance(f, dict)]
+    if not fees or any(f.get("cost") is None or f.get("currency") not in (None, "USDT") for f in fees):
+        return None
+    try: return sum(float(f["cost"]) for f in fees)
+    except (TypeError, ValueError): return None
+
+
 def _order_fee_rate(order, price, contracts, contract_size):
-    fee = (order or {}).get("fee") or {}
-    cost = fee.get("cost")
-    if cost is None and isinstance((order or {}).get("fees"), list):
-        cost = sum(float(x.get("cost", 0) or 0) for x in order["fees"] if isinstance(x, dict))
+    cost = _usdt_fee_cost(order)
     try:
         notional = float(price) * float(contracts) * float(contract_size)
         return float(cost) / notional if cost is not None and notional > 0 else None
@@ -1709,14 +1761,14 @@ def place_order(ex,symbol,side,amount_usdt,price, client_order_id=None, close_qt
                     found = _fill_from_trades(ex, symbol, found)
                     fq=normalize_filled_contracts(found)
                     ap=float(found.get("average",price) or found.get("price",price) or price)
-                    return {"id":str(found.get("id","")),"qty":fq,"price":ap,"cost":fq*ap,"notional":notional,"leverage":lev,"contract_size":meta.get("contract_size", 1.0),"contract_size_verified":meta.get("contract_size_verified", False),"entry_fee_rate":_order_fee_rate(found, ap, fq, meta.get("contract_size", 1.0)),"entry_fee_cost":float((found.get("fee") or {}).get("cost", 0) or 0),"clientOrderId": cid, "reconciled": True}
+                    return {"id":str(found.get("id","")),"qty":fq,"price":ap,"cost":fq*ap,"notional":notional,"leverage":lev,"contract_size":meta.get("contract_size", 1.0),"contract_size_verified":meta.get("contract_size_verified", False),"entry_fee_rate":_order_fee_rate(found, ap, fq, meta.get("contract_size", 1.0)),"entry_fee_cost":_usdt_fee_cost(found),"clientOrderId": cid, "reconciled": True}
             except Exception:
                 pass
         raise
     order = _fill_from_trades(ex, symbol, order)
     fq=normalize_filled_contracts(order)
     ap=float(order.get("average",price) or order.get("price",price) or price)
-    return {"id":str(order.get("id","")),"qty":fq,"price":ap,"cost":fq*ap,"notional":notional,"leverage":lev,"contract_size":meta.get("contract_size", 1.0),"contract_size_verified":meta.get("contract_size_verified", False),"entry_fee_rate":_order_fee_rate(order, ap, fq, meta.get("contract_size", 1.0)),"entry_fee_cost":float((order.get("fee") or {}).get("cost", 0) or 0),"raw":order,"clientOrderId": cid}
+    return {"id":str(order.get("id","")),"qty":fq,"price":ap,"cost":fq*ap,"notional":notional,"leverage":lev,"contract_size":meta.get("contract_size", 1.0),"contract_size_verified":meta.get("contract_size_verified", False),"entry_fee_rate":_order_fee_rate(order, ap, fq, meta.get("contract_size", 1.0)),"entry_fee_cost":_usdt_fee_cost(order),"raw":order,"clientOrderId": cid}
 
 def _exchange_position_qty(ex, symbol, *, side=None, position_idx=None):
     """Return authoritative matching position contracts; None means inconclusive."""
@@ -1801,8 +1853,7 @@ def _authoritative_close_fill(ex, symbol, pos):
     try:
         since = int(datetime.fromisoformat(pos["time"]).timestamp() * 1000)
         close_side = "sell" if pos.get("side", "long") == "long" else "buy"
-        rows = [t for t in ex.fetch_my_trades(symbol, since=since, limit=100)
-                if t.get("side") == close_side]
+        rows = [t for t in _trades_since(ex, symbol, since) if t.get("side") == close_side]
         valid = []
         for row in rows:
             qty = float(row.get("filled", row.get("amount", 0)) or 0)
@@ -2092,7 +2143,7 @@ def reconcile_live(state, ex):
             try:
                 since = int(datetime.fromisoformat(pos["time"]).timestamp() * 1000)
                 close_side = "sell" if pos.get("side", "long") == "long" else "buy"
-                fills = [t for t in ex.fetch_my_trades(sym, since=since, limit=50) if t.get("side") == close_side and float(t.get("filled", t.get("amount", 0)) or 0) > 0]
+                fills = [t for t in _trades_since(ex, sym, since) if t.get("side") == close_side and float(t.get("filled", t.get("amount", 0)) or 0) > 0]
             except Exception:
                 fills = []
             if not fills:
@@ -3103,14 +3154,21 @@ def _single_leg_live_entry(ex, state, symbol, side, margin, price, sl, tp, strat
     state["pending_orders"].pop(symbol, None)
     if oco.get("protection_missing"):
         try:
-            close_live_position(ex, symbol, pos, price)
-        except Exception:
-            pass
+            closed = close_live_position(ex, symbol, pos, price)
+            _require_verified_close(closed); close_error = None
+        except Exception as exc:
+            close_error = exc
+        if close_error is None:   # the exchange refused the stop and the position is verified closed: nothing is open
+            riskmgr.rollback_reservation(RISK_PATH, strategy=strategy, symbol=symbol)
+            log(f"⛔ {symbol}: الوقف اترفض فاتقفلت الصفقة على طول"); notify(f"⛔ {symbol}: المنصة رفضت أمر الوقف — الصفقة اتقفلت على طول")
+            save_state(state); return None
         pos["unprotected"] = True
         state["positions"][symbol] = pos
-        state.setdefault("recovery_required", {})[symbol] = {"cid": cid, "reason": "protective stop missing", "at": datetime.now(timezone.utc).isoformat()}
+        riskmgr.mark_reservation_recovery(RISK_PATH, strategy=strategy, symbol=symbol, reason="protective stop missing, close failed")
+        state.setdefault("recovery_required", {})[symbol] = {"cid": cid, "reason": f"protective stop missing and the close failed: {close_error}", "at": datetime.now(timezone.utc).isoformat()}
         _ENTRY_BLOCK["reason"] = "protective stop requires recovery"
         save_state(state)
+        notify(f"🚨 {symbol}: المنصة رفضت أمر الوقف والقفل فشل — الصفقة مفتوحة من غير وقف، اقفلها يدوي")
         return None
     state["positions"][symbol] = pos
     if oco.get("verify_failed"):

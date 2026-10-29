@@ -30,7 +30,7 @@ class FakeFutureExchange:
     def fetch_positions(self, symbols=None):
         return self.positions
 
-    def fetch_funding_history(self, symbol, since=None):
+    def fetch_funding_history(self, symbol, since=None, limit=None):
         return []
 
 

@@ -81,6 +81,17 @@ class RiskManagerTests(unittest.TestCase):
             side="short", risk_usdt=0.5, notional_usdt=50, equity_usdt=1000, correlation_group="alts")
         self.assertFalse(allowed); self.assertIn("strategy conflict", reason)
 
+    def test_same_coin_same_side_other_strategy_is_blocked(self):
+        # one-way account: both would share one exchange position, and one exit would close both
+        rm.register_open_risk(self.path, strategy="vol_breakout", symbol="BTC/USDT:USDT", side="long",
+            risk_usdt=1.0, notional_usdt=100, correlation_group="majors")
+        allowed, reason = rm.pre_trade_gate(self.path, strategy="trend_breakout", symbol="BTC/USDT:USDT",
+            side="long", risk_usdt=0.5, notional_usdt=50, equity_usdt=1000, correlation_group="majors")
+        self.assertFalse(allowed); self.assertIn("strategy conflict", reason)
+        ok, reason = rm.pre_trade_gate_basket(self.path, strategy="momentum_ls", equity_usdt=1000,
+            legs=[{"symbol": "BTC/USDT", "side": "long", "risk_usdt": 0.5, "notional_usdt": 50, "correlation_group": "majors"}])
+        self.assertFalse(ok); self.assertIn("strategy conflict", reason)
+
     def test_strategy_conflict_can_be_explicitly_allowed(self):
         rm.register_open_risk(self.path, strategy="trend_daily", symbol="SOL/USDT", side="long",
             risk_usdt=1.0, notional_usdt=100, correlation_group="alts")
