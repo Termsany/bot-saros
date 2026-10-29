@@ -14,6 +14,9 @@ install -d -o root -g root -m 755 "$L/backend" "$L/backend/app"
 for m in __init__ oco multi_leg_execution execution_safety risk_manager live_activation; do
     install -m 644 -o root -g root "$B/backend/app/$m.py" "$L/backend/app/$m.py"
 done
+# Phase 1 harness (scripts/demo_e2e.py): runs as raqmlive from this root-owned copy, refuses anything but Demo
+install -d -o root -g root -m 755 "$L/scripts"
+install -m 644 -o root -g root /opt/raqm-api/app/scripts/demo_e2e.py "$L/scripts/demo_e2e.py"
 if [ ! -x "$L/venv/bin/python" ]; then                  # same packages as the paper bots, owned by root
     python3 -m venv "$L/venv"
     "$B/venv/bin/pip" freeze > /tmp/raqm-live-req.txt

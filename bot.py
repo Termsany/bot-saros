@@ -2874,6 +2874,14 @@ def _phase2_live_basket(ex, state, strategy, intent, legs, *, reserve=True):
         closed = place_order(ex, leg["symbol"], close_side, 0, result.get("price", leg["price"]), close_qty=result.get("qty"), client_order_id=f"{leg['client_order_id']}-c"[:36])
         q = _exchange_position_qty(ex, leg["symbol"], side=leg["side"])
         if q is None or float(q or 0) != 0: raise RuntimeError("compensating close outcome ambiguous")
+        # the unwound leg's own stop/target are still on the exchange: left there, a reduceOnly stop would close the
+        # next position on this coin at a stale price (found by scripts/demo_e2e.py)
+        try:
+            from backend.app.oco import cancel_oco_orders
+            cancel_oco_orders(ex, leg["symbol"], pos_id=leg["client_order_id"])
+        except Exception as cancel_error:
+            log(f"⚠️ {leg['symbol']}: الرجل اتقفلت بس أوامر الحماية بتاعتها ما اتلغتش: {cancel_error}")
+            notify(f"⚠️ {leg['symbol']}: رجل اتقفلت تلقائياً بس أمر الوقف بتاعها ممكن يكون لسه على المنصة — راجعه")
         return {"confirmed": True, "close": closed}
     for leg in legs:
         if leg.get("action", "entry") == "exit":
