@@ -144,5 +144,57 @@ class ManualDeployShaTests(unittest.TestCase):
         self.assertTrue(matches("a" * 40))             # well-formed
 
 
+class KeyOverwriteGuardTests(unittest.TestCase):
+    """Third pre-production review, finding 7 MEDIUM: if $SRCENV's lines don't match the $KEYS regex
+    exactly as expected (different quoting, leading whitespace, a renamed variable...), grep matches
+    nothing, '|| true' swallows that, and the extracted file is installed EMPTY over the existing,
+    presumably-correct $L/.env.live — destroying the real keys on a re-run of this idempotent script.
+
+    Runs the actual key-sync block extracted from setup-live.sh (not a reimplementation) against a
+    fixture directory tree; only the -o/-g ownership flags on 'install' are stripped for the harness
+    (this test doesn't run as root), the guard logic under test is untouched."""
+
+    @staticmethod
+    def _key_sync_block():
+        s = (VPS / "setup-live.sh").read_text(encoding="utf-8")
+        m = re.search(r'KEYS=.*?\nif \[ -f "\$SRCENV" \].*?\nfi\n', s, re.S)
+        assert m, "key-sync block not found in setup-live.sh"
+        return re.sub(r"install -o raqmlive -g raqmlive ", "install ", m.group(0))
+
+    def _run(self, L, B, T):
+        script = f'set -eu\nL="{L.as_posix()}"; B="{B.as_posix()}"; T="{T.as_posix()}"\n' + self._key_sync_block()
+        return subprocess.run(["sh", "-c", script], capture_output=True, text=True)
+
+    def test_an_unmatched_rerun_source_does_not_wipe_the_existing_live_keys(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
+            d = Path(d)
+            L, B, T = d / "L", d / "B", d / "T"
+            L.mkdir(); B.mkdir(); T.mkdir()
+            # a re-run: $L/.env.live already exists, but in a format (spaces around '=') the $KEYS
+            # regex doesn't match -> extraction into $T/env.live would be empty
+            (L / ".env.live").write_text("BINANCE_API_KEY = realkey\nBINANCE_SECRET = realsecret\n")
+            r = self._run(L, B, T)
+        self.assertNotEqual(r.returncode, 0, "must abort rather than silently install an empty key file")
+
+    def test_a_normal_rerun_with_matching_keys_still_succeeds(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
+            d = Path(d)
+            L, B, T = d / "L", d / "B", d / "T"
+            L.mkdir(); B.mkdir(); T.mkdir()
+            (L / ".env.live").write_text("BINANCE_API_KEY=realkey\nBINANCE_SECRET=realsecret\n")
+            r = self._run(L, B, T)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("BINANCE_API_KEY=realkey", (L / ".env.live").read_text())
+
+    def test_first_time_setup_with_no_existing_live_env_still_proceeds(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
+            d = Path(d)
+            L, B, T = d / "L", d / "B", d / "T"
+            L.mkdir(); B.mkdir(); T.mkdir()
+            (B / ".env.demo").write_text("BINANCE_API_KEY=demokey\nBINANCE_SECRET=demosecret\n")
+            r = self._run(L, B, T)
+            self.assertEqual(r.returncode, 0, r.stderr)   # nothing existing to destroy: fine to proceed
+
+
 if __name__ == "__main__":
     unittest.main()
