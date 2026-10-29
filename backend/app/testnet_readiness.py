@@ -4,7 +4,7 @@ import math
 import os
 
 ALL_STRATEGIES = (
-    "trend_daily", "wave_flats", "listing_short", "momentum_ls", "ratio_trend",
+    "trend_daily", "listing_short", "momentum_ls", "ratio_trend",
     "vol_breakout", "rsi2_pullback", "trend_breakout", "default",
 )
 

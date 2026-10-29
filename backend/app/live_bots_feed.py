@@ -13,7 +13,7 @@ Hard constraints (see task context — do not relax these):
     reachable from this module — that is explicitly out of scope.
   * A failure fetching any one bot's file must never raise out of
     ``fetch_all`` or affect any other bot's result.
-  * ``wave_flats`` and ``default`` have no running service and no public
+  * ``default`` has no running service and no public
     file. They must always report a "no_service" status — never be
     fabricated into a fake "running" state.
 
@@ -45,7 +45,7 @@ STRATEGY_FILES: dict[str, str] = {
 
 # Strategy ids present in admin_control.STRATEGIES that have NO running
 # production service and NO public status file.
-NO_SERVICE_STRATEGIES: tuple[str, ...] = ("wave_flats", "default")
+NO_SERVICE_STRATEGIES: tuple[str, ...] = ("default",)
 
 ALL_STRATEGY_IDS: tuple[str, ...] = tuple(STRATEGY_FILES) + NO_SERVICE_STRATEGIES
 
@@ -88,7 +88,7 @@ def _parse_updated(value: Any):
 
 
 def no_service_entry(strategy_id: str) -> dict:
-    """The explicit, non-fabricated state for wave_flats / default."""
+    """The explicit, non-fabricated state for default."""
     return {
         "id": strategy_id,
         "status": "no_service",

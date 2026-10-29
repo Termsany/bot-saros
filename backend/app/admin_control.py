@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-STRATEGIES = ("trend_daily", "wave_flats", "listing_short", "momentum_ls", "ratio_trend", "vol_breakout", "rsi2_pullback", "trend_breakout", "default")
+STRATEGIES = ("trend_daily", "listing_short", "momentum_ls", "ratio_trend", "vol_breakout", "rsi2_pullback", "trend_breakout", "default")
 DEFAULT_CONFIG = {"enabled": True, "mode": "paper", "timeframe": "1h", "symbols": []}
 
 def now(): return datetime.now(timezone.utc).isoformat()

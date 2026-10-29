@@ -135,7 +135,7 @@ def rate_limit(user_id: str, key: str, max_calls: int, per_s: int):
 # Keep in sync with lib/strategies.ts STRATEGIES order and TIERS counts: the four paper bots on the VPS.
 STRATEGY_ORDER = ["trend_daily", "momentum_ls", "listing_short", "ratio_trend"]
 TIER_STRATEGY_COUNT = {"free": 1, "starter": 2, "pro": 3, "elite": 4}
-SOLO_STRATEGIES = ("wave_flats", "trend_daily", "momentum_ls", "listing_short", "ratio_trend")  # own entries/exits
+SOLO_STRATEGIES = ("trend_daily", "momentum_ls", "listing_short", "ratio_trend")  # own entries/exits
 PER_COIN = ("trend_daily",)  # the others trade a whole portfolio of coins — no single-coin backtest
 # Max backtest range in days (end date inclusive). None = unlimited. Keep in sync with lib/strategies.ts BACKTEST_DAYS.
 TIER_BACKTEST_DAYS = {"free": 7, "starter": 30, "pro": 90, "elite": None}

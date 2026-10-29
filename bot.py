@@ -65,13 +65,16 @@ LOG_PATH   = Path(__file__).parent / CONFIG["log_file"]
 RISK_PATH  = Path(__file__).parent / "risk_state.json"   # shared Central Risk Manager ledger across ALL strategy processes
 ACTIVATION_PATH = Path(__file__).parent / "live_activation.sqlite3"
 
-# All 9 strategies route real orders through the same proven primitives (place_order + OCO stop/TP,
+# These strategies route real orders through the same proven primitives (place_order + OCO stop/TP,
 # risk_manager.pre_trade_gate/register_open_risk, reconcile_live, close_live_position/check_sl_tp):
-# single-leg ones via _single_leg_live_entry/_single_leg_live_exit (or try_enter_trend/try_enter for
-# trend_daily/ict), multi-leg ones via the durable basket engine (_phase2_live_basket). --live is
-# gated on this list, not on a single hardcoded strategy name.
-LIVE_READY_STRATEGIES = {"ict", "trend_daily", "wave_flats", "vol_breakout", "rsi2_pullback",
+# single-leg ones via _single_leg_live_entry/_single_leg_live_exit (or try_enter_trend for trend_daily),
+# multi-leg ones via the durable basket engine (_phase2_live_basket). --live is gated on this list,
+# not on a single hardcoded strategy name. All seven passed end to end on Binance Demo (PR #16, scripts/demo_e2e.py).
+LIVE_READY_STRATEGIES = {"trend_daily", "vol_breakout", "rsi2_pullback",
                           "trend_breakout", "listing_short", "momentum_ls", "ratio_trend"}
+# Dropped by the owner on 2026-10-29: refused by --strategy, paper or live. "ict" is the default indicator
+# ensemble — the dashboard's paper loop still uses it, it just can't be run as a bot of its own.
+RETIRED_STRATEGIES = {"ict", "wave_flats"}
 
 # Crude correlation grouping for the correlated-risk cap: nearly every altcoin trades as
 # BTC-beta, so "majors" vs "alts" is the conservative default until a real correlation
@@ -3465,6 +3468,8 @@ if __name__=="__main__":
     p.add_argument("--state", default=None, help="ملف الحالة (لتشغيل أكتر من بوت في نفس المجلد) — اللوج بيبقى بنفس الاسم .log")
     args=p.parse_args()
     if args.strategy: CONFIG["enabled_strategies"]=[s.strip() for s in args.strategy.split(",") if s.strip()]
+    retired = [s for s in (CONFIG.get("enabled_strategies") or []) if s in RETIRED_STRATEGIES]
+    if args.strategy and retired: p.error(f"الاستراتيجية دي اتلغت: {', '.join(retired)}")
     if args.leverage: CONFIG["leverage"]=args.leverage
     elif trend_mode(): CONFIG["leverage"]=2
     if args.amount: CONFIG["trade_amount_usdt"]=args.amount

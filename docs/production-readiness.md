@@ -9,18 +9,18 @@ Previous version: 2026-10-26 (28a8249), written before PRs #12–#16._
 
 The live-trading roadmap runs **Phase 1 — real end-to-end validation on Binance's test environment (Futures Demo
 Trading)** and **Phase 2 — per-user live infrastructure**. Phase 2 was built first, as library code only (PR #12).
-**Phase 1 is not finished: eight strategies of nine have been run end to end against the exchange; `ict` remains.**
+**Phase 1 is done for every remaining strategy: all seven have been run end to end against the exchange.**
+`ict` and `wave_flats` were dropped by the owner on 2026-10-29 (`RETIRED_STRATEGIES` in bot.py: refused by `--strategy`,
+paper or live). The `ict` indicator ensemble still drives the dashboard's paper loop; it is not a live strategy.
 
 ## Strategy matrix
 
-All nine names are in `LIVE_READY_STRATEGIES` (bot.py) since PR #14, so `--live` accepts them; that only means the
+The seven names are in `LIVE_READY_STRATEGIES` (bot.py), so `--live` accepts them; that only means the
 execution code is reachable, not that it is validated.
 
 | Strategy | Paper bot on the VPS | Live execution path | Unit/integration tests (fake exchange) | Exchange end-to-end (Demo) | Status |
 |---|---|---|---|---|---|
 | `trend_daily` | Running | Hardened dedicated path (`_enter_trend_live`, `close_live_position`, `reconcile_live`) | Yes | **Done** (PR #16): entry + exchange stop, 4 concurrent positions capped by the aggregate risk gate, restart with no duplicates / no false recovery, out-of-band manual close detected with correct PnL. Demo account, no real funds | Blocked: final independent review, deploy of the reviewed code |
-| `ict` (default indicator ensemble) | Not deployed | Generic `try_enter` path | Yes (`test_live_ict.py`) | Not run | Blocked: Demo end-to-end |
-| `wave_flats` | Not deployed | Shared `_single_leg_live_entry` / `_single_leg_live_exit` | Yes | **Done** (2026-10-29, `scripts/demo_e2e.py`): entry, exchange stop, restart with no duplicates / no false recovery, exit with stop cancelled and risk released | Blocked: final review, deploy |
 | `vol_breakout` | Running | Shared single-leg path | Yes | **Done** (2026-10-29, `scripts/demo_e2e.py`): entry, exchange stop, restart with no duplicates / no false recovery, exit with stop cancelled and risk released | Blocked: final review, deploy |
 | `rsi2_pullback` | Running | Shared single-leg path | Yes | **Done** (2026-10-29, `scripts/demo_e2e.py`): entry, exchange stop, restart with no duplicates / no false recovery, exit with stop cancelled and risk released | Blocked: final review, deploy |
 | `trend_breakout` | Running | Shared single-leg path | Yes | **Done** (2026-10-29, `scripts/demo_e2e.py`): entry, exchange stop, restart with no duplicates / no false recovery, exit with stop cancelled and risk released | Blocked: final review, deploy |
@@ -80,7 +80,7 @@ not what runs on the server. Deploying it is part of finishing Phase 1, after re
 2. ~~Live adapters for the single-leg strategies~~ — done (PR #14).
 3. ~~Compensating-exit / restart / reconciliation adapters for `momentum_ls`, `ratio_trend`, `listing_short`~~ — done in
    code and fake-exchange tests; still needs step 4 on a real exchange.
-4. **Demo end-to-end validation for every adapter — 8 of 9 done; `ict` (generic `try_enter` path) remains.**
+4. ~~Demo end-to-end validation for every adapter~~ — done for all seven (`ict` and `wave_flats` dropped).
    Each run should cover: entry, protective order on the exchange, signal exit, a forced restart mid-position, an
    out-of-band manual close, and for the multi-leg strategies a leg that fails on purpose.
 5. Fail-closed administrator / strategy / account activation workflow and audit trail — partial: per-user consent and

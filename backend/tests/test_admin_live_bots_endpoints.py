@@ -129,9 +129,9 @@ class AdminLiveBotsEndpointTests(unittest.TestCase):
         self.assertIn("paper", j)  # existing dashboard field untouched
         self.assertIn("live_bots", j)
         self.assertFalse(j["live_bots"]["lifecycle_control_available"])
-        self.assertEqual(j["live_bots"]["summary"]["strategies_total"], 9)
+        self.assertEqual(j["live_bots"]["summary"]["strategies_total"], 8)
         self.assertEqual(j["live_bots"]["summary"]["running"], 7)
-        self.assertEqual(j["live_bots"]["summary"]["no_service"], 2)
+        self.assertEqual(j["live_bots"]["summary"]["no_service"], 1)
 
     def test_strategies_requires_admin(self):
         r = self.client.get("/api/admin/strategies")
@@ -143,8 +143,8 @@ class AdminLiveBotsEndpointTests(unittest.TestCase):
         j = r.json()
         by_id = {x["id"]: x for x in j}
         self.assertEqual(by_id["trend_daily"]["live"]["status"], "running")
-        self.assertEqual(by_id["wave_flats"]["live"]["status"], "no_service")
         self.assertEqual(by_id["default"]["live"]["status"], "no_service")
+        self.assertNotIn("wave_flats", by_id)   # dropped 2026-10-29
         self.assertFalse(by_id["trend_daily"]["live"]["lifecycle_control_available"])
 
     def test_paper_portfolio_requires_admin(self):
@@ -162,7 +162,7 @@ class AdminLiveBotsEndpointTests(unittest.TestCase):
         self.assertFalse(j["live_bots"]["lifecycle_control_available"])
         self.assertEqual(j["live_bots"]["strategies"]["trend_daily"]["status"], "running")
         self.assertEqual(len(j["live_bots"]["strategies"]["trend_daily"]["positions"]), 1)
-        self.assertEqual(j["live_bots"]["strategies"]["wave_flats"]["status"], "no_service")
+        self.assertEqual(j["live_bots"]["strategies"]["default"]["status"], "no_service")
         # back-compat: legacy top-level keys still present and unchanged in meaning
         self.assertIn("positions", j)
         self.assertIn("history", j)

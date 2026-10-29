@@ -313,11 +313,22 @@ class StartupGateTests(unittest.TestCase):
         # Use the default (unset) BINANCE_ENV so each run fails fast on the ALLOW_LIVE_TRADING
         # check (like test_real_money_needs_the_server_switch) instead of reaching the network —
         # this only proves the strategy-name gate itself no longer refuses these names.
-        for strat in ("trend_daily", "ict", "wave_flats", "vol_breakout", "rsi2_pullback",
+        for strat in ("trend_daily", "vol_breakout", "rsi2_pullback",
                       "trend_breakout", "listing_short", "momentum_ls", "ratio_trend"):
             r = self._run("--live", "--strategy", strat, "--once")
             self.assertNotIn("--live مش متاح", r.stderr, msg=f"{strat}: {r.stderr}")
             self.assertIn("ALLOW_LIVE_TRADING", r.stderr, msg=f"{strat}: {r.stderr}")
+
+    def test_retired_strategies_are_refused(self):
+        for strat in ("ict", "wave_flats"):
+            for mode in ("--live", "--paper"):
+                r = self._run(mode, "--strategy", strat, "--once", env={"BINANCE_ENV": "demo"})
+                self.assertNotEqual(r.returncode, 0, msg=f"{strat} {mode}"); self.assertIn(strat, r.stderr)
+
+    def test_live_without_a_strategy_is_refused(self):
+        # no --strategy falls back to the "ict" ensemble, which is not a live strategy any more
+        r = self._run("--live", "--once", env={"BINANCE_ENV": "demo"})
+        self.assertNotEqual(r.returncode, 0); self.assertIn("--live", r.stderr)
 
     def test_real_money_needs_the_server_switch(self):
         r = self._run("--live", "--strategy", "trend_daily", "--once")
