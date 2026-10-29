@@ -73,7 +73,7 @@ class StrategyMappingTests(unittest.TestCase):
         self.assertEqual(len(set(expected.values())), 7)
 
     def test_no_service_strategies_are_explicit(self):
-        self.assertEqual(set(feed.NO_SERVICE_STRATEGIES), {"wave_flats", "default"})
+        self.assertEqual(set(feed.NO_SERVICE_STRATEGIES), {"default"})
         for sid in feed.NO_SERVICE_STRATEGIES:
             entry = feed.no_service_entry(sid)
             self.assertEqual(entry["status"], "no_service")
@@ -84,14 +84,13 @@ class StrategyMappingTests(unittest.TestCase):
     def test_no_service_strategies_never_fetched_over_network(self):
         async def run():
             # transport that explodes on ANY request — if fetch_all tried to
-            # hit the network for wave_flats/default this test would fail.
+            # hit the network for default this test would fail.
             def boom(request):
                 raise AssertionError(f"unexpected network call: {request.url}")
             transport = httpx.MockTransport(boom)
-            result = await feed.fetch_all(strategies=["wave_flats", "default"], transport=transport)
+            result = await feed.fetch_all(strategies=["default"], transport=transport)
             return result
         result = asyncio.run(run())
-        self.assertEqual(result["wave_flats"]["status"], "no_service")
         self.assertEqual(result["default"]["status"], "no_service")
 
 
@@ -153,10 +152,9 @@ class PerFileFetchIsolationTests(unittest.TestCase):
         self.assertEqual(result["vol_breakout"]["status"], "unavailable")
         self.assertEqual(result["rsi2_pullback"]["status"], "running")
         self.assertEqual(result["trend_breakout"]["status"], "stale")
-        self.assertEqual(result["wave_flats"]["status"], "no_service")
         self.assertEqual(result["default"]["status"], "no_service")
-        # 9 total strategies always present, regardless of individual failures
-        self.assertEqual(len(result), 9)
+        # 8 total strategies always present, regardless of individual failures
+        self.assertEqual(len(result), 8)
 
     def test_full_outage_returns_all_unavailable_not_an_exception(self):
         def boom(request):
@@ -181,10 +179,10 @@ class AggregationTests(unittest.TestCase):
         })
         result = asyncio.run(feed.fetch_all(transport=transport))
         summary = feed.aggregate_summary(result)
-        self.assertEqual(summary["strategies_total"], 9)
+        self.assertEqual(summary["strategies_total"], 8)
         self.assertEqual(summary["running"], 3)
         self.assertEqual(summary["unavailable"], 4)
-        self.assertEqual(summary["no_service"], 2)
+        self.assertEqual(summary["no_service"], 1)
         self.assertEqual(summary["open_positions"], 3)
         self.assertAlmostEqual(summary["realized_pnl"], 37.5, places=2)
         self.assertAlmostEqual(summary["unrealized_pnl"], -4.5, places=2)

@@ -26,15 +26,15 @@ const sections: [string, string, React.ComponentType<{ size?: number; strokeWidt
   ["settings", "الإعدادات", Settings2],
 ]
 
-/** Arabic labels for all 9 admin_control.STRATEGIES ids — the last two (wave_flats, default)
- *  have no running VPS service and must always show "no_service", never fabricated data. */
+/** Arabic labels for all 8 admin_control.STRATEGIES ids — the last one (default)
+ *  has no running VPS service and must always show "no_service", never fabricated data. */
 const STRATEGY_LABELS_AR: Record<string, string> = {
   trend_daily: "ترند يومي", listing_short: "شورت العملات الجديدة", momentum_ls: "مومنتم لونج/شورت",
   ratio_trend: "ترند النسبة", vol_breakout: "اختراق التقلب", rsi2_pullback: "RSI2 الارتداد",
-  trend_breakout: "اختراق الترند", wave_flats: "Wave Flats", default: "Default",
+  trend_breakout: "اختراق الترند", default: "Default",
 }
 const REAL_BOT_IDS = ["trend_daily", "listing_short", "momentum_ls", "ratio_trend", "vol_breakout", "rsi2_pullback", "trend_breakout"]
-const NO_SERVICE_IDS = ["wave_flats", "default"]
+const NO_SERVICE_IDS = ["default"]
 const ALL_STRATEGY_IDS = [...REAL_BOT_IDS, ...NO_SERVICE_IDS]
 
 const STATUS_META: Record<string, [string, string]> = {

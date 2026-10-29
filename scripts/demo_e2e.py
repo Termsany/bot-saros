@@ -188,7 +188,6 @@ SCENARIOS = [
     ("vol_breakout", lambda ex, s: single_leg(ex, s, "vol_breakout")),
     ("rsi2_pullback", lambda ex, s: single_leg(ex, s, "rsi2_pullback")),
     ("trend_breakout", lambda ex, s: single_leg(ex, s, "trend_breakout")),
-    ("wave_flats", lambda ex, s: single_leg(ex, s, "wave_flats", exit_via_close=True)),
     ("listing_short", lambda ex, s: basket(ex, s, "listing_short", [(SINGLE, "short")], "listing")),
     ("momentum_ls", lambda ex, s: basket(ex, s, "momentum_ls", [(PAIR[0], "long"), (PAIR[1], "short")], "momentum")),
     ("ratio_trend", lambda ex, s: basket(ex, s, "ratio_trend", [(PAIR[0], "long"), (PAIR[1], "short")], "ratio")),
