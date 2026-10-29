@@ -90,6 +90,13 @@ class RatioTrendLiveTests(unittest.TestCase):
         ledger = riskmgr_mod.load_risk_state(botmod.RISK_PATH)
         self.assertEqual([k for k in ledger["open_risk"] if k.startswith("ratio_trend:")], [])
 
+    def test_unwound_leg_leaves_no_stop_on_the_exchange(self):
+        # the first leg's stop was placed before the second leg failed; after the unwind it must be gone too,
+        # or it would close a later position on that coin at a stale price (found by scripts/demo_e2e.py)
+        ex = RatioFakeBinance(fail_symbol=B)
+        self.run_with(ex, sig=1)
+        self.assertEqual(ex.fetch_open_orders(A), [])
+
     def test_signal_flip_closes_old_pair_and_opens_new_one_atomically(self):
         ex = RatioFakeBinance()
         self.run_with(ex, sig=1)                            # long A / short B

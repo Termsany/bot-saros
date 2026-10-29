@@ -1605,6 +1605,41 @@ def _contract_meta(ex, symbol):
     return {"contract": True, "contract_size": contract_size, "contract_size_verified": True, "inverse": False}
 
 
+FILL_LOOKUP_WAITS = (0.0, 0.5, 1.0, 2.0)   # seconds between tries: fills normally show at once
+
+
+def _fill_from_trades(ex, symbol, order):
+    """Binance (seen on Demo) answers a market order with no average price and no fee, and fetch_order has no fee
+    either; the fills of that order have both. Without them a close priced the trade at the *requested* price and
+    the fee check failed (float(None)), so every live exit ended in recovery. Returns the order with filled /
+    average / fee taken from its own fills (several partial fills summed, price volume-weighted); unchanged if it
+    already has them or the fills can't be read — the fee checks downstream still fail closed."""
+    if not isinstance(order, dict) or not order.get("id"):
+        return order
+    if order.get("average") and (order.get("fee") or {}).get("cost") is not None:
+        return order
+    for wait in FILL_LOOKUP_WAITS:
+        if wait: time.sleep(wait)
+        try:
+            rows = ex.fetch_my_trades(symbol, params={"orderId": order["id"]})
+        except Exception:
+            continue
+        if not isinstance(rows, list):
+            return order                                   # not a fill list: nothing to read, don't wait on it
+        rows = [t for t in rows if isinstance(t, dict) and str(t.get("order", order["id"])) == str(order["id"])]
+        qty = sum(float(t.get("amount") or 0) for t in rows)
+        if qty <= 0:
+            continue
+        fees = [t.get("fee") or {} for t in rows]
+        out = dict(order)
+        out["filled"] = qty
+        out["average"] = sum(float(t.get("amount") or 0) * float(t.get("price") or 0) for t in rows) / qty
+        if all(f.get("cost") is not None for f in fees):
+            out["fee"] = {"cost": sum(float(f["cost"]) for f in fees), "currency": fees[0].get("currency")}
+        return out
+    return order
+
+
 def _order_fee_rate(order, price, contracts, contract_size):
     fee = (order or {}).get("fee") or {}
     cost = fee.get("cost")
@@ -1667,12 +1702,14 @@ def place_order(ex,symbol,side,amount_usdt,price, client_order_id=None, close_qt
             try:
                 found = _reconcile_fills_by_client_id(ex, symbol, cid)
                 if found:
+                    found = _fill_from_trades(ex, symbol, found)
                     fq=normalize_filled_contracts(found)
                     ap=float(found.get("average",price) or found.get("price",price) or price)
                     return {"id":str(found.get("id","")),"qty":fq,"price":ap,"cost":fq*ap,"notional":notional,"leverage":lev,"contract_size":meta.get("contract_size", 1.0),"contract_size_verified":meta.get("contract_size_verified", False),"entry_fee_rate":_order_fee_rate(found, ap, fq, meta.get("contract_size", 1.0)),"entry_fee_cost":float((found.get("fee") or {}).get("cost", 0) or 0),"clientOrderId": cid, "reconciled": True}
             except Exception:
                 pass
         raise
+    order = _fill_from_trades(ex, symbol, order)
     fq=normalize_filled_contracts(order)
     ap=float(order.get("average",price) or order.get("price",price) or price)
     return {"id":str(order.get("id","")),"qty":fq,"price":ap,"cost":fq*ap,"notional":notional,"leverage":lev,"contract_size":meta.get("contract_size", 1.0),"contract_size_verified":meta.get("contract_size_verified", False),"entry_fee_rate":_order_fee_rate(order, ap, fq, meta.get("contract_size", 1.0)),"entry_fee_cost":float((order.get("fee") or {}).get("cost", 0) or 0),"raw":order,"clientOrderId": cid}
@@ -2874,6 +2911,14 @@ def _phase2_live_basket(ex, state, strategy, intent, legs, *, reserve=True):
         closed = place_order(ex, leg["symbol"], close_side, 0, result.get("price", leg["price"]), close_qty=result.get("qty"), client_order_id=f"{leg['client_order_id']}-c"[:36])
         q = _exchange_position_qty(ex, leg["symbol"], side=leg["side"])
         if q is None or float(q or 0) != 0: raise RuntimeError("compensating close outcome ambiguous")
+        # the unwound leg's own stop/target are still on the exchange: left there, a reduceOnly stop would close the
+        # next position on this coin at a stale price (found by scripts/demo_e2e.py)
+        try:
+            from backend.app.oco import cancel_oco_orders
+            cancel_oco_orders(ex, leg["symbol"], pos_id=leg["client_order_id"])
+        except Exception as cancel_error:
+            log(f"⚠️ {leg['symbol']}: الرجل اتقفلت بس أوامر الحماية بتاعتها ما اتلغتش: {cancel_error}")
+            notify(f"⚠️ {leg['symbol']}: رجل اتقفلت تلقائياً بس أمر الوقف بتاعها ممكن يكون لسه على المنصة — راجعه")
         return {"confirmed": True, "close": closed}
     for leg in legs:
         if leg.get("action", "entry") == "exit":

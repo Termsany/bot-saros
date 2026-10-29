@@ -1,5 +1,5 @@
 [Unit]
-Description=Raqm bot — daily trend with real orders on the Binance Futures Testnet (play money), $100 x2, top 10 coins
+Description=Raqm bot — daily trend with real orders on Binance Futures Demo Trading (play money), $100 x2, top 10 coins
 After=network-online.target
 Wants=network-online.target
 # not started until the demo keys exist
@@ -12,15 +12,15 @@ Group=raqmlive
 WorkingDirectory=/opt/raqm-live
 # TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID
 EnvironmentFile=-/opt/raqm-live/.env.telegram
-# BINANCE_API_KEY / BINANCE_SECRET from testnet.binancefuture.com (API Key tab) — never committed, chmod 600, owner raqmlive
+# BINANCE_API_KEY / BINANCE_SECRET made in Binance Demo Trading (API Management in demo mode) — never committed, chmod 600, owner raqmlive
 EnvironmentFile=/opt/raqm-live/.env.live
-# play money: --expect-env testnet makes the bot refuse to start if anything sets BINANCE_ENV to something else.
-# Binance Demo Trading (BINANCE_ENV=demo) works the same where its API page exists.
-Environment=BINANCE_ENV=testnet
+# play money: --expect-env demo makes the bot refuse to start if anything sets BINANCE_ENV to something else.
+# (the old futures testnet is gone: ccxt raises NotSupported for it)
+Environment=BINANCE_ENV=demo
 # the admin page reads live_status.json here and drops manual close requests (deploy/vps/setup-ipc.sh)
 Environment=RAQM_IPC_DIR=/opt/raqm-ipc
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/opt/raqm-live/venv/bin/python bot.py --live --expect-env testnet --strategy trend_daily --leverage 2 --amount 100 --universe 10 --poll 60 --notify --state state/state_demo.json
+ExecStart=/opt/raqm-live/venv/bin/python bot.py --live --expect-env demo --strategy trend_daily --leverage 2 --amount 100 --universe 10 --poll 60 --notify --state state/state_demo.json
 Restart=always
 RestartSec=60
 NoNewPrivileges=true
