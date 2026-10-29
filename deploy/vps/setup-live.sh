@@ -10,7 +10,10 @@ install -d -o root -g raqmlive -m 750 "$L"
 install -d -o raqmlive -g raqmlive -m 700 "$L/state"
 for f in bot.py strategies_trend.py strategies_advanced.py strategies_wave.py; do install -m 644 -o root -g root "$B/$f" "$L/$f"; done
 install -d -o root -g root -m 755 "$L/backend" "$L/backend/app"
-install -m 644 -o root -g root "$B/backend/app/oco.py" "$B/backend/app/__init__.py" "$L/backend/app/"
+# every backend module bot.py imports (stdlib only): order placement, multi-leg engine, execution checks, risk ledger, activation
+for m in __init__ oco multi_leg_execution execution_safety risk_manager live_activation; do
+    install -m 644 -o root -g root "$B/backend/app/$m.py" "$L/backend/app/$m.py"
+done
 if [ ! -x "$L/venv/bin/python" ]; then                  # same packages as the paper bots, owned by root
     python3 -m venv "$L/venv"
     "$B/venv/bin/pip" freeze > /tmp/raqm-live-req.txt
