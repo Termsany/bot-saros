@@ -29,7 +29,7 @@ try:
 except: pass
 
 BOT_DIR = Path(__file__).parent.parent.parent
-LIVE_ACTIVATION_PATH = BOT_DIR / "live_activation.sqlite3"
+LIVE_ACTIVATION_PATH = risk_manager.ledger_dir(BOT_DIR) / "live_activation.sqlite3"   # shared with the live bot (RAQM_RISK_DIR)
 
 def _supabase_key_kind(key: str) -> str:
     """'service', 'public' or 'unknown' — from the key's own format, without calling Supabase."""
@@ -1211,7 +1211,7 @@ class KillSwitchReq(AdminModel):
     confirm: bool = False
 
 async def _admin_actor(user): return str(user.get("email") or user.get("id") or "admin")
-def _risk_path(): return BOT_DIR / "risk_state.json"
+def _risk_path(): return risk_manager.ledger_dir(BOT_DIR) / "risk_state.json"   # shared with the live bot (RAQM_RISK_DIR)
 def _safe_json_file(path):
     try: return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
     except Exception: return None
@@ -1302,7 +1302,7 @@ async def admin_risk(user: dict = Depends(require_admin)):
 @app.patch("/api/admin/risk/limits")
 async def admin_risk_limits(req: RiskLimitsReq, user: dict = Depends(require_admin)):
     rate_limit(user["id"], "admin_mutation", 30, 60)
-    st=risk_manager.load_risk_state(_risk_path()); patch={k:v for k,v in req.model_dump().items() if v is not None}; st["limits"].update(patch); risk_manager.save_risk_state(_risk_path(),st); admin_control.audit(BOT_DIR,await _admin_actor(user),"risk_limits_update","ok",patch); return {"ok":True,"limits":st["limits"]}
+    patch={k:v for k,v in req.model_dump().items() if v is not None}; limits=risk_manager.update_limits(_risk_path(),patch); admin_control.audit(BOT_DIR,await _admin_actor(user),"risk_limits_update","ok",patch); return {"ok":True,"limits":limits}
 
 @app.post("/api/admin/risk/kill-switch")
 async def admin_kill_switch(req: KillSwitchReq, user: dict = Depends(require_admin)):

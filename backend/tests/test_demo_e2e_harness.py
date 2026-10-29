@@ -52,7 +52,7 @@ class Sim(FakeBinance):
     def fetch_order(self, oid, sym, params=None):
         for o in self._stops(sym):
             if o["id"] == oid or o["clientOrderId"] == oid: return {**o, "status": "open"}
-        raise Exception("not found")
+        raise Exception('binanceusdm {"code":-2013,"msg":"Order does not exist."}')   # what Binance answers
     def fetch_my_trades(self, sym, since=None, limit=100, params=None):
         oid = (params or {}).get("orderId")
         return [f for f in self.fills if f["symbol"] == sym and (oid is None or f["order"] == oid)]

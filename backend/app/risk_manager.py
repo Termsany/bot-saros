@@ -7,6 +7,7 @@ entry, removed on known failure, and retained as recovery on ambiguity.
 """
 import json
 import math
+import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -47,10 +48,21 @@ def _default_state(limits=None):
     }
 
 
+def ledger_dir(default):
+    """Where the risk ledger and the live activation record live. RAQM_RISK_DIR makes the dashboard API and the
+    real-money bot use the same files: each used its own folder, so a kill switch or a revoke from the dashboard
+    never reached the bot (and the bot's read-only code folder could not hold a ledger at all)."""
+    return Path(os.getenv("RAQM_RISK_DIR", "").strip() or default)
+
+
 def _connect(path):
     db = _db_path(path)
     db.parent.mkdir(parents=True, exist_ok=True)
+    new = not db.exists()
     con = sqlite3.connect(str(db), timeout=5.0, isolation_level=None)
+    if new:   # shared by the API and the bot (one group): SQLite gives its -wal/-shm files the database's mode
+        try: os.chmod(db, 0o660)
+        except OSError: pass
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA busy_timeout=5000")
     try:
@@ -92,10 +104,17 @@ def _ensure_legacy_migrated(con, path):
     _write_state_tx(con, state)
 
 
-def _write_state_tx(con, state):
-    for key in ("limits", "kill_switch", "equity_high_water_mark", "equity_observed_at", "daily"):
+_META_KEYS = ("limits", "kill_switch", "equity_high_water_mark", "equity_observed_at", "daily")
+
+
+def _write_meta_tx(con, state):
+    for key in _META_KEYS:
         con.execute("INSERT INTO risk_meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                     (key, json.dumps(state.get(key))))
+
+
+def _write_state_tx(con, state):
+    _write_meta_tx(con, state)
     con.execute("DELETE FROM open_risk")
     for key, row in (state.get("open_risk") or {}).items():
         stamp = row.get("at", _now())
@@ -401,22 +420,48 @@ def update_equity_and_check_kill_switch(path, equity_usdt, *, equity_observed_at
         con.close()
 
 
+def _mutate_meta(path, mutate):
+    """Read and change the meta rows (limits, kill switch, daily) in one BEGIN IMMEDIATE transaction, never touching
+    open_risk. A load_risk_state / save_risk_state pair left a gap in which a bot's kill-switch trip or reservation
+    was overwritten with the stale snapshot (reproduced: the switch un-tripped and open_risk emptied)."""
+    con = _connect(path)
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        _ensure_legacy_migrated(con, path)
+        state = _read_state_tx(con)
+        out = mutate(state)
+        _write_meta_tx(con, state)
+        con.execute("COMMIT")
+        return out
+    except Exception:
+        try: con.execute("ROLLBACK")
+        except sqlite3.Error: pass
+        raise
+    finally:
+        con.close()
+
+
 def trip_kill_switch(path, reason, *, by="manual"):
-    state = load_risk_state(path)
-    state["kill_switch"] = {"tripped": True, "reason": str(reason), "at": _now(), "by": by}
-    save_risk_state(path, state)
+    def mutate(state): state["kill_switch"] = {"tripped": True, "reason": str(reason), "at": _now(), "by": by}
+    _mutate_meta(path, mutate)
 
 
 def reset_kill_switch(path, *, operator):
-    state = load_risk_state(path)
-    state["kill_switch"] = {"tripped": False, "reason": None, "at": _now(), "by": f"reset:{operator}"}
-    save_risk_state(path, state)
+    def mutate(state): state["kill_switch"] = {"tripped": False, "reason": None, "at": _now(), "by": f"reset:{operator}"}
+    _mutate_meta(path, mutate)
+
+
+def update_limits(path, patch):
+    """Merge ``patch`` into the limits; returns the new limits."""
+    def mutate(state):
+        state["limits"].update(patch); return dict(state["limits"])
+    return _mutate_meta(path, mutate)
 
 
 def record_realized_pnl(path, pnl_usdt):
-    state = load_risk_state(path)
-    daily = state.setdefault("daily", {"date": None, "realized_pnl": 0.0, "start_equity": None})
-    if daily.get("date") != _today():
-        daily.update({"date": _today(), "realized_pnl": 0.0})
-    daily["realized_pnl"] = float(daily.get("realized_pnl", 0) or 0) + float(pnl_usdt or 0)
-    save_risk_state(path, state)
+    def mutate(state):
+        daily = state.setdefault("daily", {"date": None, "realized_pnl": 0.0, "start_equity": None})
+        if daily.get("date") != _today():
+            daily.update({"date": _today(), "realized_pnl": 0.0})
+        daily["realized_pnl"] = float(daily.get("realized_pnl", 0) or 0) + float(pnl_usdt or 0)
+    _mutate_meta(path, mutate)

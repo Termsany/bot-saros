@@ -20,7 +20,11 @@ def _now():
 
 def _connect(path):
     p = Path(path); p.parent.mkdir(parents=True, exist_ok=True)
+    new = not p.exists()
     con = sqlite3.connect(str(p), timeout=5.0, isolation_level=None)
+    if new:   # shared by the API and the live bot (RAQM_RISK_DIR, one group)
+        try: os.chmod(p, 0o660)
+        except OSError: pass
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA busy_timeout=5000")
     con.execute("""CREATE TABLE IF NOT EXISTS live_activation_audit (

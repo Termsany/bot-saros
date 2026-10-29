@@ -44,10 +44,10 @@ class FakeBinance:
         self.positions[base] = self.positions.get(base, 0.0) + float(qty)
         return {"id": "e", "clientOrderId": params.get("clientOrderId"), "filled": float(qty), "average": 100.0, "fee": {"cost": abs(float(qty)) * 100.0 * 0.0004}}
 
-    def fetch_order(self, oid, sym):
+    def fetch_order(self, oid, sym, params=None):
         o = next((o for o in self.orders if "stopLossPrice" in o["params"] and "stop-" + o["params"]["clientOrderId"] == oid), None)
         if o and oid not in self.cancelled: return {"id": oid, "status": "open"}
-        raise Exception("not found")
+        raise Exception('binanceusdm {"code":-2013,"msg":"Order does not exist."}')   # what Binance answers
 
     def fetch_open_orders(self, sym, *a):
         return [{"id": "stop-" + o["params"]["clientOrderId"], "clientOrderId": o["params"]["clientOrderId"]}

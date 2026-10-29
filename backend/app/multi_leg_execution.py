@@ -116,8 +116,12 @@ class MultiLegExecutionEngine:
 
     def execute(self, *, strategy, intent, legs, equity_usdt, execute_leg, compensate_leg,
                 verify_protection, state=None, execution_id=None, reserve=True,
-                persist_fills=None, cycle_token=None):
-        """Execute a basket. ``legs`` are sorted by caller-provided ``order`` then symbol."""
+                persist_fills=None, cycle_token=None, unwind_failed_leg=None):
+        """Execute a basket. ``legs`` are sorted by caller-provided ``order`` then symbol.
+
+        ``unwind_failed_leg(leg)`` is asked about an entry leg that raised: its order may have filled before the
+        error (no fill evidence in time, a position read that failed). It must return {"confirmed": True} only when
+        the leg is proven flat (unfilled, or closed again); anything else keeps the leg as residual exposure."""
         if not legs:
             raise ValueError("basket must contain at least one leg")
         ordered = sorted(legs, key=lambda x: (int(x.get("order", 0)), x["symbol"]))
@@ -178,7 +182,21 @@ class MultiLegExecutionEngine:
                 except Exception as exc:
                     self._write_step(execution_id, n, leg, "failed", error=exc)
                     residual = []
+                    if leg.get("action", "entry") == "exit":
+                        # the position this exit leg was closing is still open (or unknown): it is the exposure
+                        residual.append({"leg": leg, "fill": None, "reason": f"exit leg failed: {exc}"})
+                    elif unwind_failed_leg is not None:
+                        try:
+                            uw = unwind_failed_leg(leg)
+                            if not uw or uw.get("confirmed") is not True:
+                                raise RuntimeError((uw or {}).get("reason") or "failed leg not proven flat")
+                            self._write_step(execution_id, n, leg, "compensated", result=uw)
+                        except Exception as uexc:
+                            residual.append({"leg": leg, "fill": None, "reason": f"leg failed ({exc}); {uexc}"})
+                    done_exits = [(prior, r) for prior, r in filled if prior.get("action", "entry") == "exit"]
                     for prior, prior_result in reversed(filled):
+                        if prior.get("action", "entry") == "exit":
+                            continue          # really closed — booked below, not reopened
                         try:
                             cres = compensate_leg(prior, prior_result)
                             if not cres or cres.get("confirmed") is False:
@@ -186,6 +204,11 @@ class MultiLegExecutionEngine:
                             self._write_step(execution_id, ordered.index(prior) + 1, prior, "compensated", result=cres)
                         except Exception as cexc:
                             residual.append({"leg": prior, "fill": prior_result, "reason": str(cexc)})
+                    if done_exits and persist_fills is not None:
+                        try:
+                            if persist_fills(done_exits) is not True: raise RuntimeError("closed exit legs not persisted")
+                        except Exception as pexc:
+                            residual.extend({"leg": prior, "fill": r, "reason": f"closed, not booked: {pexc}"} for prior, r in done_exits)
                     if residual:
                         self._write_execution(execution_id, strategy, intent, "recovery_required", payload, residual)
                         con = self._connect()
