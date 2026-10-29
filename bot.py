@@ -62,8 +62,9 @@ CONFIG = {
 
 STATE_PATH = Path(__file__).parent / CONFIG["state_file"]
 LOG_PATH   = Path(__file__).parent / CONFIG["log_file"]
-RISK_PATH  = Path(__file__).parent / "risk_state.json"   # shared Central Risk Manager ledger across ALL strategy processes
-ACTIVATION_PATH = Path(__file__).parent / "live_activation.sqlite3"
+# shared Central Risk Manager ledger across ALL strategy processes and the dashboard API (RAQM_RISK_DIR)
+RISK_PATH  = riskmgr.ledger_dir(Path(__file__).parent) / "risk_state.json"
+ACTIVATION_PATH = riskmgr.ledger_dir(Path(__file__).parent) / "live_activation.sqlite3"
 
 # These strategies route real orders through the same proven primitives (place_order + OCO stop/TP,
 # risk_manager.pre_trade_gate/register_open_risk, reconcile_live, close_live_position/check_sl_tp):
@@ -2887,15 +2888,33 @@ def _phase2_live_basket(ex, state, strategy, intent, legs, *, reserve=True):
             return {"status": "recovery_required", "residual": [{"execution_id": item["execution_id"], "reason": positions["error"], "positions": positions}]}
         residual = [{"execution_id": item["execution_id"], "reason": "restart reconciliation requires exchange-confirmed compensation or manual residual recovery", "positions": positions, "legs": item["payload"].get("legs", [])}]
         if not positions or all(float((p.get("contracts") if isinstance(p, dict) else 0) or 0) == 0 for p in (positions or [])):
+            from backend.app.oco import cancel_oco_orders
+            entry_legs = [leg for leg in item["payload"].get("legs", []) if leg.get("action", "entry") == "entry" and leg.get("client_order_id")]
+            try:
+                stops_gone = all(cancel_oco_orders(ex, leg["symbol"], pos_id=leg["client_order_id"]) is True for leg in entry_legs)
+            except Exception:
+                stops_gone = False
+            if not stops_gone:   # flat, but a leftover reduceOnly stop could close a later position on that coin
+                return {"status": "recovery_required", "residual": [{**residual[0], "reason": "flat, but the legs' own stops could not be confirmed cancelled"}]}
+            for leg in entry_legs:   # nothing is open any more: a reservation left here would block the coin for good
+                try: riskmgr.rollback_reservation(RISK_PATH, strategy=item["strategy"], symbol=leg["symbol"])
+                except Exception as exc: log(f"⚠️ {leg['symbol']}: rollback reservation: {exc}")
             return {"status": "compensated", "residual": []}
         return {"status": "recovery_required", "residual": residual}
     pending = engine.reconcile(position_lookup=_lookup_pending, resolve=_resolve_pending)
+    recovery = state.setdefault("recovery_required", {})
+    for row in pending:
+        if (row.get("resolution") or {}).get("status") == "compensated":
+            recovery.pop(f"execution:{row['execution_id']}", None)
+            for key in [k for k, v in recovery.items() if isinstance(v, dict) and v.get("execution_id") == row["execution_id"]]:
+                recovery.pop(key, None)
     unresolved = [row for row in pending if (row.get("resolution") or {}).get("status") == "recovery_required"]
     if unresolved:
         for row in unresolved:
-            state.setdefault("recovery_required", {})[f"execution:{row['execution_id']}"] = {"reason": "restart reconciliation residual persisted", "residual": (row.get("resolution") or {}).get("residual"), "at": row["updated_at"]}
-        _ENTRY_BLOCK["reason"] = "durable live execution residual requires recovery"; save_state(state); return None
-    if pending:
+            recovery[f"execution:{row['execution_id']}"] = {"reason": "restart reconciliation residual persisted", "residual": (row.get("resolution") or {}).get("residual"), "at": row["updated_at"]}
+        _ENTRY_BLOCK["reason"] = "durable live execution residual requires recovery"; save_state(state)
+        if not is_exit: return None   # an exit only reduces exposure: a residual elsewhere must not trap open positions
+    elif pending:
         save_state(state)
     def execute_leg(leg):
         if leg.get("action", "entry") == "exit":
@@ -2911,6 +2930,18 @@ def _phase2_live_basket(ex, state, strategy, intent, legs, *, reserve=True):
         result["authoritative_qty"] = authoritative_qty
         result["authoritative_fill_qty"] = float(result.get("qty", 0) or 0)
         fills[leg["symbol"]] = result; return result
+    def unwind_failed_leg(leg):
+        """The leg raised after its order may have gone through. Flat + order not filled = nothing to undo;
+        an open position on the exchange is closed and its stop removed; anything unclear stays residual."""
+        q = _exchange_position_qty(ex, leg["symbol"], side=leg["side"])
+        if q is None: return {"confirmed": False, "reason": "position unknown after the leg failed"}
+        if float(q) == 0:
+            flat_ok, why = _entry_failed_flat(ex, leg["symbol"], leg["client_order_id"], side=leg["side"])
+            return {"confirmed": True, "flat": True} if flat_ok else {"confirmed": False, "reason": f"not proven flat: {why}"}
+        try:
+            return compensate(leg, {"qty": q, "price": leg["price"]})
+        except Exception as exc:
+            return {"confirmed": False, "reason": f"closing the failed leg: {exc}"}
     def compensate(leg, result):
         if leg.get("action", "entry") == "exit": return {"confirmed": False, "reason": "closed exit leg cannot be compensated automatically"}
         close_side = "close_long" if leg["side"] == "long" else "close_short"
@@ -2921,10 +2952,14 @@ def _phase2_live_basket(ex, state, strategy, intent, legs, *, reserve=True):
         # next position on this coin at a stale price (found by scripts/demo_e2e.py)
         try:
             from backend.app.oco import cancel_oco_orders
-            cancel_oco_orders(ex, leg["symbol"], pos_id=leg["client_order_id"])
-        except Exception as cancel_error:
+            cancelled = cancel_oco_orders(ex, leg["symbol"], pos_id=leg["client_order_id"]) is True
+            cancel_error = None if cancelled else "not confirmed"
+        except Exception as exc:
+            cancelled, cancel_error = False, exc
+        if not cancelled:   # flat, but the leg stays residual until its stop is confirmed gone (restart reconciliation)
             log(f"⚠️ {leg['symbol']}: الرجل اتقفلت بس أوامر الحماية بتاعتها ما اتلغتش: {cancel_error}")
             notify(f"⚠️ {leg['symbol']}: رجل اتقفلت تلقائياً بس أمر الوقف بتاعها ممكن يكون لسه على المنصة — راجعه")
+            return {"confirmed": False, "reason": f"leg closed but its stop is not confirmed cancelled: {cancel_error}", "close": closed}
         return {"confirmed": True, "close": closed}
     for leg in legs:
         if leg.get("action", "entry") == "exit":
@@ -2954,14 +2989,14 @@ def _phase2_live_basket(ex, state, strategy, intent, legs, *, reserve=True):
             riskmgr.register_open_risk(RISK_PATH, strategy=strategy, symbol=sym, side=leg["side"], risk_usdt=leg["risk_usdt"],
                 notional_usdt=leg["notional_usdt"], correlation_group=leg.get("correlation_group"))
         save_state(state)
-        cycles.pop(cycle_key, None)
+        if len(filled) == len(legs): cycles.pop(cycle_key, None)   # partial (closed exits of a failed basket): keep the cycle
         return True
     def protected(leg, result):
         if leg.get("action", "entry") == "exit": return True
         oco = result.get("oco") or {}; return not (oco.get("protection_missing") or oco.get("verify_failed") or oco.get("sl_unverified"))
     result = engine.execute(strategy=strategy, intent=intent, legs=legs, equity_usdt=equity, execute_leg=execute_leg,
                             compensate_leg=compensate, verify_protection=protected, state=state, reserve=reserve,
-                            persist_fills=_persist_fills, cycle_token=cycle_token)
+                            persist_fills=_persist_fills, cycle_token=cycle_token, unwind_failed_leg=unwind_failed_leg)
     if result.get("status") == "recovery_required":
         for item in result.get("residual", []):
             sym = item["leg"]["symbol"]
@@ -3541,6 +3576,13 @@ if __name__=="__main__":
             p.error(f"--live مش متاح لـ {', '.join(unsupported)} — الاستراتيجيات المتاحة: {', '.join(sorted(LIVE_READY_STRATEGIES))}")
         if binance_env() == "live" and os.getenv("ALLOW_LIVE_TRADING", "").strip().lower() != "true":
             p.error("فلوس حقيقية محتاجة ALLOW_LIVE_TRADING=true — أو BINANCE_ENV=demo للتجربة بفلوس وهمية على Binance")
+        if binance_env() == "live" and not os.getenv("RAQM_RISK_DIR", "").strip():
+            # without it the dashboard's kill switch, limits and revoke act on a ledger this process never reads
+            p.error("فلوس حقيقية محتاجة RAQM_RISK_DIR — نفس فولدر دفتر المخاطرة اللي الـ API بيستخدمه")
+        try:   # fail at start, not at the first trade: the ledger and the activation record must open read-write
+            riskmgr.load_risk_state(RISK_PATH); live_activation.active_record(ACTIVATION_PATH)
+        except Exception as e:
+            p.error(f"دفتر المخاطرة مش متاح في {RISK_PATH.parent}: {e}")
         CONFIG["paper_trading"]=False
     if args.port: CONFIG["dashboard_port"]=args.port
     if args.serve_only:

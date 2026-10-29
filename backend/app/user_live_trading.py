@@ -131,14 +131,12 @@ def save_user_state(path: Path, state: dict):
 def _ensure_user_risk_limits(risk_path, *, leverage, risk_per_trade_pct, max_aggregate_risk_pct):
     """Initialize this user's risk ledger with their own (consented, bounded) limits
     the first time it's touched. Existing reservations/kill-switch state are preserved."""
-    state = riskmgr.load_risk_state(risk_path)
-    state["limits"].update({
+    riskmgr.update_limits(risk_path, {
         "leverage": int(leverage),
         "risk_per_trade_pct": float(risk_per_trade_pct),
         "max_aggregate_risk_pct": float(max_aggregate_risk_pct),
     })
-    riskmgr.save_risk_state(risk_path, state)
-    return state
+    return riskmgr.load_risk_state(risk_path)
 
 
 def _ensure_futures_setup_for_user(ex, symbol, leverage, margin_type="ISOLATED"):

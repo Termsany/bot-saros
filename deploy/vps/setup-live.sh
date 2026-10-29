@@ -32,4 +32,13 @@ if [ -f "$B/.env" ]; then
 fi
 # the folder shared with the API now belongs to the live bot (it writes the status and removes the requests)
 for d in /opt/raqm-ipc /opt/raqm-ipc/commands /opt/raqm-ipc/results; do install -d -o raqmlive -g raqmapi -m 2770 "$d"; done
+# risk ledger + live activation record shared with the API (RAQM_RISK_DIR in both units): the dashboard's kill switch,
+# limits and revoke must reach the bot. The API's existing copies move here once (sqlite backup, safe while it runs).
+install -d -o raqmlive -g raqmapi -m 2770 /opt/raqm-risk
+for db in risk_state.sqlite3 live_activation.sqlite3; do
+    if [ ! -f "/opt/raqm-risk/$db" ] && [ -f "/opt/raqm-api/app/$db" ]; then
+        /opt/raqm-api/venv/bin/python -I -c 'import sqlite3,sys; s=sqlite3.connect(sys.argv[1]); d=sqlite3.connect(sys.argv[2]); s.backup(d); d.close()'             "/opt/raqm-api/app/$db" "/opt/raqm-risk/$db"
+    fi
+    if [ -f "/opt/raqm-risk/$db" ]; then chown -h raqmlive:raqmapi "/opt/raqm-risk/$db"; chmod 660 "/opt/raqm-risk/$db"; fi
+done
 echo "raqm-live ready: $(ls "$L" | tr '\n' ' ')"
