@@ -17,6 +17,9 @@ git -C "$SRC" cat-file -e "$SHA^{commit}" || { echo "commit $SHA not found on Gi
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 git -C "$SRC" archive "$SHA" | tar -x -C "$T"
 id raqmlive >/dev/null 2>&1 || useradd --system --home-dir "$L" --no-create-home --shell /usr/sbin/nologin raqmlive
+# group PERMISSION bits on the shared setgid dirs (/opt/raqm-risk, /opt/raqm-ipc) are useless without group
+# MEMBERSHIP: raqmlive must also be in raqmapi's group, or whichever side didn't create a file first can't open it.
+usermod -aG raqmapi raqmlive
 install -d -o root -g raqmlive -m 750 "$L"
 install -d -o raqmlive -g raqmlive -m 700 "$L/state"
 for f in bot.py strategies_trend.py strategies_advanced.py strategies_wave.py; do install -m 644 -o root -g root "$T/$f" "$L/$f"; done
