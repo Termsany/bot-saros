@@ -3,4 +3,5 @@ Description=Pull main and restart the Raqm API when the backend changed
 
 [Service]
 Type=oneshot
-ExecStart=/bin/sh /opt/raqm-api/update.sh
+# root-owned copy (api/install-updater.sh), never the one inside /opt/raqm-api
+ExecStart=/bin/sh /usr/local/sbin/raqm-api-update
