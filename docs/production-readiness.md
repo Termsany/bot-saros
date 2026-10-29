@@ -88,8 +88,8 @@ Demo run after the fixes (`scripts/demo_e2e.py`, 18 scenarios, all passed, nothi
   exercise the basket strategies' signal code.
 
 Open items from the review:
-- while an entry block is set, the portfolio `run_once_*` return early and skip their signal exits too (the
-  exchange stops still protect);
+- ~~while an entry block is set, the portfolio `run_once_*` return early and skip their signal exits too~~ — fixed
+  (PR #25): a block stops entries only; a position that is itself in recovery is left to a person;
 - the equity freshness check is a no-op;
 - live activation readiness is self-declared and the risk allocation is not enforced as a cap.
 

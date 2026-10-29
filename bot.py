@@ -325,9 +325,10 @@ def _listing_close(ex, state, sym, price, reason):
 def run_once_listing(ex):
     L = LISTING; state = load_state(); now = datetime.now(timezone.utc)
     if not CONFIG["paper_trading"]:
+        # a block (recovery, kill switch, unknown position) stops entries only — the live adapters refuse them. The
+        # strategy's own exits still run: returning here left open positions without their signal exits
         reconcile_live(state, ex)
-        if _ENTRY_BLOCK.get("reason"):
-            save_state(state); return
+        if _ENTRY_BLOCK.get("reason"): log(f"⛔ دخول جديد متوقف، الخروج شغّال — {_ENTRY_BLOCK['reason']}")
     process_paper_closes(state, ex, "listing")
     done = state.setdefault("listing_done", {})
     mk = listing_markets(ex); prices = {}
@@ -348,6 +349,7 @@ def run_once_listing(ex):
     # new entries: coins that just turned 30 days old (a few days of slack if the bot was down), oldest listing first;
     # like the backtest, a coin that comes up while all 10 slots are taken is skipped for good
     due = sorted([x for x in mk if L["skip_days"] <= x[2] < L["skip_days"] + L["catch_up_days"] and x[0] not in done], key=lambda x: x[1])
+    if not CONFIG["paper_trading"] and (_ENTRY_BLOCK.get("reason") or state.get("recovery_required")): due = []   # retried when unblocked
     for sym, listed, age in due:
         done[sym] = now.isoformat()
         if len(state["positions"]) >= L["max_open"]:
@@ -450,12 +452,14 @@ def _paper_close(ex, state, sym, price, reason):
 def run_once_momentum(ex):
     M = MOM; state = load_state(); now = datetime.now(timezone.utc); prices = {}
     if not CONFIG["paper_trading"]:
+        # a block (recovery, kill switch, unknown position) stops entries only — the live adapters refuse them. The
+        # strategy's own exits still run: returning here left open positions without their signal exits
         reconcile_live(state, ex)
-        if _ENTRY_BLOCK.get("reason"):
-            save_state(state); return
+        if _ENTRY_BLOCK.get("reason"): log(f"⛔ دخول جديد متوقف، الخروج شغّال — {_ENTRY_BLOCK['reason']}")
     process_paper_closes(state, ex, "momentum")
-    # protective stops during the week
-    for sym, pos in list(state["positions"].items()):
+    # protective stops during the week (paper; live, the stop order is on the exchange and reconcile_live books its fill —
+    # _paper_close here dropped the live position from the books without closing it on the exchange)
+    for sym, pos in (list(state["positions"].items()) if CONFIG["paper_trading"] else []):
         try:
             price = float(ex.fetch_ticker(sym)["last"]); prices[sym] = price
             hit = price >= pos["sl"] if pos["side"] == "short" else price <= pos["sl"]
@@ -596,9 +600,10 @@ def _ratio_close_pair(ex, state, key, prices, reason, fcache):
 def run_once_ratio(ex):
     R = RATIO; state = load_state(); state.setdefault("pairs", {}); now = datetime.now(timezone.utc)
     if not CONFIG["paper_trading"]:
+        # a block (recovery, kill switch, unknown position) stops entries only — the live adapters refuse them. The
+        # strategy's own exits still run: returning here left open positions without their signal exits
         reconcile_live(state, ex)
-        if _ENTRY_BLOCK.get("reason"):
-            save_state(state); return
+        if _ENTRY_BLOCK.get("reason"): log(f"⛔ دخول جديد متوقف، الخروج شغّال — {_ENTRY_BLOCK['reason']}")
     process_paper_closes(state, ex, "ratio")
     today = now.replace(hour=0, minute=0, second=0, microsecond=0); prices = {}
     if state.get("ratio_day") != today.isoformat():          # once a day, right after the daily close
@@ -2915,6 +2920,9 @@ def _phase2_live_basket(ex, state, strategy, intent, legs, *, reserve=True):
         return None
     if state.get("recovery_required") and not is_exit:
         return None
+    held = [leg["symbol"] for leg in legs if leg["symbol"] in (state.get("recovery_required") or {})]
+    if is_exit and held:   # a leg whose state is in doubt is left to a person (its exchange stop stays)
+        log(f"⏸️ خروج {intent} متأجل — محتاج مراجعة: {', '.join(held)}"); return None
     equity = _fetch_equity_usdt(ex)
     if equity is None and not is_exit:
         _ENTRY_BLOCK["reason"] = "account equity unavailable — blocking new entries"; return None
@@ -3185,6 +3193,8 @@ def _single_leg_live_exit(ex, state, symbol, price, reason):
     pos = state["positions"].get(symbol)
     if not pos:
         return False
+    if symbol in (state.get("recovery_required") or {}):   # its state is in doubt: a person decides (its exchange stop stays)
+        log(f"⏸️ {symbol}: خروج ({reason}) متأجل — الصفقة محتاجة مراجعة"); return False
     try:
         result = close_live_position(ex, symbol, pos, price)
         _require_verified_close(result)
@@ -3225,9 +3235,10 @@ def _guard_stops(ex, state, prices, label):
 def run_once_breakout(ex):
     V = VB; state = load_state(); now = datetime.now(timezone.utc); day = _utc_day(now); prices = {}
     if not CONFIG["paper_trading"]:
+        # a block (recovery, kill switch, unknown position) stops entries only — the live adapters refuse them. The
+        # strategy's own exits still run: returning here left open positions without their signal exits
         reconcile_live(state, ex)
-        if _ENTRY_BLOCK.get("reason"):
-            save_state(state); return
+        if _ENTRY_BLOCK.get("reason"): log(f"⛔ دخول جديد متوقف، الخروج شغّال — {_ENTRY_BLOCK['reason']}")
     process_paper_closes(state, ex, "breakout")
     _guard_stops(ex, state, prices, "بريك أوت")
     if state.get("vb_day") != day.isoformat():
@@ -3273,8 +3284,8 @@ def run_once_breakout(ex):
                 pos = _single_leg_live_entry(ex, state, sym, "long", position_size(price, ex),
                     fill, fill * (1 - V["stop"]), None, "vol_breakout",
                     {"trigger": p["trigger"], "exit_at": (day + pd.Timedelta(days=1)).isoformat()})
-                if pos:
-                    state.setdefault("vb_done", []).append(sym); save_state(state)
+                if not pos: continue
+                state.setdefault("vb_done", []).append(sym); save_state(state)
             log(f"✅ 🟢 بريك أوت {sym} @ {fill:.6g} (الاختراق {p['trigger']:.6g})")
             notify(f"🟢 بريك أوت {sym.split(':')[0]} (Paper)\nاخترق {p['trigger']:.6g} — دخول {fill:.6g}\nخروج: افتتاح بكرة 00:00 UTC · وقف أمان {fill * (1 - V['stop']):.6g}")
         except Exception as e: log(f"بريك أوت دخول {sym}: {e}")
@@ -3286,9 +3297,10 @@ def run_once_breakout(ex):
 def run_once_rsi2(ex):
     R = RSI2; state = load_state(); now = datetime.now(timezone.utc); day = _utc_day(now); prices = {}
     if not CONFIG["paper_trading"]:
+        # a block (recovery, kill switch, unknown position) stops entries only — the live adapters refuse them. The
+        # strategy's own exits still run: returning here left open positions without their signal exits
         reconcile_live(state, ex)
-        if _ENTRY_BLOCK.get("reason"):
-            save_state(state); return
+        if _ENTRY_BLOCK.get("reason"): log(f"⛔ دخول جديد متوقف، الخروج شغّال — {_ENTRY_BLOCK['reason']}")
     process_paper_closes(state, ex, "rsi2")
     _guard_stops(ex, state, prices, "RSI-2")
     if state.get("rsi2_day") != day.isoformat():
@@ -3321,10 +3333,10 @@ def run_once_rsi2(ex):
                     if CONFIG.get("paper_trading"):
                         _paper_open(state, sym, price, now, {"sl": sl, "rsi2": round(r2, 1),
                                                              "exit_at": (day + pd.Timedelta(days=R["max_days"])).isoformat()})
-                    else:
-                        _single_leg_live_entry(ex, state, sym, "long", position_size(price, ex),
+                    elif not _single_leg_live_entry(ex, state, sym, "long", position_size(price, ex),
                             price, sl, None, "rsi2_pullback", {"rsi2": round(r2, 1),
-                            "exit_at": (day + pd.Timedelta(days=R["max_days"])).isoformat()})
+                            "exit_at": (day + pd.Timedelta(days=R["max_days"])).isoformat()}):
+                        continue
                     log(f"✅ 🟢 RSI-2 {sym} @ {price} (RSI-2 {r2:.1f} في ترند صاعد)")
                     notify(f"🟢 RSI-2 {sym.split(':')[0]} (Paper)\nRSI-2 {r2:.1f} وفوق متوسط 200 يوم — دخول {price:.6g}\nخروج: أول قفل يومي فوق متوسط 5 أيام (أقصى {R['max_days']} أيام) · وقف {price * (1 - R['stop']):.6g}")
             except Exception as e: log(f"RSI-2 {sym}: {e}")
@@ -3349,9 +3361,10 @@ def tbreak_mode():
 def run_once_tbreak(ex):
     T = TB; state = load_state(); now = datetime.now(timezone.utc); day = _utc_day(now); prices = {}
     if not CONFIG["paper_trading"]:
+        # a block (recovery, kill switch, unknown position) stops entries only — the live adapters refuse them. The
+        # strategy's own exits still run: returning here left open positions without their signal exits
         reconcile_live(state, ex)
-        if _ENTRY_BLOCK.get("reason"):
-            save_state(state); return
+        if _ENTRY_BLOCK.get("reason"): log(f"⛔ دخول جديد متوقف، الخروج شغّال — {_ENTRY_BLOCK['reason']}")
     process_paper_closes(state, ex, "tbreak")
     _guard_stops(ex, state, prices, "اختراق الترند")
     if state.get("tb_day") != day.isoformat():
@@ -3382,9 +3395,9 @@ def run_once_tbreak(ex):
                     price = float(ex.fetch_ticker(sym)["last"]) * (1 + T["slip"]); prices[sym] = price
                     if CONFIG.get("paper_trading"):
                         _paper_open(state, sym, price, now, {"sl": price * (1 - T["stop"]), "breakout": hi})
-                    else:
-                        _single_leg_live_entry(ex, state, sym, "long", position_size(price, ex),
-                            price, price * (1 - T["stop"]), None, "trend_breakout", {"breakout": hi})
+                    elif not _single_leg_live_entry(ex, state, sym, "long", position_size(price, ex),
+                            price, price * (1 - T["stop"]), None, "trend_breakout", {"breakout": hi}):
+                        continue
                     opened.append(f"{sym.split('/')[0]} {price:.6g}")
                     log(f"✅ 🟢 اختراق الترند {sym} @ {price:.6g} (قفل {c[-1]:.6g} فوق أعلى {T['L']} يوم {hi:.6g})")
             except Exception as e: log(f"اختراق الترند {sym}: {e}")
