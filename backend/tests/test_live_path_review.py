@@ -5,6 +5,7 @@
 3. A fixed client order id per symbol: trade #2 looked up trade #1's filled order.
 4. An entry with an unclear outcome that shows on the exchange was left with no stop and no alert."""
 import os, sys, tempfile, unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent.parent
@@ -76,15 +77,56 @@ class StrategyExchangeTests(Base):
             run.assert_called_once_with(sentinel)
 
 
-class ReconcileEachCycleTests(Base):
-    def test_live_cycle_reconciles_and_stops_when_blocked(self):
-        for fn in ("run_once_breakout", "run_once_rsi2", "run_once_tbreak"):
-            ex = mock.Mock()
-            def block(state, ex): botmod._ENTRY_BLOCK["reason"] = "unknown position on the exchange"
-            with mock.patch.object(botmod, "reconcile_live", side_effect=block) as rec:
-                getattr(botmod, fn)(ex)
-            rec.assert_called_once(); ex.fetch_ohlcv.assert_not_called(); ex.fetch_ticker.assert_not_called()
-            botmod._ENTRY_BLOCK["reason"] = ""
+class TrendMarket(FakeBinance):
+    """FakeBinance with daily candles: SOL closed below its 20-day mean (exit), ETH breaks its 20-day high (entry)."""
+    def fetch_ticker(self, sym): return {"last": 100.0}
+    def fetch_ohlcv(self, sym, tf="1d", since=None, limit=None, params=None):
+        closes = [60.0 + 40.0 * i / 214 for i in range(215)]
+        if sym.startswith("SOL"): closes[-1] = 50.0
+        return [[i * 86_400_000, c, c, c, c, 1e6] for i, c in enumerate(closes)] + [[215 * 86_400_000, 100.0, 100.0, 100.0, 100.0, 1.0]]
+
+
+class BlockedCycleTests(Base):
+    """A block (recovery, kill switch, unknown position) stops entries only; the strategy's exits keep running."""
+    def setUp(self):
+        super().setUp()
+        botmod.CONFIG["enabled_strategies"] = ["trend_breakout"]
+        self.ex = TrendMarket()
+        self.assertIsNotNone(botmod._single_leg_live_entry(self.ex, self.state, SYM, "long", 100.0, 100.0, 60.0, None, "trend_breakout"))
+        botmod.save_state(self.state)
+        p = mock.patch.object(botmod, "volume_universe", return_value=[SYM, "ETH/USDT:USDT"]); p.start(); self.addCleanup(p.stop)
+
+    def run_blocked(self, recovery=None):
+        def block(state, ex):
+            botmod._ENTRY_BLOCK["reason"] = "unknown position on the exchange"
+            if recovery: state.setdefault("recovery_required", {}).update(recovery)
+        with mock.patch.object(botmod, "reconcile_live", side_effect=block) as rec:
+            botmod.run_once_tbreak(self.ex)
+        rec.assert_called_once()
+        return botmod.load_state()
+
+    def test_signal_exit_runs_while_entries_are_blocked(self):
+        state = self.run_blocked()
+        self.assertNotIn(SYM, state["positions"]); self.assertEqual(self.ex.positions["SOL/USDT"], 0.0)   # exited
+        self.assertNotIn("ETH/USDT:USDT", state["positions"])                                         # no entry
+        self.assertFalse(self.ex.positions.get("ETH/USDT"))
+
+    def test_position_in_recovery_is_left_to_a_person(self):
+        state = self.run_blocked({SYM: {"reason": "size mismatch"}})
+        self.assertIn(SYM, state["positions"]); self.assertEqual(self.ex.positions["SOL/USDT"], 2.0)
+
+
+class MomentumLiveStopTests(Base):
+    def test_live_stop_is_left_to_the_exchange(self):
+        # the in-week check books paper stops; live it dropped the position from the books without closing it
+        st = botmod.load_state()
+        st["positions"][SYM] = {"side": "long", "entry": 100.0, "qty": 2.0, "sl": 150.0, "time": "2026-10-28T00:00:00+00:00"}
+        st["mom_last"] = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        botmod.save_state(st)
+        ex = TrendMarket(); ex.positions["SOL/USDT"] = 2.0
+        with mock.patch.object(botmod, "reconcile_live"):
+            botmod.run_once_momentum(ex)
+        self.assertIn(SYM, botmod.load_state()["positions"])
 
 
 class BreakoutMarket:
