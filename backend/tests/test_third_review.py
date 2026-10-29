@@ -88,10 +88,12 @@ class ProtectPendingFlatHandlingTests(Base):
     def test_uncancellable_stop_keeps_the_book_entry_for_retry(self):
         """Cancellation failure (unconfirmed) must not be silently treated as success."""
         class StuckStop(FakeBinance):
+            stuck = False
             def fetch_open_orders(self, sym, *a):
-                if a and isinstance(a[-1], dict): raise Exception("trigger view timeout")   # complete=False
+                if self.stuck and a and isinstance(a[-1], dict): raise Exception("trigger view timeout")  # complete=False
                 return super().fetch_open_orders(sym, *a)
         ex = StuckStop(); self.seed_protected(ex)
+        ex.stuck = True                                                  # now the trigger/stop views stop answering
         botmod._protect_pending(ex, self.state, {})
         botmod._protect_pending(ex, self.state, {})
         self.assertIn(S, self.state["protect"])                          # cancel unconfirmed: keep retrying, don't drop
@@ -128,19 +130,36 @@ class StaleCycleTokenTests(Base):
                 for i, s in enumerate(syms)]
 
     def test_stale_token_cleared_by_reconcile_is_not_reused_for_the_new_attempt(self):
-        ex = FakeBinance()
+        C, D = "C/USDT:USDT", "D/USDT:USDT"
+
+        class Blind(FakeBinance):
+            """Leg B's own position read fails, so THIS attempt ends in recovery_required (not filled/
+            compensated) -- isolating the cycle_token bug from the terminal-status cleanup that would
+            otherwise pop the book entry regardless of which token was used."""
+            def create_order(self, sym, typ, side, qty, price, params):
+                r = super().create_order(sym, typ, side, qty, price, params)
+                if sym == B and "stopLossPrice" not in params and not params.get("reduceOnly"):
+                    return {"id": "e2", "clientOrderId": params.get("clientOrderId"), "filled": None, "status": "NEW"}
+                return r
+            def fetch_my_trades(self, sym, since=None, limit=20, params=None): raise Exception("timeout")
+            def fetch_positions(self, syms=None):
+                if syms and B in syms: raise Exception("timeout")
+                return super().fetch_positions(syms)
+
+        ex = Blind()
         engine = botmod._phase2_engine(self.state)
-        legs = self.legs(A, B)
-        for n, leg in enumerate(legs): leg["client_order_id"] = f"raqm-crash{n:022d}"
+        stale_legs = self.legs(C, D)                                     # unrelated symbols: resolves cleanly to flat
+        for n, leg in enumerate(stale_legs): leg["client_order_id"] = f"raqm-crash{n:022d}"
         stale_token = "stale-token-aaaaaaaaaaaaaaaaaaaaaaaa"
-        engine._write_execution("exec-crash", "momentum_ls", "t-entry", "started", {"legs": legs, "cycle_token": stale_token})
+        engine._write_execution("exec-crash", "momentum_ls", "t-entry", "started", {"legs": stale_legs, "cycle_token": stale_token})
         cycle_key = "momentum_ls:t-entry"
         self.state.setdefault("_execution_cycles", {})[cycle_key] = stale_token
         botmod.save_state(self.state)
-        # exchange is flat for both legs -> reconcile resolves this pending row as "compensated" and
-        # clears the stale cycle_token from state["_execution_cycles"] as part of the SAME call below.
+        # C/D are flat on the exchange -> reconcile resolves that STALE pending row as "compensated" and
+        # clears the stale cycle_token from state["_execution_cycles"] as part of the SAME call below —
+        # while THIS call's own A/B attempt (unrelated symbols) ends in recovery_required.
         res = botmod._phase2_live_basket(ex, self.state, "momentum_ls", "t-entry", self.legs(A, B))
-        self.assertEqual(res["status"], "filled")
+        self.assertEqual(res["status"], "recovery_required")
         cycles = self.state.get("_execution_cycles", {})
         self.assertIn(cycle_key, cycles)                                 # a fresh token must be minted for this attempt
         self.assertNotEqual(cycles[cycle_key], stale_token)               # ...never the stale one that was just cleared

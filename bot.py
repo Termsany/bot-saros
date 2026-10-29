@@ -2262,20 +2262,36 @@ def _stop_confirmed(state, symbol):
     (state.get("protect") or {}).pop(symbol, None)
 
 def _protect_pending(ex, state, live):
-    """reconcile_live, every live cycle: give each expected-but-unconfirmed position its stop."""
+    """reconcile_live, every live cycle: give each expected-but-unconfirmed position its stop.
+
+    A flat exchange reading is only believed after TWO consecutive cycles (the sibling reconciliation
+    loop above requires the same, since the exchange's readings sometimes lag) — tracked per entry in
+    info['flat_seen']. Once believed, an entry whose stop was actually placed ('protected') must have
+    that stop cancelled-and-confirmed-gone before the book entry is dropped: otherwise it is left live on
+    the exchange forever and can close an unrelated later position on the same symbol."""
     book = state.get("protect") or {}
     if not book: return
-    from backend.app.oco import place_oco_orders, _owned_orders, _oco_id
+    from backend.app.oco import place_oco_orders, cancel_oco_orders, _owned_orders, _oco_id
     for sym, info in list(book.items()):
         pos = state["positions"].get(sym)
         if pos and not pos.get("unprotected") and not pos.get("sl_unverified"):
             book.pop(sym, None); continue                       # recorded with its stop: nothing left to do
         q = live.get(sym.split(":")[0])
         if not q:
-            book.pop(sym, None); continue                       # nothing on the exchange to protect
+            info["flat_seen"] = info.get("flat_seen", 0) + 1
+            if info["flat_seen"] < 2: continue                  # flat twice in a row before believing it
+            if info.get("protected"):
+                try:
+                    cancelled = cancel_oco_orders(ex, sym, sl_id=_oco_id(info["cid"], "sl"))
+                except Exception as exc:
+                    cancelled = False; log(f"⚠️ {sym}: إلغاء وقف الحماية بعد التصفية فشل: {exc}")
+                if not cancelled: continue                      # unconfirmed cancel: keep the entry, retry next cycle
+            book.pop(sym, None); continue                       # nothing on the exchange to protect any more
+        info["flat_seen"] = 0
         if info.get("protected"): continue
         try:
-            found, _ = _owned_orders(ex, sym, {_oco_id(info["cid"], "sl")})
+            found, complete = _owned_orders(ex, sym, {_oco_id(info["cid"], "sl")})
+            if not complete: continue                           # inconclusive read: not a green light, retry next cycle
             if found: ok = True                                 # placed before a crash: don't send a second one
             else:
                 oco = place_oco_orders(ex, sym, info["side"], q, info["sl"], None, paper=False, pos_id=info["cid"])
@@ -3003,7 +3019,6 @@ def _phase2_live_basket(ex, state, strategy, intent, legs, *, reserve=True):
     engine = _phase2_engine(state); fills = {}
     cycle_key = f"{strategy}:{intent}"
     cycles = state.setdefault("_execution_cycles", {})
-    cycle_token = cycles.setdefault(cycle_key, uuid.uuid4().hex)
     def _lookup_pending(payload):
         symbols = [leg.get("symbol") for leg in payload.get("legs", []) if leg.get("symbol")]
         try:
@@ -3046,6 +3061,9 @@ def _phase2_live_basket(ex, state, strategy, intent, legs, *, reserve=True):
         if not is_exit: return None   # an exit only reduces exposure: a residual elsewhere must not trap open positions
     elif pending:
         save_state(state)
+    # Minted only after reconcile() above had a chance to clear a stale token for this cycle_key: reading
+    # it any earlier would reuse a crash-recovered attempt's already-cleared token for this new one.
+    cycle_token = cycles.setdefault(cycle_key, uuid.uuid4().hex)
     def execute_leg(leg):
         if leg.get("action", "entry") == "exit":
             result = close_live_position(ex, leg["symbol"], leg["position"], leg.get("price")); _require_verified_close(result)
