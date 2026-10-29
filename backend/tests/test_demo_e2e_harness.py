@@ -12,9 +12,11 @@ from test_trend_live import FakeBinance
 
 class Sim(FakeBinance):
     urls = {"api": {"fapiPrivate": "https://demo-fapi.binance.com/fapi/v1"}}
+    apiKey = "demo-key"
     def __init__(self): super().__init__(); self.fills = []; self.markets = {}
     def load_markets(self): return {}
     def fetch_ticker(self, s): return {"last": 100.0}
+    def fetch_ohlcv(self, s, tf="1d", since=None, limit=None, params=None): return []
     def create_order(self, sym, typ, side, qty, price, params):
         p = dict(params or {}); base = sym.split(":")[0]
         if "stopLossPrice" in p or "takeProfitPrice" in p:
@@ -70,10 +72,13 @@ class HarnessTests(unittest.TestCase):
         else: os.environ["BINANCE_ENV"] = self._env
         botmod.STATE_PATH, botmod.LOG_PATH, botmod.RISK_PATH, botmod.ENTRY_RECHECK_S = self._paths
 
+    # the "cli:" scenarios start bot.py as a separate process against the real Demo account: Demo only
+    SIM_SCENARIOS = [name for name, _ in h.SCENARIOS if not name.startswith("cli:")]
+
     def run_harness(self, ex, env="demo"):
         os.environ["BINANCE_ENV"] = env
         out = Path(tempfile.mkdtemp()) / "r.json"
-        with mock.patch.object(botmod, "get_exchange", lambda auth=False: (ex, None)), mock.patch.object(h.time, "sleep", lambda s: None),              mock.patch.object(sys, "argv", ["demo_e2e.py", "--out", str(out)]):
+        with mock.patch.object(botmod, "get_exchange", lambda auth=False: (ex, None)), mock.patch.object(h.time, "sleep", lambda s: None),              mock.patch.object(botmod, "strategy_exchange", lambda: ex),              mock.patch.object(sys, "argv", ["demo_e2e.py", "--out", str(out), "--only", ",".join(self.SIM_SCENARIOS)]):
             with self.assertRaises(SystemExit) as e: h.main()
         return e.exception.code, out
 
@@ -82,7 +87,7 @@ class HarnessTests(unittest.TestCase):
         ex = Sim(); code, out = self.run_harness(ex)
         report = json.loads(out.read_text(encoding="utf-8"))
         self.assertEqual(code, 0, [s for s in report["scenarios"] if not s["ok"]])
-        self.assertEqual(len(report["scenarios"]), len(h.SCENARIOS))
+        self.assertEqual([s["name"] for s in report["scenarios"]], self.SIM_SCENARIOS)
         self.assertEqual(report["cleanup"], [])
         self.assertTrue(all(abs(q) < 1e-12 for q in ex.positions.values()))
 
