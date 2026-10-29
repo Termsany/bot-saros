@@ -57,8 +57,15 @@ def _position_contracts(position):
 
 
 def authoritative_position_state(positions, symbol, *, position_idx=None, side=None):
-    """Classify one exact position leg; incomplete snapshots are never flat."""
-    if not isinstance(positions, list) or not positions:
+    """Classify one exact position leg; a non-list response is never flat, but a VALID response
+    (even an empty one, or one with no entry matching this symbol/side/idx) legitimately IS flat —
+    ccxt's fetchPositions only returns currently-open legs, so "no matching entry" is the exchange's
+    normal, unambiguous way of confirming zero open contracts for that exact leg, not an incomplete
+    read. Conflating the two (as this used to) meant _exchange_position_qty() returned None forever
+    for a genuinely closed position, permanently stalling reconcile_live's restart-close detection —
+    discovered live on Binance Demo Trading right after closing real positions out-of-band. Only
+    multiple conflicting matches are genuinely ambiguous."""
+    if not isinstance(positions, list):
         return "inconclusive"
     wanted = symbol.split(":")[0]
     matches = []
@@ -83,7 +90,9 @@ def authoritative_position_state(positions, symbol, *, position_idx=None, side=N
             elif actual_side is not None:
                 continue
         matches.append(position)
-    if len(matches) != 1:
+    if len(matches) == 0:
+        return "flat"
+    if len(matches) > 1:
         return "inconclusive"
     contracts = _position_contracts(matches[0])
     if contracts is None:

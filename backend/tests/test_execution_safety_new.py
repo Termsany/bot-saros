@@ -35,8 +35,13 @@ class ExecutionSafetyTests(unittest.TestCase):
         with self.assertRaises(AmbiguousFill):
             normalize_filled_contracts({"status": "closed", "filled": 0, "amount": 4})
 
-    def test_empty_position_response_is_inconclusive(self):
-        self.assertEqual(authoritative_position_state([], "BTC/USDT:USDT"), "inconclusive")
+    def test_empty_position_response_is_flat(self):
+        """ccxt's fetchPositions([symbol]) returns [] for a symbol with no open contracts — this is
+        the exchange's normal way of confirming flat, not an incomplete/ambiguous read."""
+        self.assertEqual(authoritative_position_state([], "BTC/USDT:USDT"), "flat")
+
+    def test_non_list_response_is_inconclusive(self):
+        self.assertEqual(authoritative_position_state(None, "BTC/USDT:USDT"), "inconclusive")
 
     def test_matching_explicit_zero_is_authoritative_flat(self):
         self.assertEqual(
@@ -47,10 +52,20 @@ class ExecutionSafetyTests(unittest.TestCase):
             "flat",
         )
 
-    def test_missing_symbol_is_inconclusive(self):
+    def test_missing_symbol_in_a_non_empty_response_is_also_flat(self):
+        """The account has other open positions, just none for this symbol — still unambiguously flat."""
         self.assertEqual(
             authoritative_position_state(
                 [{"symbol": "ETH/USDT:USDT", "contracts": 0}],
+                "BTC/USDT:USDT",
+            ),
+            "flat",
+        )
+
+    def test_multiple_conflicting_matches_is_genuinely_inconclusive(self):
+        self.assertEqual(
+            authoritative_position_state(
+                [{"symbol": "BTC/USDT:USDT", "contracts": 1}, {"symbol": "BTC/USDT:USDT", "contracts": 2}],
                 "BTC/USDT:USDT",
             ),
             "inconclusive",

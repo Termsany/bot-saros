@@ -196,6 +196,24 @@ def cycle_symbols(ex, state):
     allowed = set(volume_universe(ex, n))
     return sorted(allowed | set(state["positions"])), allowed
 
+def _resolve_live_symbol(ex, symbol):
+    """CONFIG['symbols'] (trend_daily/wave_flats/ict's fixed list) is written in the bare 'BTC/USDT'
+    form; Binance USDT-M futures' real ccxt market key is 'BTC/USDT:USDT'. ex.market()/create_order()
+    require the exact key and raise 'does not have market symbol' on the bare form — only fetch_ohlcv
+    tolerates it. The volume-ranked strategies (vol_breakout/rsi2_pullback/trend_breakout/momentum_ls/
+    ratio_trend/listing_short) build their symbol lists FROM ex.fetch_tickers()/ex.markets already, so
+    they're unaffected; this only matters for the fixed-list strategies' live path."""
+    if symbol in ex.markets: return symbol
+    quote = symbol.split("/")[-1] if "/" in symbol else ""
+    resolved = f"{symbol}:{quote}"
+    return resolved if resolved in ex.markets else symbol
+
+def _resolve_live_symbols(ex, symbols, allowed):
+    if not symbols: return symbols, allowed
+    resolved = [_resolve_live_symbol(ex, s) for s in symbols]
+    resolved_allowed = None if allowed is None else {_resolve_live_symbol(ex, s) for s in allowed}
+    return resolved, resolved_allowed
+
 _tg_queue = None
 
 def _tg_worker(q):
@@ -1421,6 +1439,36 @@ def cooldown_ok(state,symbol):
         return mins >= int(CONFIG.get("cooldown_bars",3)) * tf_min
     except: return True
 
+def _configured_hedge_mode(ex, symbol):
+    """Read back the account's actual position mode via ex.fetch_position_mode(), if the exchange
+    double exposes a genuinely configured one (skip bare Mock() doubles with no configured response —
+    real ccxt exchanges are never unittest.mock.Mock instances). Returns None when unknown/unreadable."""
+    fetch_pm = getattr(ex, "fetch_position_mode", None)
+    if fetch_pm is None:
+        return None
+    from unittest.mock import Mock as _Mock
+    if isinstance(fetch_pm, _Mock):
+        configured = False
+        se = getattr(fetch_pm, "side_effect", None)
+        rv = getattr(fetch_pm, "return_value", None)
+        if se is not None:
+            configured = True
+        elif rv is not None and not isinstance(rv, _Mock) and rv != []:
+            configured = True
+        elif isinstance(rv, dict) and rv:
+            configured = True
+        if not configured:
+            return None
+    try:
+        mode = fetch_pm(symbol)
+    except Exception:
+        return None
+    # ccxt's unified fetchPositionMode schema key is 'hedged' (confirmed live: {'info': {...},
+    # 'hedged': False}) — NOT 'hedgeMode'. Default to False (assume one-way) if the key is ever
+    # genuinely absent, never default to "whole dict truthy" which was always True.
+    return mode.get("hedged", False) if isinstance(mode, dict) else bool(mode)
+
+
 def ensure_futures_setup(ex, symbol):
     """يضبط الرافعة ونوع الهامش للفيوتشر — يفشل بوضوح لو الإعداد ما اتأكدش (P0-02)."""
     if CONFIG.get("market")!="future": return
@@ -1430,44 +1478,27 @@ def ensure_futures_setup(ex, symbol):
     def _already(e):
         m = str(e).lower()
         return any(k in m for k in ("no need to change", "-4046", "-4059", "not modified", "110026", "110043", "110025", "already"))
-    for what, call in ((f"set_leverage({lev},{symbol})", lambda: ex.set_leverage(lev, symbol)),
-                       (f"set_margin_mode({mtype},{symbol})", lambda: ex.set_margin_mode(mtype, symbol)),
-                       (f"set_position_mode(one-way,{symbol})", lambda: ex.set_position_mode(False))):
+    # set_position_mode is an ACCOUNT-WIDE setting, not per-symbol — calling it unconditionally on
+    # every entry attempt means Binance rejects it with -4067 "Position side cannot be changed if
+    # there exists open orders" as SOON as any other symbol has an open position/order, permanently
+    # blocking every subsequent entry for the rest of the account's life. -4067 isn't in the
+    # "already set" tolerance list (it's a genuine rejection, not a no-op), so it used to raise and
+    # trip recovery_required on a perfectly fine, already-correctly-configured account — discovered
+    # live on Binance Demo Trading right after a real first entry succeeded. Skip the call entirely
+    # once we already know (via read-back) the account is in the desired mode.
+    already_one_way = _configured_hedge_mode(ex, symbol) is False
+    calls = [(f"set_leverage({lev},{symbol})", lambda: ex.set_leverage(lev, symbol)),
+             (f"set_margin_mode({mtype},{symbol})", lambda: ex.set_margin_mode(mtype, symbol))]
+    if not already_one_way:
+        calls.append((f"set_position_mode(one-way,{symbol})", lambda: ex.set_position_mode(False)))
+    for what, call in calls:
         try: call()
         except Exception as e:
             if not _already(e): raise RuntimeError(f"{what} فشل: {e}") from e
     # verify via read-back where supported (skip mocks)
-    try:
-        # only verify if exchange explicitly exposes fetch_position_mode as non-mock or configured mock
-        fetch_pm = getattr(ex, "fetch_position_mode", None)
-        if fetch_pm is None:
-            pass
-        else:
-            try:
-                from unittest.mock import Mock as _Mock
-                if isinstance(fetch_pm, _Mock):
-                    # real ccxt exchanges are not Mock; for Mock, require explicit return_value/side_effect that is not MagicMock
-                    configured = False
-                    se = getattr(fetch_pm, "side_effect", None)
-                    rv = getattr(fetch_pm, "return_value", None)
-                    if se is not None:
-                        configured = True
-                    elif rv is not None and not isinstance(rv, _Mock) and rv != []:
-                        # non-empty configured return
-                        configured = True
-                    elif isinstance(rv, dict) and rv:
-                        configured = True
-                    if not configured:
-                        raise StopIteration
-            except StopIteration:
-                pass
-            else:
-                mode = fetch_pm(symbol)
-                is_hedge = mode.get("hedgeMode", mode) if isinstance(mode, dict) else bool(mode)
-                if is_hedge:
-                    raise RuntimeError("المنصة لسه في Hedge Mode بعد set_position_mode(False) — عدّلها يدوياً من إعدادات الفيوتشر")
-    except RuntimeError: raise
-    except Exception: pass
+    is_hedge = _configured_hedge_mode(ex, symbol)
+    if is_hedge:
+        raise RuntimeError("المنصة لسه في Hedge Mode بعد set_position_mode(False) — عدّلها يدوياً من إعدادات الفيوتشر")
 
 def _funding_pnl(pos, required=False):
     """Return only funding data explicitly marked authoritative for live accounting."""
@@ -3202,6 +3233,8 @@ def run_once():
         except Exception as e: log(f"⚠️ markets: {e}")
     try: symbols, allowed = cycle_symbols(data_ex, state)
     except Exception as e: log(f"قائمة العملات: {e}"); symbols, allowed = sorted(set(_universe["symbols"]) | set(state["positions"])), set(_universe["symbols"])
+    if not CONFIG["paper_trading"] and ex.markets:
+        symbols, allowed = _resolve_live_symbols(ex, symbols, allowed)
     for sym in symbols:
         try:
             df=fetch_ohlcv(sym, CONFIG["timeframe"], limit=candles_needed(), ex=data_ex)
