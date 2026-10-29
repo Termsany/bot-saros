@@ -2,9 +2,9 @@
 
 Status is **NO-GO**. Paper mode remains the only permitted operating mode for real money.
 
-_Last updated 2026-10-29 after the pre-production review (PRs #21–#23), the deploy of `dc4ecb9` and the Demo run through
-the bot's own cycle._
-Previous version: 2026-10-26 (28a8249), written before PRs #12–#16._
+_Last updated 2026-10-29 after the third pre-production review (PR #29) and its deploy to the VPS._
+Previous version: 2026-10-29 after PRs #21–#23 and the Demo run (recorded `dc4ecb9` as deployed; the VPS was actually
+already on `e7a7bf9` by then — PR #28's second-review fixes). Before that: 2026-10-26 (28a8249), pre-PRs #12–#16.
 
 ## Where the roadmap stands
 
@@ -78,6 +78,35 @@ PR #21 (order path), PR #22 (baskets, risk ledger) and PR #23 (history paging, f
 critical one: in live mode the cycle handed six strategies a **keyless** exchange client, so they could not trade at
 all. The adapter-level Demo run could not see this, because it called the adapters directly.
 
+## Second pre-production review (2026-10-29, PR #28)
+
+A second independent review of the fixed head found 8 more code defects (fixed in PR #28) and 4 server-security
+problems (fixed in PR #26 and #27): entry-failure recovery now requires exchange evidence and a second read before
+releasing a reservation (mirroring the close path), and the `backend/app` files the real-orders bot needs were
+missing on the server.
+
+## Third pre-production review (2026-10-29, PR #29)
+
+A third independent review of the PR #28 head found 7 more problems (3 high, 4 medium) plus 2 small ones, all
+reproduced with a failing test before fixing, all re-verified by a separate reviewer who reverted each of the 4
+highest-stakes fixes one at a time and confirmed the matching test fails without it:
+- `_protect_pending` left a stale emergency stop live on the exchange after the position it protected went flat
+  (dropped its own bookkeeping without cancelling the order), and acted on a single flat reading instead of the
+  2-reading rule the sibling reconciliation loop already uses. Both fixed together.
+- The bot and the API could not reliably read/write each other's shared files: `_write_json_atomic` never set
+  group-read/write bits (tempfile default), and `raqm`/`raqmlive` were never added to the `raqmapi` group despite
+  the shared folders already being correctly set up otherwise. Both fixed; applied on the VPS via the updated
+  `setup-paper-ipc.sh`/`setup-live.sh` (`usermod -aG`).
+- The auto-update freeze (stops GitHub-triggered updates once a real-money bot exists) scanned a whole service file
+  for `--expect-env demo`, so a leftover comment in a copied unit file could hide a genuine real-money bot from it.
+  Scoped to the `ExecStart=` line only.
+- A crash-retry basket could reuse a stale order-number token minted before the pending-execution cleanup ran.
+- `--manual` deployed whatever was on `main`'s tip at that moment, not the commit actually reviewed. Now requires
+  `raqm-api-update --manual <40-hex-sha>`, checked reachable on `main`.
+- `setup-live.sh`'s key extraction could silently produce an empty file and install it over real, existing keys on
+  a re-run. Now aborts before overwriting an existing key file with an empty/incomplete extraction.
+- `_protect_pending` treated an inconclusive exchange read the same as "confirmed absent," risking a duplicate stop.
+
 Demo run after the fixes (`scripts/demo_e2e.py`, 18 scenarios, all passed, nothing left open):
 - the 8 adapter scenarios again;
 - `loop:` vol_breakout / rsi2_pullback / trend_breakout through their own `run_once_*` on the exchange that
@@ -95,10 +124,13 @@ Open items from the review:
 
 ## Deployment (2026-10-29)
 
-`dc4ecb9` runs on the VPS:
+`da39663` (PR #29, third review) runs on the VPS:
 - the 7 paper bots;
-- the API (now with `RAQM_RISK_DIR=/opt/raqm-risk`, shared with the live bot);
-- the real-orders copy in `/opt/raqm-live`, installed by `setup-live.sh dc4ecb9…` from a root-owned clone.
+- the API (`RAQM_RISK_DIR=/opt/raqm-risk`, shared with the live bot);
+- the real-orders copy in `/opt/raqm-live`, installed by `setup-live.sh da39663…` from a root-owned clone.
+
+`raqm` and `raqmlive` are now both members of the `raqmapi` group (`usermod -aG`, applied by the updated setup
+scripts), closing the cross-process file-access gap the third review found.
 
 `raqm-trend-demo.service` is installed but disabled, and `ALLOW_LIVE_TRADING` is off.
 
