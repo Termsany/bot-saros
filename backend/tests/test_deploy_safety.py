@@ -42,5 +42,23 @@ class SetupLiveTests(unittest.TestCase):
         self.assertRegex(unit, r"(?m)^UnsetEnvironment=.*PYTHONPATH")
 
 
+class GroupMembershipTests(unittest.TestCase):
+    """Third pre-production review, finding 2(ii) HIGH: /opt/raqm-risk and /opt/raqm-ipc-paper are
+    <owner>:raqmapi setgid dirs with files already chmod 660 by risk_manager.py/live_activation.py —
+    but group PERMISSION bits are useless without group MEMBERSHIP. raqmlive/raqm were only ever in
+    their own primary group on the live server, never in raqmapi, so whichever side didn't create a
+    given file first still couldn't open it."""
+
+    def test_raqmlive_joins_the_api_group(self):
+        s = (VPS / "setup-live.sh").read_text(encoding="utf-8")
+        self.assertRegex(s, r"(?m)^usermod -aG raqmapi raqmlive$")
+        # must run after the user exists, not before
+        self.assertLess(s.index("useradd --system"), s.index("usermod -aG raqmapi raqmlive"))
+
+    def test_paper_bot_joins_the_api_group(self):
+        s = (VPS / "setup-paper-ipc.sh").read_text(encoding="utf-8")
+        self.assertRegex(s, r"(?m)^usermod -aG raqmapi raqm$")
+
+
 if __name__ == "__main__":
     unittest.main()
