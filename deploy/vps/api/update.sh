@@ -14,7 +14,11 @@ cd "$APP"
 real_money_bot() {
     for f in /etc/systemd/system/raqm-*.service; do
         [ -f "$f" ] || continue
-        grep -qE '^ExecStart=.*--live' "$f" && ! grep -qE -- '--expect-env demo' "$f" && return 0
+        # Scope BOTH checks to the ExecStart= line only: a whole-file grep for '--expect-env demo' also
+        # matches the string anywhere else (e.g. a comment left over from copying raqm-trend-demo.service
+        # to make a new real-money unit), wrongly treating a genuine real-money bot as not one.
+        line=$(grep -E '^ExecStart=' "$f" | head -1)
+        echo "$line" | grep -qE -- '--live' && ! echo "$line" | grep -qE -- '--expect-env demo' && return 0
     done
     return 1
 }

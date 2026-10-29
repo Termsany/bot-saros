@@ -86,7 +86,7 @@ class RealMoneyBotDetectionTests(unittest.TestCase):
                 "Description=Copied from raqm-trend-demo.service (--expect-env demo) for the new real-money bot\n"
                 "[Service]\n"
                 "ExecStart=/opt/raqm-live/venv/bin/python bot.py --live --strategy trend_daily\n")
-            r = self._real_money_bot(str(Path(d) / "*.service"))
+            r = self._real_money_bot(Path(d).as_posix() + "/*.service")
         self.assertEqual(r.returncode, 0, "a --live unit with no --expect-env demo on ExecStart must be real-money")
 
     def test_demo_unit_with_expect_env_on_execstart_is_not_real_money(self):
@@ -95,14 +95,14 @@ class RealMoneyBotDetectionTests(unittest.TestCase):
             unit.write_text(
                 "[Service]\n"
                 "ExecStart=/opt/raqm-live/venv/bin/python bot.py --live --strategy trend_daily --expect-env demo\n")
-            r = self._real_money_bot(str(Path(d) / "*.service"))
+            r = self._real_money_bot(Path(d).as_posix() + "/*.service")
         self.assertNotEqual(r.returncode, 0)
 
     def test_no_live_flag_is_not_real_money(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
             unit = Path(d) / "raqm-paper.service"
             unit.write_text("[Service]\nExecStart=/opt/raqm-bot/venv/bin/python bot.py --strategy trend_daily\n")
-            r = self._real_money_bot(str(Path(d) / "*.service"))
+            r = self._real_money_bot(Path(d).as_posix() + "/*.service")
         self.assertNotEqual(r.returncode, 0)
 
 
