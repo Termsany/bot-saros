@@ -32,33 +32,32 @@ echo "$SHA" > "$L/DEPLOYED_COMMIT"
 # packages: only what the bot imports, pinned, from wheels (deploy/vps/live-requirements.txt)
 [ -x "$L/venv/bin/python" ] || python3 -m venv "$L/venv"
 "$L/venv/bin/pip" install -q --only-binary=:all: -r "$T/deploy/vps/live-requirements.txt"
-# keys: moved out of the shared bot folder (never copied, never printed). Symlinks are refused: user raqm can
-# write /opt/raqm-bot, and a planted link would make root move, chown or chmod a file of its choosing.
+# keys: only the key lines, never the whole file. /opt/raqm-bot is writable by the paper user: a whole-file copy
+# carried any line it planted (PYTHONPATH=/opt/raqm-bot -> its ccxt.py runs with the keys). Symlinks are refused.
+KEYS='^(BINANCE_API_KEY|BINANCE_SECRET|BINANCE_LIVE_ACCOUNT)='
 if [ -L "$B/.env.demo" ] || [ -L "$L/.env.live" ]; then echo "refusing: a key file is a symlink" >&2; exit 3; fi
-if [ -f "$B/.env.demo" ] && [ ! -e "$L/.env.live" ]; then
-    install -o raqmlive -g raqmlive -m 600 "$B/.env.demo" "$L/.env.live" && rm -f "$B/.env.demo"
+SRCENV="$L/.env.live"; [ -e "$SRCENV" ] || SRCENV="$B/.env.demo"
+if [ -f "$SRCENV" ]; then
+    umask 077; grep -E "$KEYS" "$SRCENV" > "$T/env.live" || true          # values are never printed
+    install -o raqmlive -g raqmlive -m 600 "$T/env.live" "$L/.env.live"
+    if [ "$SRCENV" = "$B/.env.demo" ]; then rm -f "$B/.env.demo"; fi
 fi
-if [ -f "$L/.env.live" ]; then chown -h raqmlive:raqmlive "$L/.env.live"; chmod 600 "$L/.env.live"; fi
 # Telegram alerts: only the two TELEGRAM_ lines of the paper bots' .env
 if [ -f "$B/.env" ]; then
     umask 077; grep -E '^TELEGRAM_(BOT_TOKEN|CHAT_ID)=' "$B/.env" > "$L/.env.telegram" || true
     chown raqmlive:raqmlive "$L/.env.telegram"; chmod 600 "$L/.env.telegram"
 fi
-# the folder shared with the API now belongs to the live bot (it writes the status and removes the requests)
-for d in /opt/raqm-ipc /opt/raqm-ipc/commands /opt/raqm-ipc/results; do
-    [ -L "$d" ] && { echo "refusing: $d is a symlink" >&2; exit 3; }
-    install -d -o raqmlive -g raqmapi -m 2770 "$d"
-done
+# Folders shared with the API (raqmapi can write in them): root only creates what is missing — mkdir fails on
+# anything already there, link or not — and changes ownership with chown -h. It never chmods, chowns or writes
+# through a path inside them, so a link planted there can't send root's write elsewhere.
+shared_dir() {   # $1 = path; its parent must be root's (/opt) or created by this function
+    if [ -L "$1" ]; then echo "refusing: $1 is a symlink" >&2; exit 3; fi
+    if [ ! -d "$1" ]; then mkdir -m 2770 "$1"; fi
+    chown -h raqmlive:raqmapi "$1"
+}
+# manual close requests and the live status (the live bot writes the status and removes the requests)
+shared_dir /opt/raqm-ipc; shared_dir /opt/raqm-ipc/commands; shared_dir /opt/raqm-ipc/results
 # risk ledger + live activation record shared with the API (RAQM_RISK_DIR in both units): the dashboard's kill switch,
-# limits and revoke must reach the bot. The API's existing copies move here once (sqlite backup, safe while it runs).
-install -d -o raqmlive -g raqmapi -m 2770 /opt/raqm-risk
-for db in risk_state.sqlite3 live_activation.sqlite3; do
-    SRCDB="/opt/raqm-api/app/$db"
-    if [ ! -e "/opt/raqm-risk/$db" ] && [ -f "$SRCDB" ] && [ ! -L "$SRCDB" ]; then
-        # the system python, not the API venv: that venv is writable by raqmapi and this runs as root
-        python3 -I -c 'import sqlite3,sys; s=sqlite3.connect(sys.argv[1]); d=sqlite3.connect(sys.argv[2]); s.backup(d); d.close()' "$SRCDB" "/opt/raqm-risk/$db"
-    fi
-    [ -L "/opt/raqm-risk/$db" ] && { echo "refusing: /opt/raqm-risk/$db is a symlink" >&2; exit 3; }
-    if [ -f "/opt/raqm-risk/$db" ]; then chown raqmlive:raqmapi "/opt/raqm-risk/$db"; chmod 660 "/opt/raqm-risk/$db"; fi
-done
+# limits and revoke must reach the bot. The bot and the API create the files themselves (mode 660).
+shared_dir /opt/raqm-risk
 echo "raqm-live ready: $(ls "$L" | tr '\n' ' ')"

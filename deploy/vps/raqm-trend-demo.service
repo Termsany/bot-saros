@@ -22,7 +22,9 @@ Environment=RAQM_IPC_DIR=/opt/raqm-ipc
 # risk ledger + live activation record, the same files the dashboard's kill switch, limits and revoke change
 Environment=RAQM_RISK_DIR=/opt/raqm-risk
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/opt/raqm-live/venv/bin/python bot.py --live --expect-env demo --strategy trend_daily --leverage 2 --amount 100 --universe 10 --poll 60 --notify --state state/state_demo.json
+UnsetEnvironment=PYTHONPATH PYTHONHOME PYTHONSTARTUP PYTHONUSERBASE PYTHONINSPECT
+# -E -s: no PYTHON* variable and no user site-packages can change what Python loads (-u: unbuffered logs)
+ExecStart=/opt/raqm-live/venv/bin/python -E -s -u bot.py --live --expect-env demo --strategy trend_daily --leverage 2 --amount 100 --universe 10 --poll 60 --notify --state state/state_demo.json
 Restart=always
 RestartSec=60
 NoNewPrivileges=true
