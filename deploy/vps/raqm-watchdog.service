@@ -1,0 +1,16 @@
+# Problem alerts for the real-orders bots (scripts/watchdog.py): read only, runs every 5 minutes from raqm-watchdog.timer.
+[Unit]
+Description=Raqm watchdog: Telegram alerts for the Demo / live bots
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=raqmlive
+Group=raqmlive
+WorkingDirectory=/opt/raqm-live
+EnvironmentFile=-/opt/raqm-live/.env.telegram
+ExecStart=/opt/raqm-live/venv/bin/python -E -s scripts/watchdog.py
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/raqm-live/state
