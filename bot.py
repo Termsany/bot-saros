@@ -2332,6 +2332,25 @@ def _write_json_atomic(path, data):
 
 MANUAL_CLOSE_MAX_AGE_S = 600   # a request the bot couldn't run within 10 minutes is dropped, never executed late
 
+def _read_request(f):
+    """A request file's JSON, or None. Opened without following a link and without blocking (a FIFO dropped in the
+    shared folder made read_text wait forever and froze the live loop), and only if it is a small regular file."""
+    import stat as _st
+    try:
+        fd = os.open(str(f), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    except OSError:
+        return None
+    try:
+        info = os.fstat(fd)
+        if not _st.S_ISREG(info.st_mode) or info.st_size > 65536: return None
+        with os.fdopen(fd, "r", encoding="utf-8") as fh:
+            fd = None
+            return json.loads(fh.read())
+    except Exception:
+        return None
+    finally:
+        if fd is not None: os.close(fd)
+
 def process_manual_closes(state, ex, prices):
     """Close requests from the site's admin button: close the position now, record it, and don't buy the coin
     again until its trend turns off and back on. Only closes — a request can never open anything."""
@@ -2349,8 +2368,7 @@ def process_manual_closes(state, ex, prices):
             try: f.unlink()
             except OSError: pass
             continue
-        try: req = json.loads(f.read_text(encoding="utf-8"))
-        except Exception: req = {}
+        req = _read_request(f) or {}
         rid, sym = str(req.get("id", "")), str(req.get("symbol", ""))
         if not re.fullmatch(r"[0-9a-f]{32}", rid) or not re.fullmatch(r"[A-Z0-9]{1,20}/USDT(:USDT)?", sym):
             log(f"⚠️ طلب قفل مرفوض (id أو عملة مش صحيحة): {f.name}")
@@ -2406,7 +2424,7 @@ def process_paper_closes(state, ex, key):
     written by the API after checking the position exists. Only closes, at the current price, recorded like any exit;
     requests older than 10 minutes are dropped. key = the bot's public file name (status, momentum, ratio, ...)."""
     d = os.getenv("RAQM_PAPER_IPC", "").strip()
-    if not d: return
+    if not d or not CONFIG.get("paper_trading"): return   # live: _paper_close would drop a real position unclosed
     cmd_dir, res_dir = Path(d) / key / "commands", Path(d) / key / "results"
     try: files = sorted(cmd_dir.glob("close-*.json"))
     except Exception: return
@@ -2419,8 +2437,7 @@ def process_paper_closes(state, ex, key):
             try: f.unlink()
             except OSError: pass
             continue
-        try: req = json.loads(f.read_text(encoding="utf-8"))
-        except Exception: req = {}
+        req = _read_request(f) or {}
         rid, sym = str(req.get("id", "")), str(req.get("symbol", ""))
         sym_ok = re.fullmatch(PAIR_RE, sym) if key == "ratio" else re.fullmatch(r"[A-Z0-9]{1,20}/USDT(:USDT)?", sym)
         try: f.unlink()

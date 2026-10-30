@@ -42,22 +42,26 @@ class SetupLiveTests(unittest.TestCase):
         self.assertRegex(unit, r"(?m)^UnsetEnvironment=.*PYTHONPATH")
 
 
-class GroupMembershipTests(unittest.TestCase):
-    """Third pre-production review, finding 2(ii) HIGH: /opt/raqm-risk and /opt/raqm-ipc-paper are
-    <owner>:raqmapi setgid dirs with files already chmod 660 by risk_manager.py/live_activation.py —
-    but group PERMISSION bits are useless without group MEMBERSHIP. raqmlive/raqm were only ever in
-    their own primary group on the live server, never in raqmapi, so whichever side didn't create a
-    given file first still couldn't open it."""
+class SharedGroupTests(unittest.TestCase):
+    """Full review (2026-10-30): sharing through raqmapi's group let the paper user and the real-money user write the
+    API's code, venv, the risk ledger and the activation record. Each shared folder now has its own two-user group."""
+    LIVE = (VPS / "setup-live.sh").read_text(encoding="utf-8")
+    PAPER = (VPS / "setup-paper-ipc.sh").read_text(encoding="utf-8")
 
-    def test_raqmlive_joins_the_api_group(self):
-        s = (VPS / "setup-live.sh").read_text(encoding="utf-8")
-        self.assertRegex(s, r"(?m)^usermod -aG raqmapi raqmlive$")
-        # must run after the user exists, not before
-        self.assertLess(s.index("useradd --system"), s.index("usermod -aG raqmapi raqmlive"))
+    def test_nobody_joins_the_api_group(self):
+        for name, s in (("setup-live.sh", self.LIVE), ("setup-paper-ipc.sh", self.PAPER)):
+            self.assertNotRegex(s, r"(?m)^[^#]*usermod -aG raqmapi ", name)
 
-    def test_paper_bot_joins_the_api_group(self):
-        s = (VPS / "setup-paper-ipc.sh").read_text(encoding="utf-8")
-        self.assertRegex(s, r"(?m)^usermod -aG raqmapi raqm$")
+    def test_live_and_api_share_raqmrisk_only(self):
+        self.assertIn("usermod -aG raqmrisk raqmlive; usermod -aG raqmrisk raqmapi", self.LIVE)
+        self.assertIn("gpasswd -d raqmlive raqmapi", self.LIVE)
+        self.assertIn("chown -h raqmlive:raqmrisk", self.LIVE)
+
+    def test_paper_tree_is_root_owned_down_to_each_bot(self):
+        self.assertIn("usermod -aG raqmpaper raqm; usermod -aG raqmpaper raqmapi", self.PAPER)
+        self.assertIn("gpasswd -d raqm raqmapi", self.PAPER)
+        self.assertIn('own_dir "$P/$b" root:raqmpaper 0750', self.PAPER)
+        self.assertIn('own_dir "$P/$b/commands" raqmapi:raqmpaper', self.PAPER)
 
 
 class RealMoneyBotDetectionTests(unittest.TestCase):

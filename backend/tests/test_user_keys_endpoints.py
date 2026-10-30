@@ -85,12 +85,14 @@ class UserKeysEndpointsTests(unittest.TestCase):
         r = self.client.post("/api/user/live/enable", json={"exchange": "binance", "confirm": "x"})
         self.assertEqual(r.status_code, 401)
 
+    @mock.patch.dict(os.environ, {"ALLOW_LIVE_TRADING": "true"})   # per-user live obeys the server switch
     def test_live_enable_requires_keys_first(self):
         r = self.client.post("/api/user/live/enable", headers=self.h("a-token"),
                               json={"exchange": "binance", "confirm": user_live_activation.CONSENT_TEXT})
         self.assertEqual(r.status_code, 400)
         self.assertIn("API key", r.json()["detail"])
 
+    @mock.patch.dict(os.environ, {"ALLOW_LIVE_TRADING": "true"})   # per-user live obeys the server switch
     def test_live_enable_requires_exact_consent_text(self):
         self.client.post("/api/user/keys/save", headers=self.h("a-token"),
                           json={"exchange": "binance", "apiKey": "AKEY", "secret": "ASECRET"})
@@ -100,6 +102,7 @@ class UserKeysEndpointsTests(unittest.TestCase):
         status = self.client.get("/api/user/live/status", headers=self.h("a-token")).json()
         self.assertFalse(status["enabled"])
 
+    @mock.patch.dict(os.environ, {"ALLOW_LIVE_TRADING": "true"})   # per-user live obeys the server switch
     def test_live_enable_end_to_end_defaults_and_isolation_from_other_users(self):
         self.client.post("/api/user/keys/save", headers=self.h("a-token"),
                           json={"exchange": "binance", "apiKey": "AKEY", "secret": "ASECRET"})
@@ -115,6 +118,7 @@ class UserKeysEndpointsTests(unittest.TestCase):
         status_b = self.client.get("/api/user/live/status", headers=self.h("b-token")).json()
         self.assertFalse(status_b["enabled"])
 
+    @mock.patch.dict(os.environ, {"ALLOW_LIVE_TRADING": "true"})   # per-user live obeys the server switch
     def test_disable_only_affects_the_caller(self):
         self.client.post("/api/user/keys/save", headers=self.h("a-token"),
                           json={"exchange": "binance", "apiKey": "AKEY", "secret": "ASECRET"})
@@ -124,6 +128,16 @@ class UserKeysEndpointsTests(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         status_a = self.client.get("/api/user/live/status", headers=self.h("a-token")).json()
         self.assertTrue(status_a["enabled"])  # B's disable call never touched A's record
+
+    def test_live_enable_refused_while_the_server_switch_is_off(self):
+        self.client.post("/api/user/keys/save", headers=self.h("a-token"), json={"exchange": "binance", "apiKey": "AKEY", "secret": "ASECRET"})
+        r = self.client.post("/api/user/live/enable", headers=self.h("a-token"),
+                             json={"exchange": "binance", "confirm": user_live_activation.CONSENT_TEXT})
+        self.assertEqual(r.status_code, 403)
+
+    def test_key_fields_are_bounded(self):
+        r = self.client.post("/api/user/keys/save", headers=self.h("a-token"), json={"exchange": "binance", "apiKey": "A" * 5000, "secret": "S"})
+        self.assertEqual(r.status_code, 422)
 
     def test_admin_live_activation_env_flag_and_module_are_unaffected(self):
         """The admin's own ALLOW_LIVE_TRADING / live_activation.py path is untouched."""

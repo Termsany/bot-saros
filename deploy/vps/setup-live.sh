@@ -17,9 +17,12 @@ git -C "$SRC" cat-file -e "$SHA^{commit}" || { echo "commit $SHA not found on Gi
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 git -C "$SRC" archive "$SHA" | tar -x -C "$T"
 id raqmlive >/dev/null 2>&1 || useradd --system --home-dir "$L" --no-create-home --shell /usr/sbin/nologin raqmlive
-# group PERMISSION bits on the shared setgid dirs (/opt/raqm-risk, /opt/raqm-ipc) are useless without group
-# MEMBERSHIP: raqmlive must also be in raqmapi's group, or whichever side didn't create a file first can't open it.
-usermod -aG raqmapi raqmlive
+# The live bot and the API share the risk ledger and the IPC folder through their own group, raqmrisk, which holds
+# those two users only. Not raqmapi's group: that one owns the API's code and venv (group-writable), so membership
+# let the real-money user — and the paper user — rewrite the API. Leave it if an earlier run added us to it.
+getent group raqmrisk >/dev/null || groupadd --system raqmrisk
+usermod -aG raqmrisk raqmlive; usermod -aG raqmrisk raqmapi
+gpasswd -d raqmlive raqmapi >/dev/null 2>&1 || true
 install -d -o root -g raqmlive -m 750 "$L"
 install -d -o raqmlive -g raqmlive -m 700 "$L/state"
 for f in bot.py strategies_trend.py strategies_advanced.py strategies_wave.py; do install -m 644 -o root -g root "$T/$f" "$L/$f"; done
@@ -66,7 +69,11 @@ fi
 shared_dir() {   # $1 = path; its parent must be root's (/opt) or created by this function
     if [ -L "$1" ]; then echo "refusing: $1 is a symlink" >&2; exit 3; fi
     if [ ! -d "$1" ]; then mkdir -m 2770 "$1"; fi
-    chown -h raqmlive:raqmapi "$1"
+    chown -h raqmlive:raqmrisk "$1"
+    # mode and the group of what is already inside, without following a link: fchmod on an O_NOFOLLOW handle,
+    # chown -h on regular files only
+    python3 -I -c 'import os,sys; fd=os.open(sys.argv[1], os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW); os.fchmod(fd, 0o2770); os.close(fd)' "$1"
+    find "$1" -maxdepth 1 -type f -exec chown -h :raqmrisk {} +
 }
 # manual close requests and the live status (the live bot writes the status and removes the requests)
 shared_dir /opt/raqm-ipc; shared_dir /opt/raqm-ipc/commands; shared_dir /opt/raqm-ipc/results
