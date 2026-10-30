@@ -49,7 +49,8 @@ def read_state(root: Path):
             state[r["key"]]=json.loads(r["value"])
         state["strategies"]={s:{**DEFAULT_CONFIG, **(state.get("strategies",{}).get(s) or {})} for s in STRATEGIES}
         for r in con.execute("SELECT strategy,enabled,paused FROM strategy_desired"):
-            state["strategies"][r["strategy"]].update(enabled=bool(r["enabled"]), paused=bool(r["paused"]))
+            if r["strategy"] in state["strategies"]:   # rows of retired strategies (wave_flats) stay in old databases
+                state["strategies"][r["strategy"]].update(enabled=bool(r["enabled"]), paused=bool(r["paused"]))
         return state
     finally: con.close()
 
