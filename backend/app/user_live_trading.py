@@ -277,7 +277,7 @@ def run_trend_daily_live_cycle(*, user_id: str, symbol: str, ex, bot_dir, analys
     if seen.get(symbol) == sig.get("ts"):
         return {"fired": False, "reason": "already acted on this signal"}
 
-    equity = botmod._fetch_equity_usdt(ex)
+    equity, equity_at = botmod._equity_now(ex)
     if equity is None:
         return {"fired": False, "reason": "equity unavailable — fail closed, no entry"}
     if margin_usdt is None:
@@ -301,7 +301,8 @@ def run_trend_daily_live_cycle(*, user_id: str, symbol: str, ex, bot_dir, analys
     risk_usdt = botmod._estimate_trade_risk_usdt(margin_usdt, leverage, price, sl_estimate)
     allowed, reason = riskmgr.pre_trade_gate(
         risk_path, strategy=STRATEGY, symbol=symbol, side="long",
-        risk_usdt=risk_usdt, notional_usdt=margin_usdt * leverage, equity_usdt=equity)
+        risk_usdt=risk_usdt, notional_usdt=margin_usdt * leverage, equity_usdt=equity,
+        equity_observed_at=equity_at)
     if not allowed:
         return {"fired": False, "reason": f"risk gate: {reason}"}
 

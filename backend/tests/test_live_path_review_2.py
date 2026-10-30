@@ -154,7 +154,7 @@ class RestartReconcileTests(Base):
         legs = self.legs(A, B)
         for n, leg in enumerate(legs): leg["client_order_id"] = f"raqm-crash{n:022d}"
         ok, _ = rm.pre_trade_gate_basket(botmod.RISK_PATH, strategy="momentum_ls", equity_usdt=1000.0,
-            legs=[{k: leg[k] for k in ("symbol", "side", "risk_usdt", "notional_usdt", "correlation_group")} for leg in legs])
+            legs=[{k: leg[k] for k in ("symbol", "side", "risk_usdt", "notional_usdt", "correlation_group")} for leg in legs], equity_observed_at=rm._now())
         self.assertTrue(ok)
         engine._write_execution("exec-crash", "momentum_ls", "t-entry", "started", {"legs": legs, "cycle_token": "x"})
         for leg in legs:
@@ -188,9 +188,9 @@ class LedgerWriteTests(unittest.TestCase):
 
     def test_dashboard_writes_keep_the_bots_changes(self):
         ok, _ = rm.pre_trade_gate(self.path, strategy="s", symbol="X", side="long", risk_usdt=1, notional_usdt=10,
-                                  equity_usdt=1000, correlation_group="alts")
+                                  equity_usdt=1000, correlation_group="alts", equity_observed_at=rm._now())
         self.assertTrue(ok)
-        rm.update_equity_and_check_kill_switch(self.path, 1000.0); rm.update_equity_and_check_kill_switch(self.path, 1.0)   # trips
+        rm.update_equity_and_check_kill_switch(self.path, 1000.0, equity_observed_at=rm._now()); rm.update_equity_and_check_kill_switch(self.path, 1.0, equity_observed_at=rm._now())   # trips
         rm.update_limits(self.path, {"risk_per_trade_pct": 0.5})
         rm.record_realized_pnl(self.path, -3.0)
         st = rm.load_risk_state(self.path)
@@ -198,7 +198,7 @@ class LedgerWriteTests(unittest.TestCase):
         self.assertEqual(st["limits"]["risk_per_trade_pct"], 0.5); self.assertEqual(st["daily"]["realized_pnl"], -3.0)
 
     def test_manual_trip_keeps_reservations(self):
-        rm.pre_trade_gate(self.path, strategy="s", symbol="X", side="long", risk_usdt=1, notional_usdt=10, equity_usdt=1000, correlation_group="alts")
+        rm.pre_trade_gate(self.path, strategy="s", symbol="X", side="long", risk_usdt=1, notional_usdt=10, equity_usdt=1000, correlation_group="alts", equity_observed_at=rm._now())
         rm.trip_kill_switch(self.path, "operator")
         st = rm.load_risk_state(self.path)
         self.assertTrue(st["kill_switch"]["tripped"]); self.assertIn("s:X", st["open_risk"])

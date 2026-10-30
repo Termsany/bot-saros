@@ -49,6 +49,20 @@ def build_admin_readiness(*, strategies, evidence=None, live_locked, environment
     }
 
 
+def build_live_activation_readiness(*, strategies, evidence=None, live_enabled):
+    """Server-derived readiness for the live activation record: bool per strategy.
+
+    Unlike build_admin_readiness, this does not require the current process to be running on testnet. The evidence
+    document itself is the testnet validation record (`testnet_validated` must be a verified True), so the live server
+    can act on evidence gathered on testnet without pretending it is still there. The server's live switch must also be
+    on: evidence alone never unlocks real money.
+    """
+    if not live_enabled:
+        return {s: False for s in strategies or []}
+    report = build_admin_readiness(strategies=strategies, evidence=evidence, live_locked=False, environment="testnet")
+    return {s: bool(report["strategies"].get(s, {}).get("live_ready")) for s in strategies or []}
+
+
 def check_testnet_readiness(exchange, *, strategies, risk_state_loader, environment=None):
     """Return structured readiness evidence without touching order endpoints."""
     checks = {}

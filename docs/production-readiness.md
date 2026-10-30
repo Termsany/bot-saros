@@ -119,8 +119,12 @@ Demo run after the fixes (`scripts/demo_e2e.py`, 18 scenarios, all passed, nothi
 Open items from the review:
 - ~~while an entry block is set, the portfolio `run_once_*` return early and skip their signal exits too~~ — fixed
   (PR #25): a block stops entries only; a position that is itself in recovery is left to a person;
-- the equity freshness check is a no-op;
-- live activation readiness is self-declared and the risk allocation is not enforced as a cap.
+- ~~the equity freshness check is a no-op~~ — fixed: a missing/stale/future equity timestamp is refused (gate) and trips
+  the kill switch (equity update). Every live entry and the per-user tick now carry the observation time;
+- ~~live activation readiness is self-declared and the risk allocation is not enforced as a cap~~ — fixed: readiness
+  is derived server-side from `readiness_evidence.json` (verified provenance) and the server live switch; allocation is
+  split server-side and enforced by the risk gate as each strategy's open-risk cap (a share of the account's aggregate
+  risk budget). The legacy generic entry path also checks the activation gate now.
 
 ## Deployment (2026-10-29)
 

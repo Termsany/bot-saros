@@ -40,18 +40,52 @@ def _env_enabled():
     return os.getenv("ALLOW_LIVE_TRADING", "").strip().lower() == "true"
 
 
-def activate(path, *, environment, account, approved_by, strategies, risk_allocation, readiness):
-    """Create an activation audit record; every gate must pass explicitly."""
+def _normalise_allocation(strategies, risk_allocation):
+    """Per-strategy share of the account's aggregate risk budget.
+
+    None means "no share chosen": the budget is split equally, so selecting several strategies cannot silently give each
+    the whole budget. An explicit allocation must cover every strategy and add up to at most 1.0 (the aggregate cap);
+    anything else would make "allocation" a label rather than a cap.
+    """
+    names = list(strategies)
+    if risk_allocation is None:
+        return {s: 1.0 / len(names) for s in names}
+    if not isinstance(risk_allocation, dict):
+        raise ValueError("risk allocation must be an object")
+    shares = {}
+    for s in names:
+        try:
+            share = float(risk_allocation.get(s, 0) or 0)
+        except (TypeError, ValueError):
+            raise ValueError(f"risk allocation for {s} is not a number")
+        if not (0 < share <= 1.0):
+            raise ValueError(f"risk allocation for {s} must be greater than 0 and at most 1")
+        shares[s] = share
+    if sum(shares.values()) > 1.0 + 1e-9:
+        raise ValueError("risk allocations together must not exceed 1.0")
+    return shares
+
+
+def activate(path, *, environment, account, approved_by, strategies, risk_allocation=None, readiness_evidence=None):
+    """Create an activation audit record; every gate must pass explicitly.
+
+    Readiness is derived from the trusted evidence document, never supplied by the caller: a request can say a strategy
+    is ready, but only verified evidence (and the server's own live switch) can make it so. The allocation recorded here
+    is enforced by the risk gate as that strategy's open-risk cap.
+    """
     if not _env_enabled():
         raise PermissionError("ALLOW_LIVE_TRADING is not true")
     if environment != "live":
         raise PermissionError("activation is only for the explicit live environment")
     if not account or not approved_by or not strategies:
         raise ValueError("account, administrator approval, and strategies are required")
-    if not isinstance(risk_allocation, dict) or any(float(risk_allocation.get(s, 0) or 0) <= 0 for s in strategies):
-        raise ValueError("every selected strategy requires a positive risk allocation")
-    if not isinstance(readiness, dict) or not strategies or any(readiness.get(s) is not True for s in strategies):
-        raise ValueError("every selected strategy must pass readiness")
+    allocation = _normalise_allocation(strategies, risk_allocation)
+    from .testnet_readiness import build_live_activation_readiness
+    readiness = build_live_activation_readiness(strategies=strategies, evidence=readiness_evidence,
+                                                live_enabled=True)   # _env_enabled() above is the server switch
+    not_ready = [s for s in strategies if readiness.get(s) is not True]
+    if not_ready:
+        raise ValueError(f"strategies are not readiness-verified: {', '.join(not_ready)}")
     activation_id = f"act-{uuid.uuid4().hex}"
     con = _connect(path)
     try:
@@ -59,7 +93,7 @@ def activate(path, *, environment, account, approved_by, strategies, risk_alloca
         con.execute("UPDATE live_activation_audit SET active=0, revoked_at=?, revoke_reason=? WHERE active=1", (_now(), "superseded"))
         con.execute("""INSERT INTO live_activation_audit
             VALUES(?,?,?,?,?,?,?,?,?,?,?)""", (activation_id, environment, account, approved_by, _now(),
-            json.dumps(list(strategies)), json.dumps(risk_allocation), json.dumps(readiness), 1, None, None))
+            json.dumps(list(strategies)), json.dumps(allocation), json.dumps(readiness), 1, None, None))
         con.execute("COMMIT")
         return activation_id
     except Exception:
@@ -100,6 +134,30 @@ def live_activation_allowed(path, *, strategy, account):
         return True, None
     except (sqlite3.Error, json.JSONDecodeError, TypeError, ValueError) as exc:
         return False, f"activation audit unavailable: {exc}"
+    finally:
+        con.close()
+
+
+def strategy_risk_share(path, *, strategy, account):
+    """The active record's allocation for one strategy, as a fraction of the account's aggregate risk budget.
+
+    None means no active approval for this strategy/account (the caller is already refused by
+    live_activation_allowed). The risk gate turns this fraction into an absolute open-risk cap.
+    """
+    if not _env_enabled():
+        return None
+    con = _connect(path)
+    try:
+        row = con.execute("SELECT * FROM live_activation_audit WHERE active=1 ORDER BY approved_at DESC LIMIT 1").fetchone()
+        if not row or row["environment"] != "live" or row["account"] != account:
+            return None
+        strategies = json.loads(row["strategies"])
+        if strategy not in strategies:
+            return None
+        share = float(json.loads(row["risk_allocation"]).get(strategy, 0) or 0)
+        return share if share > 0 else None
+    except (sqlite3.Error, json.JSONDecodeError, TypeError, ValueError):
+        return None
     finally:
         con.close()
 
@@ -149,11 +207,13 @@ def demo_strategy_allowed(path, *, strategy):
 def active_record(path):
     con = _connect(path)
     try:
-        row = con.execute("SELECT activation_id,environment,account,approved_by,approved_at,strategies,active FROM live_activation_audit WHERE active=1 ORDER BY approved_at DESC LIMIT 1").fetchone()
+        row = con.execute("SELECT activation_id,environment,account,approved_by,approved_at,strategies,risk_allocation,readiness,active FROM live_activation_audit WHERE active=1 ORDER BY approved_at DESC LIMIT 1").fetchone()
         if not row:
             return None
         result = dict(row)
         result["strategies"] = json.loads(result["strategies"])
+        result["risk_allocation"] = json.loads(result["risk_allocation"])
+        result["readiness"] = json.loads(result["readiness"])
         return result
     finally:
         con.close()

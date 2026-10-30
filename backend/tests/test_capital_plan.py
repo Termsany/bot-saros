@@ -53,7 +53,7 @@ class GateTests(unittest.TestCase):
 
     def gate(self, sym, strategy="s"):
         return rm.pre_trade_gate(self.path, strategy=strategy, symbol=sym, side="long", risk_usdt=1, notional_usdt=60,
-                                 equity_usdt=1000, correlation_group="alts")
+                                 equity_usdt=1000, correlation_group="alts", equity_observed_at=rm._now())
 
     def test_the_eleventh_trade_is_refused_until_the_capital_is_raised(self):
         for i in range(10): self.assertTrue(self.gate(f"C{i}/USDT")[0], i)
@@ -65,10 +65,10 @@ class GateTests(unittest.TestCase):
     def test_a_basket_enters_whole_or_not_at_all(self):
         for i in range(5): self.gate(f"C{i}/USDT")
         legs = [{"symbol": f"B{i}/USDT", "side": "long", "risk_usdt": 1, "notional_usdt": 60, "correlation_group": "alts"} for i in range(6)]
-        ok, why = rm.pre_trade_gate_basket(self.path, strategy="momentum_ls", legs=legs, equity_usdt=1000)
+        ok, why = rm.pre_trade_gate_basket(self.path, strategy="momentum_ls", legs=legs, equity_usdt=1000, equity_observed_at=rm._now())
         self.assertFalse(ok); self.assertIn("max open trades", why)
         self.assertEqual(len(rm.load_risk_state(self.path)["open_risk"]), 5)             # nothing of it reserved
-        self.assertTrue(rm.pre_trade_gate_basket(self.path, strategy="momentum_ls", legs=legs[:5], equity_usdt=1000)[0])
+        self.assertTrue(rm.pre_trade_gate_basket(self.path, strategy="momentum_ls", legs=legs[:5], equity_usdt=1000, equity_observed_at=rm._now())[0])
 
 
 class BotSizingTests(unittest.TestCase):
