@@ -354,7 +354,7 @@ def run_once_listing(ex):
     if not CONFIG["paper_trading"] and (_ENTRY_BLOCK.get("reason") or state.get("recovery_required")): due = []   # retried when unblocked
     for sym, listed, age in due:
         if CONFIG["paper_trading"]: done[sym] = now.isoformat()   # live: only once the entry filled (below)
-        if len(state["positions"]) >= L["max_open"]:
+        if _strategy_full(state, L["max_open"]):
             done[sym] = now.isoformat()
             log(f"⏸️ {sym} عدّى {L['skip_days']} يوم بس الـ {L['max_open']} أماكن مليانة — اتساب زي الباك تست"); continue
         if not CONFIG["paper_trading"]:
@@ -906,6 +906,17 @@ def _capital_plan():
     plan set. A ledger that can't be read raises: the entry is refused rather than sized with the service's default."""
     state = riskmgr.load_risk_state(RISK_PATH)
     return riskmgr.capital_plan(state["limits"], state.get("equity_last"))
+
+def _strategy_full(state, cap):
+    """The strategy's own cap on open positions. On the owner's account with a capital plan set, the account's count
+    (risk gate) is the only limit: a strategy enters every signal it gets until the account is full. Paper, or no plan
+    (or a plan that can't be read): the strategy's own cap, as tested."""
+    if not CONFIG.get("paper_trading"):
+        try:
+            if _capital_plan(): return False
+        except Exception:
+            pass
+    return len(state["positions"]) >= cap
 
 def _meets_min_order(ex, symbol, margin):
     """margin × leverage reaches the exchange's minimum order value for this coin (BTC $50, ETH $20 ... on Binance)."""
@@ -2120,7 +2131,7 @@ def try_enter_wave(symbol, analysis, state, ex):
     seen[symbol]=sig["ts"]; save_state(state)
     side="long" if sig["dir"]==1 else "short"; price=analysis["price"]
     tp=sig["tgt2"] if sig["two"] else sig["tgt1"]
-    if len(state["positions"])>=CONFIG["max_open_positions"] or not daily_pnl_ok(state): return
+    if _strategy_full(state, CONFIG["max_open_positions"]) or not daily_pnl_ok(state): return
     if (side=="long" and price<=sig["stop"]) or (side=="short" and price>=sig["stop"]):
         log(f"⏸️ {symbol} {sig['kind']} — السعر عدّى الوقف قبل الدخول"); return
     if not CONFIG["paper_trading"]:
@@ -2130,7 +2141,7 @@ def try_enter_wave(symbol, analysis, state, ex):
         if pos:
             state["last_trade"][symbol]=datetime.now(timezone.utc).isoformat(); save_state(state)
         return
-    if len(state["positions"])>=CONFIG["max_open_positions"] or not daily_pnl_ok(state): return
+    if _strategy_full(state, CONFIG["max_open_positions"]) or not daily_pnl_ok(state): return
     side="long" if sig["dir"]==1 else "short"; price=analysis["price"]
     if (side=="long" and price<=sig["stop"]) or (side=="short" and price>=sig["stop"]):
         log(f"⏸️ {symbol} {sig['kind']} — السعر عدّى الوقف قبل الدخول"); return
@@ -2629,7 +2640,7 @@ def try_enter_trend(symbol, analysis, state, ex):
     if live and _ENTRY_BLOCK["reason"]:
         log(f"⛔ {symbol} مفيش دخول — {_ENTRY_BLOCK['reason']}"); return   # retried next cycle (trend_seen not marked)
     seen[symbol]=sig["ts"]; save_state(state)
-    if len(state["positions"])>=CONFIG["max_open_positions"] or not daily_pnl_ok(state): return
+    if _strategy_full(state, CONFIG["max_open_positions"]) or not daily_pnl_ok(state): return
     lev=int(CONFIG.get("leverage",2))
     margin=position_size(price, ex, stop_price=sig.get("stop"))*sig["size"]
     if not live:
@@ -2836,7 +2847,7 @@ def try_enter(symbol, analysis, state, ex):
         if is_long: side="long"
         elif is_short: side="short"
         else: return
-        if len(state["positions"])>=CONFIG["max_open_positions"]: return
+        if _strategy_full(state, CONFIG["max_open_positions"]): return
         if not cooldown_ok(state,symbol): return
         # === Week 1 filters ===
         # Daily loss guard
