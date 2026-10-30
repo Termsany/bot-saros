@@ -1107,6 +1107,7 @@ class CapitalReq(BaseModel):
     capital_reserve_pct: Optional[float] = Field(None, ge=0, le=90)
     capital_margin_pct: Optional[float] = Field(None, gt=0, le=50)
     capital_min_margin_usdt: Optional[float] = Field(None, ge=5, le=1_000_000)
+    capital_margin_override_usdt: Optional[float] = Field(None, ge=0, le=10_000_000)   # 0 = back to the rule
 
 def _ledger(env: str) -> Path:
     return (Path(os.getenv("RAQM_RISK_DIR_DEMO", "/opt/raqm-risk-demo")) / "risk_state.json") if env == "demo" else _risk_path()
@@ -1169,8 +1170,11 @@ async def live_strategies(env: str = "live", user: dict = Depends(require_admin)
     try:
         ledger = risk_manager.load_risk_state(_ledger(env))
         lim = ledger["limits"]
-        capital = {"plan": risk_manager.capital_plan(lim), "open_trades": len(ledger.get("open_risk") or {}),
-                   **{k: lim.get(k) for k in ("capital_usdt", "capital_reserve_pct", "capital_margin_pct", "capital_min_margin_usdt")}}
+        plan = risk_manager.capital_plan(lim, ledger.get("equity_last"))
+        capital = {"plan": plan, "limits_check": risk_manager.plan_vs_limits(lim, plan), "equity_last": ledger.get("equity_last"),
+                   "open_trades": len(ledger.get("open_risk") or {}),
+                   **{k: lim.get(k) for k in ("capital_usdt", "capital_reserve_pct", "capital_margin_pct", "capital_min_margin_usdt",
+                                              "capital_margin_override_usdt", "risk_per_trade_pct", "max_aggregate_risk_pct")}}
     except Exception as e:
         capital = {"error": str(e)}
     return {"env": env, "enabled": live_trading_allowed() if env == "live" else True, "capital": capital,
@@ -1182,10 +1186,12 @@ async def live_capital(req: CapitalReq, user: dict = Depends(require_admin)):
     """The owner's capital for an account: it sets the margin per trade and the most trades open at once, every strategy
     together (risk_manager.capital_plan). 0 = no plan. The bots and the risk gate read it before every entry."""
     patch = {k: v for k, v in req.model_dump().items() if k != "env" and v is not None}
-    if patch.get("capital_usdt") == 0: patch["capital_usdt"] = None
+    for k in ("capital_usdt", "capital_margin_override_usdt"):
+        if patch.get(k) == 0: patch[k] = None
     limits = risk_manager.update_limits(_ledger(req.env), patch)
     admin_control.audit(BOT_DIR, str(user.get("email") or user.get("id")), "capital_plan", "ok", {"env": req.env, **patch})
-    return {"ok": True, "plan": risk_manager.capital_plan(limits)}
+    plan = risk_manager.capital_plan(limits, risk_manager.load_risk_state(_ledger(req.env)).get("equity_last"))
+    return {"ok": True, "plan": plan, "limits_check": risk_manager.plan_vs_limits(limits, plan)}
 
 
 @app.post("/api/live/strategies")

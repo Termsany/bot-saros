@@ -20,7 +20,26 @@ class PlanTests(unittest.TestCase):
             self.assertEqual((p["margin"], p["max_open"]), (margin, max_open), capital)
 
     def test_capital_counts_at_most_what_the_account_holds(self):
-        self.assertEqual(rm.capital_plan({**rm.DEFAULT_LIMITS, "capital_usdt": 5000}, 2000)["max_open"], 24)
+        # size and count both: 5,000 typed on a 2,000 account trades like 2,000 ($30 x 40), never $50 a trade
+        p = rm.capital_plan({**rm.DEFAULT_LIMITS, "capital_usdt": 5000}, 2000)
+        self.assertEqual((p["margin"], p["max_open"]), (30, 40))
+        typo = rm.capital_plan({**rm.DEFAULT_LIMITS, "capital_usdt": 50000}, 5000)        # a zero too many
+        self.assertEqual((typo["margin"], typo["max_open"]), (50, 60))
+
+    def test_manual_margin_and_its_risk(self):
+        p = rm.capital_plan({**rm.DEFAULT_LIMITS, "capital_usdt": 5000, "capital_margin_override_usdt": 300}, 5000)
+        self.assertTrue(p["manual"]); self.assertEqual((p["margin"], p["max_open"]), (300, 10))
+        self.assertEqual((p["loss_per_trade"], p["loss_per_trade_pct"], p["level"]), (240, 4.8, "high"))   # 40% stop at x2
+        self.assertEqual(rm.capital_plan({**rm.DEFAULT_LIMITS, "capital_usdt": 5000, "capital_margin_override_usdt": 30}, 5000)["level"], "low")
+
+    def test_which_limit_binds_first(self):
+        lim = {**rm.DEFAULT_LIMITS, "capital_usdt": 5000, "risk_per_trade_pct": 1.0, "max_aggregate_risk_pct": 40.0}
+        self.assertEqual(rm.plan_vs_limits(lim, rm.capital_plan(lim, 5000))["binding"], "aggregate_risk")       # 49 < 60
+        big = {**lim, "capital_margin_override_usdt": 100}
+        self.assertEqual(rm.plan_vs_limits(big, rm.capital_plan(big, 5000))["binding"], "risk_per_trade")       # 1.6% > 1%
+
+    def test_a_setting_that_is_not_a_number_refuses(self):
+        with self.assertRaises(ValueError): rm.capital_plan({**rm.DEFAULT_LIMITS, "capital_usdt": float("nan")})
 
     def test_no_capital_no_plan(self):
         self.assertIsNone(rm.capital_plan(rm.DEFAULT_LIMITS))
@@ -63,6 +82,18 @@ class BotSizingTests(unittest.TestCase):
             with mock.patch.dict(botmod.CONFIG, {"paper_trading": True}):
                 rm.update_limits(botmod.RISK_PATH, {"capital_usdt": 5000})
                 self.assertEqual(botmod.position_size(100.0), 100.0)                      # paper never reads it
+
+
+class SafetyTests(unittest.TestCase):
+    def test_unreadable_plan_refuses_instead_of_the_default_size(self):
+        with mock.patch.dict(botmod.CONFIG, {"paper_trading": False, "trade_amount_usdt": 100}),              mock.patch.object(botmod.riskmgr, "load_risk_state", side_effect=OSError("database is locked")):
+            with self.assertRaises(OSError): botmod.position_size(100.0)
+
+    def test_order_below_the_exchange_minimum_is_not_sent(self):
+        ex = mock.Mock(); ex.market.return_value = {"limits": {"cost": {"min": 50.0}}}
+        with mock.patch.dict(botmod.CONFIG, {"leverage": 2}):
+            self.assertFalse(botmod._meets_min_order(ex, "BTC/USDT:USDT", 20))
+            self.assertTrue(botmod._meets_min_order(ex, "BTC/USDT:USDT", 30))
 
 
 class ApiTests(ApiAuthTests):

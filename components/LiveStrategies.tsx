@@ -5,44 +5,82 @@ import { LivePositions } from "@/components/LivePositions"
 
 const usd = (v: number) => `$${v.toLocaleString("en-US", { maximumFractionDigits: 2 })}`
 
-/** Same rule as risk_manager.capital_plan: margin = max(min, capital × margin %); max open = capital × (1 − reserve %) ÷ margin. */
-function plan(capital: number, c: any){
+const LEV = 2, STOP = 0.40   // every strategy: x2 and a 40% stop (risk_manager.PLAN_LEVERAGE / PLAN_STOP_LOSS)
+
+/** Same rule as risk_manager.capital_plan: capital capped by the account's balance; margin = the manual one, or
+ *  max(min, capital × margin %); max open = capital × (1 − reserve %) ÷ margin; what one stop / every stop costs. */
+function plan(capital: number, manual: number, c: any){
   if(!(capital > 0)) return null
-  const margin = Math.max(c?.capital_min_margin_usdt ?? 30, capital * (c?.capital_margin_pct ?? 1) / 100)
-  return { margin, maxOpen: Math.floor(capital * (1 - (c?.capital_reserve_pct ?? 40) / 100) / margin) }
+  const eff = c?.equity_last > 0 ? Math.min(capital, c.equity_last) : capital
+  const margin = manual > 0 ? manual : Math.max(c?.capital_min_margin_usdt ?? 30, eff * (c?.capital_margin_pct ?? 1) / 100)
+  const maxOpen = Math.floor(eff * (1 - (c?.capital_reserve_pct ?? 40) / 100) / margin)
+  const loss = margin * LEV * STOP, lossPct = loss / eff * 100
+  const level = lossPct < 1 ? "low" : lossPct < 2 ? "medium" : lossPct < 5 ? "high" : "very_high"
+  const rpt = c?.risk_per_trade_pct, agg = c?.max_aggregate_risk_pct
+  const blockedPerTrade = rpt != null && lossPct > rpt
+  const byAgg = agg != null && lossPct > 0 ? Math.floor(agg / lossPct) : maxOpen
+  return { eff, margin, maxOpen, loss, lossPct, worst: loss * maxOpen / eff * 100, level, blockedPerTrade, allowed: blockedPerTrade ? 0 : Math.min(maxOpen, byAgg) }
 }
 
-/** The owner's capital for this account: it decides the margin per trade and the most trades open at once (all the
- *  strategies together). Entries beyond that count are refused until the capital is raised. */
+const LEVEL: Record<string, [string, string, string]> = {
+  low: ["منخفضة", "text-profit", "border-profit/40"], medium: ["متوسطة", "text-amber-300", "border-amber-300/40"],
+  high: ["عالية", "text-loss", "border-loss/40"], very_high: ["عالية جدًا", "text-loss", "border-loss"],
+}
+
+/** The owner's capital for this account, and optionally their own margin per trade: the margin and the most trades
+ *  open at once (all strategies together) follow, with what a stop would cost. Entries beyond the count are refused. */
 function CapitalPanel({ env, cfg, reload }: { env: "demo"|"live", cfg: any, reload: () => void }){
   const c = cfg.capital || {}
   const [value, setValue] = useState<string>(c.capital_usdt ? String(c.capital_usdt) : "")
+  const [manual, setManual] = useState<string>(c.capital_margin_override_usdt ? String(c.capital_margin_override_usdt) : "")
   const [msg, setMsg] = useState("")
-  useEffect(() => { setValue(c.capital_usdt ? String(c.capital_usdt) : ""); setMsg("") }, [env, c.capital_usdt])
-  const p = plan(Number(value), c)
+  useEffect(() => {
+    setValue(c.capital_usdt ? String(c.capital_usdt) : ""); setManual(c.capital_margin_override_usdt ? String(c.capital_margin_override_usdt) : ""); setMsg("")
+  }, [env, c.capital_usdt, c.capital_margin_override_usdt])
+  const p = plan(Number(value), Number(manual), c)
+  const changed = Number(value) !== (c.capital_usdt || 0) || Number(manual) !== (c.capital_margin_override_usdt || 0)
   async function save(){
-    const n = Number(value) || 0
-    if(!confirm(n ? `راس المال ${usd(n)} على ${env === "demo" ? "الـ Demo" : "الحساب الحقيقي"}:\nمارجن ${usd(p!.margin)} لكل صفقة، وبحد أقصى ${p!.maxOpen} صفقة مفتوحة.` : "إلغاء خطة راس المال؟")) return
-    try{ await apiSetCapital(env, n); setMsg("✅ اتحفظ"); reload() } catch(e: any){ setMsg(`⚠️ ${e.message}`) }
+    const n = Number(value) || 0, m = Number(manual) || 0
+    const risk = p ? `\nلو الوقف اتضرب في صفقة: −${usd(p.loss)} (${p.lossPct.toFixed(1)}% من راس المال) — خطورة ${LEVEL[p.level][0]}` : ""
+    if(!confirm(n ? `راس المال ${usd(n)} على ${env === "demo" ? "الـ Demo" : "الحساب الحقيقي"}:\nمارجن ${usd(p!.margin)} لكل صفقة${m ? " (يدوي)" : ""}، وبحد أقصى ${p!.maxOpen} صفقة مفتوحة.${risk}` : "إلغاء خطة راس المال؟")) return
+    try{ await apiSetCapital(env, n, m); setMsg("✅ اتحفظ"); reload() } catch(e: any){ setMsg(`⚠️ ${e.message}`) }
   }
+  const lv = p ? LEVEL[p.level] : null
   return (
     <div className="rounded-2xl border border-line bg-surface p-4">
-      <h2 className="text-sm font-black">راس المال</h2>
-      <p className="mt-1 text-xs text-muted">بيحدد المارجن لكل صفقة وأقصى عدد صفقات مفتوحة في نفس الوقت (كل الاستراتيجيات مع بعض). أي صفقة زيادة بتترفض لحد ما ترفع راس المال. {c.capital_reserve_pct ?? 40}% بيفضل احتياطي، والمارجن {c.capital_margin_pct ?? 1}% من راس المال ومش أقل من {usd(c.capital_min_margin_usdt ?? 30)}، رافعة 2x.</p>
+      <h2 className="text-sm font-black">راس المال والمارجن</h2>
+      <p className="mt-1 text-xs text-muted">راس المال بيحدد أقصى عدد صفقات مفتوحة في نفس الوقت (كل الاستراتيجيات مع بعض)، و{c.capital_reserve_pct ?? 40}% منه بيفضل احتياطي. المارجن لكل صفقة: سيبه فاضي يتحسب لوحده ({c.capital_margin_pct ?? 1}% من راس المال ومش أقل من {usd(c.capital_min_margin_usdt ?? 30)})، أو اكتبه بنفسك. رافعة 2x ووقف 40% من السعر.</p>
       <div className="mt-3 flex flex-wrap items-end gap-3">
         <label className="text-xs text-muted">راس المال (USDT)
           <input type="number" min={0} inputMode="decimal" value={value} onChange={e => setValue(e.target.value)} dir="ltr" placeholder="مثلا 1000"
-            className="mt-1 block w-40 rounded-lg border border-line bg-bg px-2 py-1.5 text-sm" />
+            className="mt-1 block w-36 rounded-lg border border-line bg-bg px-2 py-1.5 text-sm" />
         </label>
-        <button onClick={save} disabled={Number(value) === (c.capital_usdt || 0)} className="rounded-lg bg-corona px-4 py-2 text-xs font-black text-bg disabled:opacity-40">احفظ</button>
+        <label className="text-xs text-muted">المارجن لكل صفقة (اختياري)
+          <input type="number" min={0} inputMode="decimal" value={manual} onChange={e => setManual(e.target.value)} dir="ltr" placeholder="تلقائي"
+            className="mt-1 block w-36 rounded-lg border border-line bg-bg px-2 py-1.5 text-sm" />
+        </label>
+        <button onClick={save} disabled={!changed} className="rounded-lg bg-corona px-4 py-2 text-xs font-black text-bg disabled:opacity-40">احفظ</button>
         {msg && <span className="text-xs text-muted">{msg}</span>}
       </div>
-      {p ? <div className="mt-3 grid gap-2 text-xs sm:grid-cols-3">
-        <div className="rounded-xl border border-line/70 p-2">المارجن لكل صفقة<div className="font-mono text-base font-black" dir="ltr">{usd(p.margin)}</div></div>
-        <div className="rounded-xl border border-line/70 p-2">أقصى صفقات مفتوحة<div className="font-mono text-base font-black" dir="ltr">{p.maxOpen}</div></div>
-        <div className="rounded-xl border border-line/70 p-2">مفتوح دلوقتي<div className="font-mono text-base font-black" dir="ltr">{c.open_trades ?? "—"}{c.plan ? ` / ${c.plan.max_open}` : ""}</div></div>
-      </div> : <div className="mt-2 text-xs text-faint">مفيش خطة: كل بوت بيدخل بالحجم المضبوط في خدمته ومفيش حد لعدد الصفقات.</div>}
-      {c.plan && c.plan.effective_capital < c.plan.capital && <div className="mt-2 text-xs text-loss">رصيد الحساب أقل من راس المال: العدد محسوب على {usd(c.plan.effective_capital)}.</div>}
+      {p && lv ? <>
+        <div className="mt-3 grid gap-2 text-xs sm:grid-cols-3">
+          <div className="rounded-xl border border-line/70 p-2">المارجن لكل صفقة{Number(manual) > 0 && <span className="text-faint"> (يدوي)</span>}<div className="font-mono text-base font-black" dir="ltr">{usd(p.margin)}</div><div className="text-[10px] text-faint">حجم الصفقة {usd(p.margin * LEV)}</div></div>
+          <div className="rounded-xl border border-line/70 p-2">أقصى صفقات مفتوحة<div className="font-mono text-base font-black" dir="ltr">{p.maxOpen}</div></div>
+          <div className="rounded-xl border border-line/70 p-2">مفتوح دلوقتي<div className="font-mono text-base font-black" dir="ltr">{c.open_trades ?? "—"}{c.plan ? ` / ${c.plan.max_open}` : ""}</div></div>
+        </div>
+        <div className={`mt-3 rounded-xl border ${lv[2]} p-3 text-xs`}>
+          <div className="font-black">مدى الخطورة: <span className={lv[1]}>{lv[0]}</span></div>
+          <ul className="mt-1 space-y-0.5 text-muted">
+            <li>لو الوقف اتضرب في صفقة واحدة: <b className="text-loss" dir="ltr">−{usd(p.loss)}</b> = <b className={lv[1]}>{p.lossPct.toFixed(1)}%</b> من راس المال</li>
+            <li>لو الوقف اتضرب في كل الصفقات المفتوحة مرة واحدة ({p.maxOpen}): <b className="text-loss">−{p.worst.toFixed(0)}%</b> من راس المال</li>
+            <li className="text-faint">منخفضة أقل من 1% للصفقة · متوسطة 1–2% · عالية 2–5% · عالية جدًا فوق 5%</li>
+          </ul>
+          {p.margin * LEV < 50 && <div className="mt-1 text-loss">⚠️ حجم الصفقة {usd(p.margin * LEV)} أقل من أقل أمر على BTC في Binance ($50) — صفقات BTC هتترفض.</div>}
+          {p.blockedPerTrade && <div className="mt-1 text-loss">⛔ خسارة الصفقة {p.lossPct.toFixed(1)}% أكبر من حد المخاطرة للصفقة الواحدة في دفتر المخاطرة ({c.risk_per_trade_pct}%): كل الدخول هيترفض لحد ما تقلّل المارجن أو ترفع الحد.</div>}
+          {!p.blockedPerTrade && p.allowed < p.maxOpen && <div className="mt-1 text-amber-300">حد المخاطرة الإجمالي في دفتر المخاطرة ({c.max_aggregate_risk_pct}%) هيوقف الدخول عند {p.allowed} صفقة، قبل الـ {p.maxOpen}.</div>}
+        </div>
+      </> : <div className="mt-2 text-xs text-faint">مفيش خطة: كل بوت بيدخل بالحجم المضبوط في خدمته ومفيش حد لعدد الصفقات.</div>}
+      {p && p.eff < Number(value) && <div className="mt-2 text-xs text-loss">رصيد الحساب ({usd(p.eff)}) أقل من راس المال اللي كتبته: الحساب كله على الرصيد.</div>}
     </div>
   )
 }
