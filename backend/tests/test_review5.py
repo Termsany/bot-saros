@@ -94,3 +94,22 @@ class WhyNoTradeTests(unittest.TestCase):
             botmod.write_live_status({"positions": {}, "history": []}, {})
             last = json.loads((Path(d) / "live_status.json").read_text(encoding="utf-8"))["last_block"]
             self.assertTrue(last["reason"].startswith("SOL/USDT:USDT رفض")); self.assertTrue(last["at"])
+
+
+class EquityRetryTests(unittest.TestCase):
+    """One dropped balance request no longer blocks a bot's entries for the whole cycle (22 times in a day on Demo)."""
+    def test_a_dropped_request_is_tried_once_more(self):
+        ex = mock.Mock(); ex.fetch_balance.side_effect = [OSError("Connection reset"), {"USDT": {"total": 5000.0}}]
+        with mock.patch.object(botmod.time, "sleep") as sl:
+            self.assertEqual(botmod._fetch_equity_usdt(ex), 5000.0)
+        sl.assert_called_once_with(2)
+
+    def test_two_failures_still_fail_closed_and_say_why(self):
+        ex = mock.Mock(); ex.fetch_balance.side_effect = OSError("Connection reset")
+        with mock.patch.object(botmod.time, "sleep"), mock.patch.object(botmod, "log") as lg:
+            self.assertIsNone(botmod._fetch_equity_usdt(ex))
+        self.assertEqual(ex.fetch_balance.call_count, 2); self.assertIn("Connection reset", lg.call_args[0][0])
+
+    def test_a_zero_balance_is_not_retried(self):
+        ex = mock.Mock(); ex.fetch_balance.return_value = {"USDT": {"total": 0}}
+        self.assertIsNone(botmod._fetch_equity_usdt(ex)); self.assertEqual(ex.fetch_balance.call_count, 1)

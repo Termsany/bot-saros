@@ -129,9 +129,16 @@ def _live_risk_share(strategy):
 
 def _fetch_equity_usdt(ex):
     """Best-effort USDT account equity (free + used margin); None means unavailable —
-    callers must fail closed on None, never substitute a guessed figure."""
+    callers must fail closed on None, never substitute a guessed figure. A failed request is tried once more after 2
+    seconds: Binance Demo drops one now and then, and each drop blocked that bot's entries for a whole cycle."""
+    for attempt in (1, 2):
+        try:
+            bal = ex.fetch_balance(); break
+        except Exception as e:
+            if attempt == 2:
+                log(f"⚠️ رصيد الحساب مش متاح من Binance (مرتين): {type(e).__name__}: {e}"); return None
+            time.sleep(2)
     try:
-        bal = ex.fetch_balance()
         usdt = bal.get("USDT") or {}
         total = usdt.get("total")
         if total is None:
