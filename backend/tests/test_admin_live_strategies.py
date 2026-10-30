@@ -48,6 +48,13 @@ class SameAccountTests(unittest.TestCase):
                 with self.assertRaises(RuntimeError): botmod.run_once()
             w.assert_called_once()
 
+    def test_basket_bots_carry_out_the_sites_close_button(self):
+        # the 3 basket runners never read their close requests: the site's close waited unanswered
+        for fn in ("run_once_momentum", "run_once_ratio", "run_once_listing"):
+            with mock.patch.object(botmod, "reconcile_live"), mock.patch.object(botmod, "process_manual_closes", side_effect=RuntimeError("called")) as pmc:
+                with self.assertRaises(RuntimeError): getattr(botmod, fn)(mock.Mock())
+            pmc.assert_called_once()
+
     def test_api_and_bot_list_the_same_live_strategies(self):
         import app.main as m
         self.assertEqual(set(m.LIVE_STRATEGIES), botmod.LIVE_READY_STRATEGIES)
