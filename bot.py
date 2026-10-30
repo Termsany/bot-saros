@@ -383,6 +383,9 @@ def run_once_listing(ex):
     write_listing_status(state, prices, upcoming)
     log(f"📊 شورت مفتوح: {len(state['positions'])}/{L['max_open']} | PnL محقق {state['stats']['pnl']:+.4f} | جاي: {len(upcoming)} عملة")
 
+def _r4(x):
+    return round(float(x), 4) if x is not None else None
+
 def write_listing_status(state, prices, upcoming):
     out_dir = CONFIG.get("public_dir")
     if not out_dir: return
@@ -401,7 +404,7 @@ def write_listing_status(state, prices, upcoming):
                       "realized": round(float(st.get("pnl", 0)), 4), "unrealized": round(sum(x["pnl"] for x in pos), 4), "open": len(pos)},
             "positions": sorted(pos, key=lambda x: x["opened"]),
             "upcoming": [{"symbol": s.split(":")[0], "days_left": round(LISTING["skip_days"] - age, 1)} for s, _, age in upcoming[:12]],
-            "history": [{"symbol": h["symbol"].split(":")[0], "entry": h["entry"], "exit": h["exit"], "pnl": round(h["pnl"], 4),
+            "history": [{"symbol": h["symbol"].split(":")[0], "entry": h["entry"], "exit": h["exit"], "pnl": _r4(h.get("pnl")),
                          "reason": h.get("reason", ""), "time": h.get("time"), "opened": h.get("opened")} for h in state.get("history", [])[-200:]][::-1]}
     try:
         d = Path(out_dir); tmp = d / "listing.json.tmp"
@@ -538,7 +541,7 @@ def write_momentum_status(state, prices):
             "stats": {"closed": st.get("trades", 0), "wins": st.get("wins", 0), "losses": st.get("losses", 0),
                       "realized": round(float(st.get("pnl", 0)), 4), "unrealized": round(sum(x["pnl"] for x in pos), 4), "open": len(pos)},
             "positions": sorted(pos, key=lambda x: (x["side"], -x["ret"])),
-            "history": [{"symbol": h["symbol"].split(":")[0], "side": h.get("side"), "entry": h["entry"], "exit": h["exit"], "pnl": round(h["pnl"], 4),
+            "history": [{"symbol": h["symbol"].split(":")[0], "side": h.get("side"), "entry": h["entry"], "exit": h["exit"], "pnl": _r4(h.get("pnl")),
                          "reason": h.get("reason", ""), "time": h.get("time"), "opened": h.get("opened"), "ret": h.get("ret")}
                         for h in state.get("history", [])[-300:]][::-1]}
     try:
@@ -726,7 +729,8 @@ def write_ratio_status(state, prices):
             "stats": {"closed": st.get("trades", 0), "wins": st.get("wins", 0), "losses": st.get("losses", 0),
                       "realized": round(float(st.get("pnl", 0)), 4), "unrealized": round(sum(p["pnl"] for p in pairs), 4), "open": len(pairs)},
             "pairs": sorted(pairs, key=lambda p: p["pair"]),
-            "history": [{"pair": f"{h['long'].split('/')[0]} / {h['short'].split('/')[0]}", "pnl": round(h["pnl"], 4), "reason": h.get("reason", ""),
+            "history": [{"pair": f"{h['long'].split('/')[0]} / {h['short'].split('/')[0]}" if "long" in h else h["symbol"].split(":")[0],
+                         "pnl": _r4(h.get("pnl")), "reason": h.get("reason", ""),
                          "time": h.get("time"), "opened": h.get("opened"), "ranks": h.get("ranks")} for h in state.get("history", [])[-300:]][::-1]}
     try:
         d = Path(out_dir); tmp = d / "ratio.json.tmp"
@@ -2391,6 +2395,8 @@ def process_manual_closes(state, ex, prices):
             at = float(req.get("at_epoch") or 0); age = time.time() - at
             if at <= 0 or age < -60: age = MANUAL_CLOSE_MAX_AGE_S + 1      # missing or in the future: treated as stale
             match = next((k for k in state["positions"] if k.split(":")[0] == sym.split(":")[0]), None)
+            if not match and age <= MANUAL_CLOSE_MAX_AGE_S and _ipc_shared_with_another_bot(d):
+                continue   # another live bot shares this folder and may hold the coin: its request, not ours
             if age > MANUAL_CLOSE_MAX_AGE_S:
                 out.update(ok=False, msg="الطلب قديم — اتلغى من غير تنفيذ")
             elif not match:
@@ -2494,10 +2500,22 @@ def process_paper_closes(state, ex, key):
             res_dir.mkdir(exist_ok=True); _write_json_atomic(res_dir / f"{rid}.json", out)
         except Exception as e: log(f"paper close result {rid}: {e}")
 
+def _ipc_shared_with_another_bot(d):
+    """True if live_status.json in the IPC folder was written lately by a live bot running another strategy."""
+    try:
+        cur = json.loads((d / "live_status.json").read_text(encoding="utf-8"))
+        fresh = (datetime.now(timezone.utc) - datetime.fromisoformat(cur["updated"])).total_seconds() < 600
+        return fresh and cur.get("strategy") not in (None, _current_strategy_name())
+    except Exception:
+        return False
+
 def write_live_status(state, prices, analyses=None):
-    """What the site's admin page shows for the real-orders bot (not public)."""
+    """What the site's admin page shows for the real-orders bot (not public). One live bot per RAQM_IPC_DIR: a bot
+    doesn't overwrite another strategy's fresh status."""
     d = _ipc_dir()
     if not d: return
+    if _ipc_shared_with_another_bot(d):
+        log("⚠️ RAQM_IPC_DIR فيه بوت حقيقي تاني شغّال — حالة البوت ده مش هتتكتب (كل بوت محتاج فولدر لوحده)"); return
     pos = []
     for sym, p in state["positions"].items():
         px = prices.get(sym)
@@ -2517,6 +2535,7 @@ def write_live_status(state, prices, analyses=None):
     hist = [h for h in state.get("history", []) if h.get("type") == "live"][-30:][::-1]
     try:
         _write_json_atomic(d / "live_status.json", {"updated": datetime.now(timezone.utc).isoformat(), "env": binance_env(),
+            "strategy": _current_strategy_name(),
             "leverage": CONFIG.get("leverage"), "margin": CONFIG.get("trade_amount_usdt"), "positions": pos, "history": hist,
             "review": state.get("recovery_required") or {}, "entry_block": _ENTRY_BLOCK["reason"], "manual_hold": list(state.get("manual_hold", {}))})
     except Exception as e: log(f"live status: {e}")
@@ -3098,6 +3117,7 @@ def _phase2_live_basket(ex, state, strategy, intent, legs, *, reserve=True):
         log(f"⏸️ خروج {intent}: متأجل لحد المراجعة — {', '.join(held)}")
         legs = [leg for leg in legs if leg["symbol"] not in held]
         if not legs: return None
+    held_exit = list(held) if is_exit else []
     equity = _fetch_equity_usdt(ex)
     if equity is None and not is_exit:
         _ENTRY_BLOCK["reason"] = "account equity unavailable — blocking new entries"; return None
@@ -3216,6 +3236,10 @@ def _phase2_live_basket(ex, state, strategy, intent, legs, *, reserve=True):
                             persist_fills=_persist_fills, cycle_token=cycle_token, unwind_failed_leg=unwind_failed_leg)
     if result.get("status") in ("compensated", "risk_blocked"):
         cycles.pop(cycle_key, None); save_state(state)
+    if held_exit and result.get("status") == "filled":
+        # the rest closed, but a leg under review is still open: callers must not treat the basket (a ratio pair, a
+        # rebalance) as closed — the pair was dropped and its held leg left with no strategy managing it
+        result = {**result, "status": "held", "held": held_exit}
     key = f"{strategy}:{intent}"
     if result.get("status") == "compensated" and not is_exit:
         # unwound: wait before the same basket again (1h, 2h, 4h ...), and after 3 in a row stop and ask a person —
@@ -3229,6 +3253,9 @@ def _phase2_live_basket(ex, state, strategy, intent, legs, *, reserve=True):
         notify(f"⚠️ {strategy}: سلة الدخول اتلغت (رجل فشلت والباقي اتقفل) — محاولة {b['count']}" + ("، البوت وقف ومحتاج مراجعة" if b["count"] >= 3 else f"، هيحاول تاني بعد {2 ** (b['count'] - 1)} ساعة"))
     elif result.get("status") == "filled":
         (state.get("basket_backoff") or {}).pop(key, None)
+        (state.get("recovery_required") or {}).pop(f"execution:{result.get('execution_id')}", None); save_state(state)
+    if result.get("status") == "exit_retry":
+        notify(f"⚠️ {strategy}: {intent} — خروج ما اتنفذش ({', '.join(i['leg']['symbol'] for i in result.get('residual') or [])}), هيتعاد الدورة الجاية")
     if result.get("status") in ("recovery_required", "post_fill_recovery"):
         locked = []
         for item in result.get("residual", []) or []:
@@ -3238,7 +3265,10 @@ def _phase2_live_basket(ex, state, strategy, intent, legs, *, reserve=True):
             state.setdefault("recovery_required", {})[sym] = {"reason": item.get("reason"), "execution_id": result.get("execution_id"), "at": datetime.now(timezone.utc).isoformat()}
             locked.append(sym)
         save_state(state)
-        notify(f"🚨 {strategy}: {intent} — " + (f"محتاج مراجعة: {', '.join(locked)}" if locked else "خروج ما اتنفذش، هيتعاد") + ". راجع المنصة.")
+        if result.get("status") == "post_fill_recovery":
+            notify(f"🚨 {strategy}: {intent} — الأوامر اتنفذت بس ما اتسجلتش ({', '.join(locked)}). راجع المنصة.")
+        else:
+            notify(f"🚨 {strategy}: {intent} — " + (f"محتاج مراجعة: {', '.join(locked)}" if locked else "خروج ما اتنفذش، هيتعاد") + ". راجع المنصة.")
     return result
 
 
@@ -3653,7 +3683,7 @@ def write_simple_status(name, state, prices, rules, extra):
             "stats": {"closed": st.get("trades", 0), "wins": st.get("wins", 0), "losses": st.get("losses", 0),
                       "realized": round(float(st.get("pnl", 0)), 4), "unrealized": round(sum(x["pnl"] for x in pos), 4), "open": len(pos)},
             "positions": pos, **extra,
-            "history": [{"symbol": h["symbol"].split(":")[0], "side": h.get("side", "long"), "entry": h["entry"], "exit": h["exit"], "pnl": round(h["pnl"], 4),
+            "history": [{"symbol": h["symbol"].split(":")[0], "side": h.get("side", "long"), "entry": h["entry"], "exit": h["exit"], "pnl": _r4(h.get("pnl")),
                          "reason": h.get("reason", ""), "time": h.get("time"), "opened": h.get("opened")}
                         for h in state.get("history", [])[-300:]][::-1]}
     try:
