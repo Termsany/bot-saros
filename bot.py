@@ -1520,9 +1520,13 @@ def _cancel_all_protective_orders(ex, symbol, pos):
             ids.pop("sl_pending_cleanup", None)
     return ok
 
+_LAST_BLOCK = {}   # the last entry this bot refused and why (⛔/⏸️ lines): the admin page's "why no trade"
+
 def log(msg):
     ts=datetime.now().strftime("%Y-%m-%d %H:%M:%S"); line=f"[{ts}] {msg}"
     print(line, flush=True)
+    if str(msg).startswith(("⛔", "⏸️")):
+        _LAST_BLOCK.update(reason=str(msg).lstrip("⛔⏸️ ").strip(), at=datetime.now(timezone.utc).isoformat())
     try:
         with open(LOG_PATH,"a",encoding="utf-8") as f: f.write(line+"\n")
     except: pass
@@ -2605,7 +2609,8 @@ def write_live_status(state, prices, analyses=None):
         _write_json_atomic(d / "live_status.json", {"updated": datetime.now(timezone.utc).isoformat(), "env": binance_env(),
             "strategy": _current_strategy_name(),
             "leverage": CONFIG.get("leverage"), "margin": CONFIG.get("trade_amount_usdt"), "positions": pos, "history": hist,
-            "review": state.get("recovery_required") or {}, "entry_block": _ENTRY_BLOCK["reason"], "manual_hold": list(state.get("manual_hold", {}))})
+            "review": state.get("recovery_required") or {}, "entry_block": _ENTRY_BLOCK["reason"], "manual_hold": list(state.get("manual_hold", {})),
+            "last_block": dict(_LAST_BLOCK) or None})
     except Exception as e: log(f"live status: {e}")
 
 def try_enter_trend(symbol, analysis, state, ex):
