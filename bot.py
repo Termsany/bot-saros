@@ -331,6 +331,7 @@ def run_once_listing(ex):
         # strategy's own exits still run: returning here left open positions without their signal exits
         reconcile_live(state, ex)
         if _ENTRY_BLOCK.get("reason"): log(f"⛔ دخول جديد متوقف، الخروج شغّال — {_ENTRY_BLOCK['reason']}")
+        process_manual_closes(state, ex, {})   # the site's close button (it waited unanswered for the basket bots)
     process_paper_closes(state, ex, "listing")
     done = state.setdefault("listing_done", {})
     mk = listing_markets(ex); prices = {}
@@ -461,6 +462,7 @@ def run_once_momentum(ex):
         # strategy's own exits still run: returning here left open positions without their signal exits
         reconcile_live(state, ex)
         if _ENTRY_BLOCK.get("reason"): log(f"⛔ دخول جديد متوقف، الخروج شغّال — {_ENTRY_BLOCK['reason']}")
+        process_manual_closes(state, ex, {})   # the site's close button (it waited unanswered for the basket bots)
     process_paper_closes(state, ex, "momentum")
     # protective stops during the week (paper; live, the stop order is on the exchange and reconcile_live books its fill —
     # _paper_close here dropped the live position from the books without closing it on the exchange)
@@ -609,6 +611,7 @@ def run_once_ratio(ex):
         # strategy's own exits still run: returning here left open positions without their signal exits
         reconcile_live(state, ex)
         if _ENTRY_BLOCK.get("reason"): log(f"⛔ دخول جديد متوقف، الخروج شغّال — {_ENTRY_BLOCK['reason']}")
+        process_manual_closes(state, ex, {})   # the site's close button (it waited unanswered for the basket bots)
     process_paper_closes(state, ex, "ratio")
     # every cycle: a leg the exchange closed (its stop, or by hand) leaves the other one unhedged until handled
     if not CONFIG["paper_trading"]:
