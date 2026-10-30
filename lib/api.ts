@@ -93,6 +93,12 @@ export async function apiSetLiveStrategies(env: "live"|"demo", account: string, 
   if(!r.ok) throw new Error(typeof d.detail === "string" ? d.detail : "ما اتحفظش")
   return d
 }
+export async function apiSetCapital(env: "live"|"demo", capital_usdt: number): Promise<any>{
+  const r=await fetch(`${API}/api/live/capital`, { method:"POST", headers: await authHeaders(JSON_CT), body: JSON.stringify({ env, capital_usdt }) })
+  const d = await r.json().catch(()=>({}))
+  if(!r.ok) throw new Error(typeof d.detail === "string" ? d.detail : "ما اتحفظش")
+  return d
+}
 export async function apiLiveClose(strategy: string, symbol: string): Promise<{ id: string }>{
   const r=await fetch(`${API}/api/live/close`, { method:"POST", headers: await authHeaders(JSON_CT), body: JSON.stringify({ strategy, symbol }) })
   const d = await r.json().catch(()=>({}))

@@ -1101,6 +1101,16 @@ class LiveCloseReq(BaseModel):
     strategy: str = Field(pattern=r"^[a-z0-9_]{1,30}$")
     symbol: str
 
+class CapitalReq(BaseModel):
+    env: str = Field(default="live", pattern=r"^(live|demo)$")
+    capital_usdt: Optional[float] = Field(None, ge=0, le=100_000_000)     # 0 / None = no plan
+    capital_reserve_pct: Optional[float] = Field(None, ge=0, le=90)
+    capital_margin_pct: Optional[float] = Field(None, gt=0, le=50)
+    capital_min_margin_usdt: Optional[float] = Field(None, ge=5, le=1_000_000)
+
+def _ledger(env: str) -> Path:
+    return (Path(os.getenv("RAQM_RISK_DIR_DEMO", "/opt/raqm-risk-demo")) / "risk_state.json") if env == "demo" else _risk_path()
+
 class LiveStrategiesReq(BaseModel):
     env: str = Field(default="live", pattern=r"^(live|demo)$")
     account: str = Field(default="", max_length=120)
@@ -1156,8 +1166,26 @@ async def live_strategies(env: str = "live", user: dict = Depends(require_admin)
         rows.append({"id": s, "on": s in on, "running": st.get("running", False), "env": st.get("env"),
                      "positions": len(st.get("positions") or []), "entry_block": st.get("entry_block") or "",
                      "review": list((st.get("review") or {}).keys())})
-    return {"env": env, "enabled": live_trading_allowed() if env == "live" else True,
+    try:
+        ledger = risk_manager.load_risk_state(_ledger(env))
+        lim = ledger["limits"]
+        capital = {"plan": risk_manager.capital_plan(lim), "open_trades": len(ledger.get("open_risk") or {}),
+                   **{k: lim.get(k) for k in ("capital_usdt", "capital_reserve_pct", "capital_margin_pct", "capital_min_margin_usdt")}}
+    except Exception as e:
+        capital = {"error": str(e)}
+    return {"env": env, "enabled": live_trading_allowed() if env == "live" else True, "capital": capital,
             "account": (record or {}).get("account"), "record": record, "strategies": rows}
+
+
+@app.post("/api/live/capital")
+async def live_capital(req: CapitalReq, user: dict = Depends(require_admin)):
+    """The owner's capital for an account: it sets the margin per trade and the most trades open at once, every strategy
+    together (risk_manager.capital_plan). 0 = no plan. The bots and the risk gate read it before every entry."""
+    patch = {k: v for k, v in req.model_dump().items() if k != "env" and v is not None}
+    if patch.get("capital_usdt") == 0: patch["capital_usdt"] = None
+    limits = risk_manager.update_limits(_ledger(req.env), patch)
+    admin_control.audit(BOT_DIR, str(user.get("email") or user.get("id")), "capital_plan", "ok", {"env": req.env, **patch})
+    return {"ok": True, "plan": risk_manager.capital_plan(limits)}
 
 
 @app.post("/api/live/strategies")
