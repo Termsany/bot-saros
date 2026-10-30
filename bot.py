@@ -343,16 +343,16 @@ def run_once_listing(ex):
                 else:
                     leg = {"symbol": sym, "side": "close_short", "action": "exit", "position": pos, "price": price, "order": 0,
                            "risk_usdt": 0, "notional_usdt": 0, "correlation_group": _correlation_group(sym)}
-                    result = _phase2_live_basket(ex, state, "listing_short", f"listing-exit:{sym}", [leg], reserve=False)
-                    if result and result.get("status") == "filled": state["history"].append({"symbol": sym, "side": "short", "entry": pos["entry"], "exit": price, "qty": pos["qty"], "pnl": 0.0, "reason": reason, "time": now.isoformat(), "type": "live"})
+                    _phase2_live_basket(ex, state, "listing_short", f"listing-exit:{sym}", [leg], reserve=False)   # booked with its PnL
         except Exception as e: log(f"شورت {sym}: {e}")
     # new entries: coins that just turned 30 days old (a few days of slack if the bot was down), oldest listing first;
     # like the backtest, a coin that comes up while all 10 slots are taken is skipped for good
     due = sorted([x for x in mk if L["skip_days"] <= x[2] < L["skip_days"] + L["catch_up_days"] and x[0] not in done], key=lambda x: x[1])
     if not CONFIG["paper_trading"] and (_ENTRY_BLOCK.get("reason") or state.get("recovery_required")): due = []   # retried when unblocked
     for sym, listed, age in due:
-        done[sym] = now.isoformat()
+        if CONFIG["paper_trading"]: done[sym] = now.isoformat()   # live: only once the entry filled (below)
         if len(state["positions"]) >= L["max_open"]:
+            done[sym] = now.isoformat()
             log(f"⏸️ {sym} عدّى {L['skip_days']} يوم بس الـ {L['max_open']} أماكن مليانة — اتساب زي الباك تست"); continue
         if not CONFIG["paper_trading"]:
             try:
@@ -605,6 +605,22 @@ def run_once_ratio(ex):
         reconcile_live(state, ex)
         if _ENTRY_BLOCK.get("reason"): log(f"⛔ دخول جديد متوقف، الخروج شغّال — {_ENTRY_BLOCK['reason']}")
     process_paper_closes(state, ex, "ratio")
+    # every cycle: a leg the exchange closed (its stop, or by hand) leaves the other one unhedged until handled
+    if not CONFIG["paper_trading"]:
+        # reconcile_live books a leg the exchange closed but leaves the pair: the other leg is then an unhedged
+        # position the strategy no longer manages, and the pair's next exit failed for good on the missing leg
+        for key, pair in list(state["pairs"].items()):
+            held = [leg for leg in pair["legs"] if leg["sym"] in state["positions"]]
+            if len(held) == len(pair["legs"]): continue
+            if held:
+                out = [{"symbol": leg["sym"], "side": "close_" + leg["side"], "action": "exit", "position": state["positions"][leg["sym"]],
+                        "price": float(ex.fetch_ticker(leg["sym"])["last"]), "order": i, "risk_usdt": 0, "notional_usdt": 0,
+                        "correlation_group": _correlation_group(leg["sym"])} for i, leg in enumerate(held)]
+                result = _phase2_live_basket(ex, state, "ratio_trend", f"ratio-orphan-exit:{key}", out, reserve=False)
+                if not result or result.get("status") != "filled": continue
+                notify(f"⚠️ ratio {key}: رجل اتقفلت على المنصة — الرجل التانية اتقفلت كمان")
+            state["pairs"].pop(key, None)
+        save_state(state)
     today = now.replace(hour=0, minute=0, second=0, microsecond=0); prices = {}
     if state.get("ratio_day") != today.isoformat():          # once a day, right after the daily close
         cache, fcache = {}, {}
@@ -617,21 +633,6 @@ def run_once_ratio(ex):
                 log(f"🔝 ratio: أعلى {R['top']}: {', '.join(m.split('/')[0] for m in members)}")
         members = state.get("ratio_members") or []
         wanted = {f"{a}|{b}" for i, a in enumerate(members) for b in members[i + 1:]}
-        if not CONFIG["paper_trading"]:
-            # reconcile_live books a leg the exchange closed but leaves the pair: the other leg is then an unhedged
-            # position the strategy no longer manages, and the pair's next exit failed for good on the missing leg
-            for key, pair in list(state["pairs"].items()):
-                held = [leg for leg in pair["legs"] if leg["sym"] in state["positions"]]
-                if len(held) == len(pair["legs"]): continue
-                if held:
-                    out = [{"symbol": leg["sym"], "side": "close_" + leg["side"], "action": "exit", "position": state["positions"][leg["sym"]],
-                            "price": float(ex.fetch_ticker(leg["sym"])["last"]), "order": i, "risk_usdt": 0, "notional_usdt": 0,
-                            "correlation_group": _correlation_group(leg["sym"])} for i, leg in enumerate(held)]
-                    result = _phase2_live_basket(ex, state, "ratio_trend", f"ratio-orphan-exit:{key}", out, reserve=False)
-                    if not result or result.get("status") != "filled": continue
-                    notify(f"⚠️ ratio {key}: رجل اتقفلت على المنصة — الرجل التانية اتقفلت كمان")
-                state["pairs"].pop(key, None)
-            save_state(state)
         closed = 0.0; flips = 0
         for key in list(state["pairs"]):
             if CONFIG["paper_trading"] and key not in wanted: closed += _ratio_close_pair(ex, state, key, prices, "عملة خرجت من القائمة", fcache)
@@ -1827,8 +1828,11 @@ def _exchange_position_qty(ex, symbol, *, side=None, position_idx=None):
     except Exception:
         return None
 
-def _close_failure(reason, *, by_exchange=False):
-    return {"price": None, "qty": 0.0, "contract_size": None, "by_exchange": by_exchange, "accounting_verified": False, "recovery_required": True, "error": str(reason)}
+def _close_failure(reason, *, by_exchange=False, unchanged=False):
+    """unchanged=True: nothing happened on the exchange (the position couldn't be read before sending, or the close
+    was refused and the position is still exactly as it was) — the caller retries next cycle instead of locking."""
+    return {"price": None, "qty": 0.0, "contract_size": None, "by_exchange": by_exchange, "accounting_verified": False,
+            "recovery_required": not unchanged, "unchanged": unchanged, "error": str(reason)}
 
 def _release_position_risk(symbol, pos):
     """Best-effort Central Risk Manager release — never let a ledger write failure block
@@ -1874,6 +1878,15 @@ def _entry_failed_flat(ex, symbol, cid, side=None):
     return True, outcome
 
 
+def _summed_fee(rows):
+    """Fills' fees as one fee. A fill with no fee, or fees in more than one currency, make the sum unknown (None): the
+    accounting then fails closed instead of counting a missing fee as 0 or BNB as dollars."""
+    fees = [r.get("fee") for r in rows]
+    if not fees or any(not isinstance(f, dict) or f.get("cost") is None for f in fees): return {"cost": None}
+    currencies = {f.get("currency") for f in fees}
+    if len(currencies) > 1: return {"cost": None}
+    return {"cost": sum(float(f["cost"]) for f in fees), "currency": currencies.pop()}
+
 def _authoritative_close_fill(ex, symbol, pos):
     """Require exchange trade evidence before treating an already-flat position as closed."""
     try:
@@ -1890,8 +1903,7 @@ def _authoritative_close_fill(ex, symbol, pos):
         if total + 1e-9 < float(pos.get("qty", 0)):
             return None
         return {"qty": total, "price": sum(q * p for q, p, _ in valid) / total,
-                "raw": {"filled": total, "price": sum(q * p for q, p, _ in valid) / total,
-                        "fee": {"cost": sum(float((r.get("fee") or {}).get("cost", 0) or 0) for _, _, r in valid)}}}
+                "raw": {"filled": total, "price": sum(q * p for q, p, _ in valid) / total, "fee": _summed_fee(r for _, _, r in valid)}}
     except Exception:
         return None
 
@@ -1901,7 +1913,7 @@ def close_live_position(ex, symbol, pos, price):
     side = pos.get("side", "long")
     exchange_qty = _exchange_position_qty(ex, symbol, side=side, position_idx=pos.get("position_idx"))
     if exchange_qty is None:
-        return _close_failure(f"cannot confirm current exchange position for {symbol}")
+        return _close_failure(f"cannot confirm current exchange position for {symbol}", unchanged=True)
     if exchange_qty == 0:
         evidence = _authoritative_close_fill(ex, symbol, pos)
         if evidence is None:
@@ -1930,7 +1942,7 @@ def close_live_position(ex, symbol, pos, price):
             except Exception as evidence_error:
                 return _close_failure(evidence_error, by_exchange=True)
             return {"price": evidence["price"], "qty": evidence["qty"], "authoritative_qty": evidence["qty"], "authoritative_fill_qty": evidence["qty"], "contract_size": pos.get("contract_size"), "by_exchange": True, "accounting_verified": True, "recovery_required": False, "error": None}
-        return _close_failure(e)
+        return _close_failure(e, unchanged=remaining is not None and abs(float(remaining) - float(exchange_qty)) < 1e-12)
     if float(res.get("qty", 0) or 0) <= 0 or float(res.get("qty", 0)) + 1e-9 < float(exchange_qty):
         return _close_failure("close fill is partial or unverified; recovery required")
     remaining = _exchange_position_qty(ex, symbol, side=side, position_idx=pos.get("position_idx"))
@@ -2195,8 +2207,7 @@ def reconcile_live(state, ex):
                 save_state(state)
                 continue
             exit_px = sum(qty * px for qty, px, _ in fill_rows) / total_filled
-            fee_cost = sum(float((f.get("fee") or {}).get("cost", 0) or 0) for _, _, f in fill_rows)
-            aggregate_fill = {"filled": total_filled, "price": exit_px, "fee": {"cost": fee_cost}}
+            aggregate_fill = {"filled": total_filled, "price": exit_px, "fee": _summed_fee(f for _, _, f in fill_rows)}
             cs = _position_contract_size(pos)
             if cs is None:
                 state.setdefault("recovery_required", {})[sym] = {"reason": "missing contract_size for realized PnL", "at": datetime.now(timezone.utc).isoformat()}
@@ -2544,7 +2555,9 @@ def try_enter_trend(symbol, analysis, state, ex):
         notify(f"📉 قفل {symbol} — الترند وقف\nدخول {pos['entry']:.6g} → خروج {exit_px:.6g}\nPnL {pnl:+.2f}$ ({mode})")
         state["history"].append({"symbol":symbol,"side":"long","entry":pos["entry"],"exit":exit_px,"qty":qty,"pnl":pnl,"pnl_pct":pnl/margin*100 if margin else 0,"reason":"الترند وقف","time":datetime.now(timezone.utc).isoformat(),"type":"live" if live else "paper","opened":pos.get("time"),"rank":pos.get("rank")})
         state["stats"]["trades"]+=1; state["stats"]["pnl"]+=float(pnl); state["stats"]["wins" if pnl>0 else "losses"]+=1
-        state["positions"].pop(symbol,None); state["last_trade"][symbol]=datetime.now(timezone.utc).isoformat(); save_state(state)
+        state["positions"].pop(symbol,None); state["last_trade"][symbol]=datetime.now(timezone.utc).isoformat()
+        if live: _closed_cleanly(state, symbol)
+        save_state(state)
         if live: _release_position_risk(symbol, pos)
         return
     hold = state.get("manual_hold", {})
@@ -2747,7 +2760,9 @@ def try_enter(symbol, analysis, state, ex):
                 state["stats"]["trades"]+=1; state["stats"]["pnl"]+=float(pnl)
                 if pnl>0: state["stats"]["wins"]+=1
                 else: state["stats"]["losses"]+=1
-                state["positions"].pop(symbol,None); state["last_trade"][symbol]=datetime.now(timezone.utc).isoformat(); save_state(state)
+                state["positions"].pop(symbol,None); state["last_trade"][symbol]=datetime.now(timezone.utc).isoformat()
+                if not CONFIG["paper_trading"]: _closed_cleanly(state, symbol)
+                save_state(state)
                 if not CONFIG["paper_trading"]: _release_position_risk(symbol, pos)
             except Exception as e:
                 if not CONFIG["paper_trading"]:
@@ -3018,25 +3033,8 @@ def _phase2_live_basket(ex, state, strategy, intent, legs, *, reserve=True):
     if binance_env() == "live" and os.getenv("ALLOW_LIVE_TRADING", "").strip().lower() != "true":
         _ENTRY_BLOCK["reason"] = "ALLOW_LIVE_TRADING is not enabled"; return None
     is_exit = bool(legs) and all(leg.get("action", "entry") == "exit" for leg in legs)
-    if not is_exit:
-        activation_ok, activation_reason = _live_activation_gate(strategy)
-        if not activation_ok:
-            _ENTRY_BLOCK["reason"] = f"live activation blocked — {activation_reason}"; return None
-    if _ENTRY_BLOCK.get("reason") and not is_exit:
-        return None
-    if state.get("recovery_required") and not is_exit:
-        return None
-    held = [leg["symbol"] for leg in legs if leg["symbol"] in (state.get("recovery_required") or {})]
-    if is_exit and held:   # a leg whose state is in doubt is left to a person (its exchange stop stays)
-        log(f"⏸️ خروج {intent} متأجل — محتاج مراجعة: {', '.join(held)}"); return None
-    equity = _fetch_equity_usdt(ex)
-    if equity is None and not is_exit:
-        _ENTRY_BLOCK["reason"] = "account equity unavailable — blocking new entries"; return None
-    if not is_exit:
-        tripped, reason = riskmgr.update_equity_and_check_kill_switch(RISK_PATH, equity)
-        if tripped:
-            _ENTRY_BLOCK["reason"] = f"Central Risk Manager kill switch is tripped — {reason}"; return None
-    equity = equity or 1.0
+    # pending journal rows are settled first, whatever blocks this call: an early return here left a flat basket in
+    # recovery for good (stale stop, reservations held on every coin of it)
     engine = _phase2_engine(state); fills = {}
     cycle_key = f"{strategy}:{intent}"
     cycles = state.setdefault("_execution_cycles", {})
@@ -3076,18 +3074,46 @@ def _phase2_live_basket(ex, state, strategy, intent, legs, *, reserve=True):
                 recovery.pop(key, None)
     unresolved = [row for row in pending if (row.get("resolution") or {}).get("status") == "recovery_required"]
     if unresolved:
+        if any(f"execution:{row['execution_id']}" not in recovery for row in unresolved):
+            notify(f"🚨 {strategy}: سلة لسه مفتوحة بعد ما البوت رجع ({', '.join(r['intent'] for r in unresolved)}) — راجع المنصة")
         for row in unresolved:
             recovery[f"execution:{row['execution_id']}"] = {"reason": "restart reconciliation residual persisted", "residual": (row.get("resolution") or {}).get("residual"), "at": row["updated_at"]}
         _ENTRY_BLOCK["reason"] = "durable live execution residual requires recovery"; save_state(state)
         if not is_exit: return None   # an exit only reduces exposure: a residual elsewhere must not trap open positions
     elif pending:
         save_state(state)
+    if not is_exit:
+        activation_ok, activation_reason = _live_activation_gate(strategy)
+        if not activation_ok:
+            _ENTRY_BLOCK["reason"] = f"live activation blocked — {activation_reason}"; return None
+    if _ENTRY_BLOCK.get("reason") and not is_exit:
+        return None
+    if state.get("recovery_required") and not is_exit:
+        return None
+    backoff = (state.get("basket_backoff") or {}).get(f"{strategy}:{intent}")
+    if backoff and not is_exit and datetime.now(timezone.utc) < datetime.fromisoformat(backoff["until"]):
+        return None   # this basket failed and was unwound lately: not again every poll
+    held = [leg["symbol"] for leg in legs if leg["symbol"] in (state.get("recovery_required") or {})]
+    if is_exit and held:   # a leg whose state is in doubt is left to a person (its exchange stop stays); the rest go
+        log(f"⏸️ خروج {intent}: متأجل لحد المراجعة — {', '.join(held)}")
+        legs = [leg for leg in legs if leg["symbol"] not in held]
+        if not legs: return None
+    equity = _fetch_equity_usdt(ex)
+    if equity is None and not is_exit:
+        _ENTRY_BLOCK["reason"] = "account equity unavailable — blocking new entries"; return None
+    if not is_exit:
+        tripped, reason = riskmgr.update_equity_and_check_kill_switch(RISK_PATH, equity)
+        if tripped:
+            _ENTRY_BLOCK["reason"] = f"Central Risk Manager kill switch is tripped — {reason}"; return None
+    equity = equity or 1.0
     # Minted only after reconcile() above had a chance to clear a stale token for this cycle_key: reading
     # it any earlier would reuse a crash-recovered attempt's already-cleared token for this new one.
     cycle_token = cycles.setdefault(cycle_key, uuid.uuid4().hex)
     def execute_leg(leg):
         if leg.get("action", "entry") == "exit":
-            result = close_live_position(ex, leg["symbol"], leg["position"], leg.get("price")); _require_verified_close(result)
+            result = close_live_position(ex, leg["symbol"], leg["position"], leg.get("price"))
+            if result.get("unchanged"): raise RuntimeError(f"unchanged: {result.get('error')}")
+            _require_verified_close(result)
             fills[leg["symbol"]] = result; return {**result, "qty": result.get("qty", leg["position"].get("qty"))}
         _expect_stop(state, leg["symbol"], leg["side"], leg.get("sl"), leg["client_order_id"])   # a crash from here on: reconcile_live protects it
         result = place_order(ex, leg["symbol"], leg["side"], leg["margin"], leg["price"], client_order_id=leg["client_order_id"])
@@ -3153,10 +3179,22 @@ def _phase2_live_basket(ex, state, strategy, intent, legs, *, reserve=True):
         for leg, fill in filled:
             sym = leg["symbol"]
             if leg.get("action", "entry") == "exit":
+                pos = leg["position"]; cs = _position_contract_size(pos)
+                try:
+                    pnl = futures_net_pnl(pos["entry"], fill["price"], fill["qty"], cs, pos.get("side", "long"),
+                                          fee_rate=_fee_rate(pos, required=True), funding_pnl=_funding_pnl(pos, required=True))
+                except Exception as exc:   # the close is real: book it; only its PnL is unknown
+                    pnl = None; log(f"⚠️ {sym}: PnL الخروج مش متحسب ({exc})")
+                state["history"].append({"symbol": sym, "side": pos.get("side", "long"), "entry": pos["entry"], "exit": fill["price"],
+                    "qty": fill["qty"], "pnl": pnl, "reason": intent, "time": datetime.now(timezone.utc).isoformat(), "type": "live",
+                    "opened": pos.get("time")})
+                if pnl is not None:
+                    st = state["stats"]; st["trades"] += 1; st["pnl"] += float(pnl); st["wins" if pnl > 0 else "losses"] += 1
                 state["positions"].pop(sym, None)
                 state["last_trade"][sym] = datetime.now(timezone.utc).isoformat()
+                _closed_cleanly(state, sym)
                 save_state(state)
-                _release_position_risk(sym, leg["position"])
+                _release_position_risk(sym, pos)
                 continue
             oco = fill.get("oco") or {}
             state["positions"][sym] = {"side": leg["side"], "entry": fill["price"], "qty": fill["qty"], "cost": fill.get("cost"),
@@ -3178,11 +3216,29 @@ def _phase2_live_basket(ex, state, strategy, intent, legs, *, reserve=True):
                             persist_fills=_persist_fills, cycle_token=cycle_token, unwind_failed_leg=unwind_failed_leg)
     if result.get("status") in ("compensated", "risk_blocked"):
         cycles.pop(cycle_key, None); save_state(state)
-    if result.get("status") == "recovery_required":
-        for item in result.get("residual", []):
-            sym = item["leg"]["symbol"]
-            state.setdefault("recovery_required", {})[sym] = {"reason": item.get("reason"), "execution_id": result.get("execution_id"), "at": datetime.now(timezone.utc).isoformat()}
+    key = f"{strategy}:{intent}"
+    if result.get("status") == "compensated" and not is_exit:
+        # unwound: wait before the same basket again (1h, 2h, 4h ...), and after 3 in a row stop and ask a person —
+        # it used to be sent again every poll, buying and market-closing the legs each minute
+        b = state.setdefault("basket_backoff", {}).get(key) or {"count": 0}
+        b["count"] += 1; b["until"] = (datetime.now(timezone.utc) + pd.Timedelta(hours=2 ** (b["count"] - 1))).isoformat()
+        state["basket_backoff"][key] = b
+        if b["count"] >= 3:
+            state.setdefault("recovery_required", {})[f"basket:{key}"] = {"reason": f"basket unwound {b['count']} times in a row", "at": datetime.now(timezone.utc).isoformat()}
         save_state(state)
+        notify(f"⚠️ {strategy}: سلة الدخول اتلغت (رجل فشلت والباقي اتقفل) — محاولة {b['count']}" + ("، البوت وقف ومحتاج مراجعة" if b["count"] >= 3 else f"، هيحاول تاني بعد {2 ** (b['count'] - 1)} ساعة"))
+    elif result.get("status") == "filled":
+        (state.get("basket_backoff") or {}).pop(key, None)
+    if result.get("status") in ("recovery_required", "post_fill_recovery"):
+        locked = []
+        for item in result.get("residual", []) or []:
+            sym = item["leg"]["symbol"]; leg = item["leg"]
+            if leg.get("action", "entry") == "exit" and "unchanged" in str(item.get("reason", "")):
+                continue   # nothing happened on the exchange: the next exit of this coin retries it
+            state.setdefault("recovery_required", {})[sym] = {"reason": item.get("reason"), "execution_id": result.get("execution_id"), "at": datetime.now(timezone.utc).isoformat()}
+            locked.append(sym)
+        save_state(state)
+        notify(f"🚨 {strategy}: {intent} — " + (f"محتاج مراجعة: {', '.join(locked)}" if locked else "خروج ما اتنفذش، هيتعاد") + ". راجع المنصة.")
     return result
 
 
@@ -3320,6 +3376,23 @@ def _single_leg_live_entry(ex, state, symbol, side, margin, price, sl, tp, strat
     return pos
 
 
+def _closed_cleanly(state, symbol):
+    """A verified close: nothing about this coin needs a person any more (its review mark, an expected stop, a due
+    exit). Left behind, the mark blocked every new entry on every coin."""
+    for book in ("recovery_required", "protect", "exit_due"):
+        (state.get(book) or {}).pop(symbol, None)
+
+def _retry_due_exits(ex, state, label):
+    """Exits a strategy decided on but couldn't carry out (the exchange didn't answer, a close was refused): tried
+    again every cycle until they go through, not only at the next daily signal."""
+    for sym, reason in list((state.get("exit_due") or {}).items()):
+        if sym not in state["positions"]:
+            state["exit_due"].pop(sym, None); continue
+        try: price = float(ex.fetch_ticker(sym)["last"])
+        except Exception: continue
+        if _single_leg_live_exit(ex, state, sym, price, reason):
+            log(f"✅ {label}: الخروج المتأجل من {sym} اتنفذ ({reason})")
+
 def _single_leg_live_exit(ex, state, symbol, price, reason):
     pos = state["positions"].get(symbol)
     if not pos:
@@ -3339,13 +3412,22 @@ def _single_leg_live_exit(ex, state, symbol, price, reason):
         state["stats"]["trades"] += 1; state["stats"]["pnl"] += float(pnl)
         state["stats"]["wins" if pnl > 0 else "losses"] += 1
         state["positions"].pop(symbol, None); state["last_trade"][symbol] = datetime.now(timezone.utc).isoformat()
+        _closed_cleanly(state, symbol)
         save_state(state)
         _release_position_risk(symbol, pos)
         return True
     except Exception as exc:
+        first = symbol not in (state.get("exit_due") or {})
+        state.setdefault("exit_due", {})[symbol] = reason
+        if isinstance(locals().get("result"), dict) and result.get("unchanged"):
+            # nothing happened on the exchange: try again next cycle, the coin is not locked
+            log(f"⚠️ {symbol}: الخروج ({reason}) ما اتنفذش — هيتعاد الدورة الجاية: {exc}")
+            if first: notify(f"⚠️ {symbol}: الخروج ({reason}) ما اتنفذش ({exc}) — البوت هيحاول تاني كل دورة")
+            save_state(state); return False
         state.setdefault("recovery_required", {})[symbol] = {"reason": f"live exit requires recovery: {exc}", "at": datetime.now(timezone.utc).isoformat()}
         _ENTRY_BLOCK["reason"] = "live exit requires recovery"
         save_state(state)
+        notify(f"🚨 {symbol}: الخروج ({reason}) حالته مش واضحة ({exc}) — راجع المنصة. البوت وقف الدخول الجديد.")
         return False
 
 
@@ -3372,6 +3454,8 @@ def run_once_breakout(ex):
         reconcile_live(state, ex)
         if _ENTRY_BLOCK.get("reason"): log(f"⛔ دخول جديد متوقف، الخروج شغّال — {_ENTRY_BLOCK['reason']}")
     process_paper_closes(state, ex, "breakout")
+    if not CONFIG["paper_trading"]:
+        process_manual_closes(state, ex, prices); _retry_due_exits(ex, state, "بريك أوت")
     _guard_stops(ex, state, prices, "بريك أوت")
     if state.get("vb_day") != day.isoformat():
         # a new UTC day: yesterday's trades close at today's open, then today's triggers
@@ -3434,6 +3518,8 @@ def run_once_rsi2(ex):
         reconcile_live(state, ex)
         if _ENTRY_BLOCK.get("reason"): log(f"⛔ دخول جديد متوقف، الخروج شغّال — {_ENTRY_BLOCK['reason']}")
     process_paper_closes(state, ex, "rsi2")
+    if not CONFIG["paper_trading"]:
+        process_manual_closes(state, ex, prices); _retry_due_exits(ex, state, "RSI-2")
     _guard_stops(ex, state, prices, "RSI-2")
     if state.get("rsi2_day") != day.isoformat():
         # once per closed daily candle: exits first, then new entries at about today's open
@@ -3498,6 +3584,8 @@ def run_once_tbreak(ex):
         reconcile_live(state, ex)
         if _ENTRY_BLOCK.get("reason"): log(f"⛔ دخول جديد متوقف، الخروج شغّال — {_ENTRY_BLOCK['reason']}")
     process_paper_closes(state, ex, "tbreak")
+    if not CONFIG["paper_trading"]:
+        process_manual_closes(state, ex, prices); _retry_due_exits(ex, state, "اختراق الترند")
     _guard_stops(ex, state, prices, "اختراق الترند")
     if state.get("tb_day") != day.isoformat():
         universe = volume_universe(ex, T["top"]); watch = []; opened = []
@@ -3545,7 +3633,11 @@ def run_once_tbreak(ex):
     log(f"📊 اختراق الترند: {len(state['positions'])} مفتوحة | PnL محقق {state['stats']['pnl']:+.4f}")
 
 def write_simple_status(name, state, prices, rules, extra):
-    """Public <name>.json for a long-only paper bot, in the shape the site reads for momentum.json."""
+    """Public <name>.json for a long-only paper bot, in the shape the site reads for momentum.json. Live, it also writes
+    the admin page's live status (RAQM_IPC_DIR), so the site's live close button reaches this bot."""
+    if not CONFIG["paper_trading"]:
+        try: write_live_status(state, prices)
+        except Exception as e: log(f"live status: {e}")
     out_dir = CONFIG.get("public_dir")
     if not out_dir: return
     pos = []

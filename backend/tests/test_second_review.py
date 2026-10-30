@@ -163,7 +163,9 @@ class BasketTests(Base):
                 return super().create_order(sym, typ, side, qty, price, params)
         ex = Rejects(); self.run_ratio(ex, 1)
         first = {o["params"].get("clientOrderId") for o in ex.orders}
-        st = botmod.load_state(); st["ratio_day"] = None; botmod.save_state(st)
+        st = botmod.load_state(); st["ratio_day"] = None
+        self.assertTrue(st["basket_backoff"]); st["basket_backoff"] = {}       # not retried before its backoff ends
+        botmod.save_state(st)
         n = len(ex.orders); self.run_ratio(ex, 1)
         again = {o["params"].get("clientOrderId") for o in ex.orders[n:]}
         self.assertTrue(again); self.assertFalse(first & again)
