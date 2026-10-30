@@ -37,9 +37,10 @@ class SetupLiveTests(unittest.TestCase):
         self.assertNotRegex(code, r"install -d[^\n]*/opt/raqm-(risk|ipc)")
 
     def test_python_environment_is_locked(self):
-        unit = (VPS / "raqm-trend-demo.service").read_text(encoding="utf-8")
-        self.assertRegex(unit, r"(?m)^ExecStart=/opt/raqm-live/venv/bin/python -E -s ")
-        self.assertRegex(unit, r"(?m)^UnsetEnvironment=.*PYTHONPATH")
+        for name in ("raqm-demo@.service", "raqm-live@.service"):
+            unit = (VPS / name).read_text(encoding="utf-8")
+            self.assertRegex(unit, r"(?m)^ExecStart=/opt/raqm-live/venv/bin/python -E -s ")
+            self.assertRegex(unit, r"(?m)^UnsetEnvironment=.*PYTHONPATH")
 
 
 class SharedGroupTests(unittest.TestCase):

@@ -1,6 +1,6 @@
 "use client"
-import { useCallback, useEffect, useState } from "react"
-import { apiLiveClose, apiLiveCloseResult, apiLiveStatus } from "@/lib/api"
+import { useState } from "react"
+import { apiLiveClose, apiLiveCloseResult } from "@/lib/api"
 import { ago } from "@/lib/live-bots"
 
 const money = (v?: number|null) => v === null || v === undefined ? "—" : `${v > 0 ? "+" : v < 0 ? "−" : ""}$${Math.abs(v).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
@@ -8,39 +8,35 @@ const tone = (v?: number|null) => !v ? "text-muted" : v > 0 ? "text-profit" : "t
 const px = (v?: number|null) => v === null || v === undefined ? "—" : Number(v).toLocaleString("en-US", { maximumSignificantDigits: 6 })
 const pct = (from?: number|null, to?: number|null) => from && to ? `${((to / from - 1) * 100).toFixed(1)}%` : ""
 
-/** The real-orders bot (daily trend, Binance) for the admin: every position with its stop and exit level, and a
- *  button that asks the bot to close it. The backend allows this to the admin only; the bot only ever closes. */
-export function LivePositions(){
-  const [st, setSt] = useState<any|null|undefined>(undefined)
+/** One real-orders bot (one strategy, Binance) for the admin: every position with its stop and exit level, and a
+ *  button that asks that bot to close it. The backend allows this to the admin only; the bot only ever closes. */
+export function LivePositions({ strategy, label, st, reload }: { strategy: string, label: string, st: any, reload: () => void }){
   const [busy, setBusy] = useState<Record<string, string>>({})
-  const load = useCallback(async () => setSt(await apiLiveStatus()), [])
-  useEffect(() => { load(); const t = setInterval(load, 15_000); return () => clearInterval(t) }, [load])
 
   async function close(symbol: string){
-    if(!confirm(`تقفل ${symbol} دلوقتي بسعر السوق؟\nالبوت مش هيشتريها تاني غير لما الترند يقف ويبدأ من جديد.`)) return
+    if(!confirm(`تقفل ${symbol} (${label}) دلوقتي بسعر السوق؟`)) return
     setBusy(b => ({ ...b, [symbol]: "بيبعت الطلب…" }))
     try{
-      const { id } = await apiLiveClose(symbol)
+      const { id } = await apiLiveClose(strategy, symbol)
       setBusy(b => ({ ...b, [symbol]: "البوت بيقفل (لحد دقيقة)…" }))
       for(let i = 0; i < 50; i++){                          // the bot runs every minute; a request expires after 10
         await new Promise(r => setTimeout(r, 3000))
-        const r = await apiLiveCloseResult(id)
+        const r = await apiLiveCloseResult(strategy, id)
         if(r.done){
           setBusy(b => ({ ...b, [symbol]: r.ok ? `✅ اتقفلت @ ${px(r.price)} · ${money(r.pnl)}` : `⚠️ ${r.msg}` }))
-          load(); return
+          reload(); return
         }
       }
       setBusy(b => ({ ...b, [symbol]: "⚠️ البوت ما ردّش — اتأكد من Binance" }))
     }catch(e: any){ setBusy(b => ({ ...b, [symbol]: `⚠️ ${e.message}` })) }
   }
 
-  if(st === undefined) return <div className="mt-6 text-xs text-faint">بيحمّل الصفقات الحقيقية…</div>
-  if(st === null) return null                                // not the admin (the backend refuses everyone else)
+  if(!st) return null
   const env = st.env === "live" ? "فلوس حقيقية" : st.env === "demo" ? "Binance Demo" : st.env || ""
   return (
-    <div className="mt-6 rounded-2xl border border-corona/40 bg-surface p-4">
+    <div className="rounded-2xl border border-corona/40 bg-surface p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-sm font-black">الترند اليومي — أوامر حقيقية {env && <span className="mr-1 rounded-full bg-corona/15 px-2 py-0.5 text-[11px] text-corona">{env}</span>}</h2>
+        <h2 className="text-sm font-black">{label} — أوامر حقيقية {env && <span className="mr-1 rounded-full bg-corona/15 px-2 py-0.5 text-[11px] text-corona">{env}</span>}</h2>
         <span className={`text-[11px] ${st.running ? "text-profit" : "text-loss"}`}>{st.running ? `شغال · آخر تحديث ${ago(st.updated)}` : "البوت مش شغال"}</span>
       </div>
       {st.entry_block && <div className="mt-2 rounded-lg bg-loss/10 px-3 py-2 text-xs text-loss">⛔ الدخول متوقف: {st.entry_block}</div>}
@@ -50,12 +46,12 @@ export function LivePositions(){
           <table className="w-full min-w-[720px] text-xs">
             <thead className="text-faint"><tr className="text-right">
               <th className="p-2">العملة</th><th className="p-2">دخول → الآن</th><th className="p-2">الربح</th>
-              <th className="p-2 text-loss">وقف الخسارة (على Binance)</th><th className="p-2 text-profit">الهدف / الخروج</th><th className="p-2"></th>
+              <th className="p-2 text-loss">وقف الخسارة (على Binance)</th><th className="p-2 text-profit">الخروج</th><th className="p-2"></th>
             </tr></thead>
             <tbody>
               {st.positions.map((p: any) => (
                 <tr key={p.symbol} className="border-t border-line/70 align-top">
-                  <td className="p-2 font-bold" dir="ltr" style={{ textAlign: "right" }}>{p.symbol}{p.unprotected && <div className="text-[10px] text-loss">من غير وقف!</div>}</td>
+                  <td className="p-2 font-bold" dir="ltr" style={{ textAlign: "right" }}>{p.symbol}{p.side === "short" && <div className="text-[10px] text-loss">شورت</div>}{p.unprotected && <div className="text-[10px] text-loss">من غير وقف!</div>}</td>
                   <td className="p-2 font-mono tabular" dir="ltr" style={{ textAlign: "right" }}>{px(p.entry)} → {px(p.price)}<div className="text-[10px] text-faint">{ago(p.opened)}</div></td>
                   <td className={`p-2 font-mono font-bold tabular ${tone(p.pnl)}`} dir="ltr" style={{ textAlign: "right" }}>{money(p.pnl)}</td>
                   <td className="p-2">
@@ -64,8 +60,7 @@ export function LivePositions(){
                   </td>
                   <td className="p-2">
                     {p.exit_below ? <><span className="text-profit">لو قفل يومي تحت <span className="font-mono" dir="ltr">{px(p.exit_below)}</span></span> <span className="text-faint">({pct(p.price, p.exit_below)})</span></>
-                      : <span className="text-profit">لما الترند يقف</span>}
-                    <div className="text-[10px] text-faint">مفيش هدف سعر ثابت — بيسيب الربح يجري لحد ما الترند يقف</div>
+                      : <span className="text-profit">على قاعدة الاستراتيجية</span>}
                   </td>
                   <td className="p-2 text-left">
                     <button onClick={() => close(p.symbol)} disabled={!!busy[p.symbol] && !busy[p.symbol].startsWith("⚠️")}

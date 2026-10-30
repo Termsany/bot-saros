@@ -1,0 +1,39 @@
+[Unit]
+Description=Raqm live bot %i on Binance Futures Demo Trading (play money)
+After=network-online.target
+Wants=network-online.target
+# one environment per strategy at a time: same status folder
+Conflicts=raqm-live@%i.service
+ConditionPathExists=/opt/raqm-live/.env.live
+
+[Service]
+# its own user and read-only code copy, apart from the paper bots (deploy/vps/setup-live.sh)
+User=raqmlive
+Group=raqmlive
+WorkingDirectory=/opt/raqm-live
+# TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID
+EnvironmentFile=-/opt/raqm-live/.env.telegram
+# BINANCE_API_KEY / BINANCE_SECRET made in Binance Demo Trading — chmod 600, owner raqmlive
+EnvironmentFile=/opt/raqm-live/.env.live
+# play money has its own risk ledger: Demo equity and positions never reach the real account's limits and kill switch
+Environment=BINANCE_ENV=demo
+# this strategy's own folder for the admin page: live_status.json out, manual close requests in
+Environment=RAQM_IPC_DIR=/opt/raqm-ipc/%i
+Environment=RAQM_RISK_DIR=/opt/raqm-risk-demo
+# sizing and options per strategy: /opt/raqm-live/strategies/%i.env (root-owned, RAQM_ARGS=...) overrides this default
+Environment="RAQM_ARGS=--leverage 2 --amount 100 --poll 60"
+EnvironmentFile=-/opt/raqm-live/strategies/%i.env
+UnsetEnvironment=PYTHONPATH PYTHONHOME PYTHONSTARTUP PYTHONUSERBASE PYTHONINSPECT
+# -E -s: no PYTHON* variable and no user site-packages can change what Python loads (-u: unbuffered logs).
+# --expect-env demo: the bot refuses to start if anything (an EnvironmentFile line) set BINANCE_ENV to something else.
+ExecStart=/opt/raqm-live/venv/bin/python -E -s -u bot.py --live --expect-env demo --strategy %i $RAQM_ARGS --notify --state state/demo-%i.json
+Restart=always
+RestartSec=60
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/raqm-live/state /opt/raqm-ipc /opt/raqm-risk-demo
+
+[Install]
+WantedBy=multi-user.target

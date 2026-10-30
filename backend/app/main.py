@@ -426,7 +426,7 @@ async def bot_start(req: BotStartReq, bg: BackgroundTasks, user: dict = Depends(
         return {"ok": False, "msg": "already running"}
     if not req.paper:
         # this loop runs the old score strategies, never tested with real orders; the daily trend's real orders
-        # run as their own service (bot.py --live, deploy/vps/raqm-trend-demo.service), not from the dashboard
+        # run as their own service (bot.py --live, deploy/vps/raqm-demo@.service / raqm-live@.service), not from the dashboard
         raise HTTPException(400, "real orders don't start from the dashboard — the daily trend runs them as its own service on the server")
     solo = [s for s in (req.strategies or []) if s in SOLO_STRATEGIES]
     if not req.paper and solo:
@@ -1088,14 +1088,37 @@ async def llm_evolve(prompt: str = "innovative crypto futures strategy combining
     except: pass
     return {"results": results, "promoted": len(promoted), "total": len(results)}
 
-# ── Real-orders bot (bot.py --live, its own service): the admin sees its positions and can close one by hand.
-# The bot runs as another OS user; they share only RAQM_IPC_DIR: live_status.json out, commands/ in, results/ back.
+# ── Real-orders bots (bot.py --live, one service per strategy on the admin's account: raqm-live@<strategy>): the
+# admin turns each strategy on or off, sees its positions and can close one by hand. Each bot runs as another OS user
+# and shares only its own folder RAQM_IPC_DIR/<strategy>: live_status.json out, commands/ in, results/ back.
 # A request can only close — the bot ignores anything else, and drops requests older than 10 minutes.
 IPC_DIR = Path(os.getenv("RAQM_IPC_DIR", "/opt/raqm-ipc"))
 LIVE_SYMBOL_RE = re.compile(r"^[A-Z0-9]{1,20}/USDT(:USDT)?$")
+# Keep in sync with bot.LIVE_READY_STRATEGIES (test_admin_live_strategies.py checks it)
+LIVE_STRATEGIES = ("trend_daily", "vol_breakout", "rsi2_pullback", "trend_breakout", "listing_short", "momentum_ls", "ratio_trend")
 
 class LiveCloseReq(BaseModel):
+    strategy: str = Field(pattern=r"^[a-z0-9_]{1,30}$")
     symbol: str
+
+class LiveStrategiesReq(BaseModel):
+    account: str = Field(min_length=1, max_length=120)
+    strategies: List[str] = Field(max_length=len(LIVE_STRATEGIES))
+
+def _live_strategy(name: str) -> str:
+    if name not in LIVE_STRATEGIES: raise HTTPException(400, "unknown live strategy")
+    return name
+
+def _live_status_of(strategy: str) -> dict:
+    f = IPC_DIR / strategy / "live_status.json"
+    if not f.exists():
+        return {"running": False}
+    try:
+        data = json.loads(f.read_text(encoding="utf-8"))
+        data["running"] = (datetime.now(timezone.utc) - datetime.fromisoformat(data["updated"])).total_seconds() < 300
+        return data
+    except Exception:
+        return {"running": False, "error": "status unreadable"}
 
 
 class LiveActivationReq(BaseModel):
@@ -1107,15 +1130,45 @@ class LiveActivationReq(BaseModel):
 
 @app.get("/api/live/status")
 async def live_status(user: dict = Depends(require_admin)):
-    f = IPC_DIR / "live_status.json"
-    if not f.exists():
-        return {"running": False}
+    """Every live strategy's bot: running or not, its positions, history, entry block and review marks."""
+    out = {s: _live_status_of(s) for s in LIVE_STRATEGIES}
+    return {"running": any(v.get("running") for v in out.values()), "strategies": out}
+
+
+@app.get("/api/live/strategies")
+async def live_strategies(user: dict = Depends(require_admin)):
+    """Which strategies may trade on the admin's live account (the active activation record) and how each bot is."""
+    record = live_activation.active_record(LIVE_ACTIVATION_PATH)
+    on = set((record or {}).get("strategies") or [])
+    rows = []
+    for s in LIVE_STRATEGIES:
+        st = _live_status_of(s)
+        rows.append({"id": s, "on": s in on, "running": st.get("running", False), "env": st.get("env"),
+                     "positions": len(st.get("positions") or []), "entry_block": st.get("entry_block") or "",
+                     "review": list((st.get("review") or {}).keys())})
+    return {"enabled": live_trading_allowed(), "account": (record or {}).get("account"), "record": record, "strategies": rows}
+
+
+@app.post("/api/live/strategies")
+async def live_strategies_set(req: LiveStrategiesReq, user: dict = Depends(require_admin)):
+    """Yes/no per strategy for the admin's live account: a new activation record with exactly these strategies (none =
+    revoke). A strategy turned off stops entering; its open positions still exit on their own rules and stops."""
+    for s in req.strategies: _live_strategy(s)
+    actor = str(user.get("email") or user.get("id"))
+    if not req.strategies:
+        live_activation.revoke(LIVE_ACTIVATION_PATH, reason=f"all live strategies turned off by {actor}")
+        admin_control.audit(BOT_DIR, actor, "live_strategies", "ok", {"strategies": []})
+        return {"ok": True, "strategies": []}
+    chosen = sorted(set(req.strategies))
     try:
-        data = json.loads(f.read_text(encoding="utf-8"))
-    except Exception:
-        return {"running": False, "error": "status unreadable"}
-    data["running"] = (datetime.now(timezone.utc) - datetime.fromisoformat(data["updated"])).total_seconds() < 300
-    return data
+        aid = live_activation.activate(LIVE_ACTIVATION_PATH, environment="live", account=req.account, approved_by=actor,
+                                       strategies=chosen, risk_allocation={s: 1.0 for s in chosen}, readiness={s: True for s in chosen})
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    admin_control.audit(BOT_DIR, actor, "live_strategies", "ok", {"account": req.account, "strategies": chosen})
+    return {"ok": True, "activation_id": aid, "strategies": chosen}
 
 
 @app.get("/api/live/activation")
@@ -1149,30 +1202,32 @@ async def live_activation_revoke(user: dict = Depends(require_admin)):
 @app.post("/api/live/close")
 async def live_close(req: LiveCloseReq, user: dict = Depends(require_admin)):
     rate_limit(user["id"], "live_close", 10, 60)
+    strategy = _live_strategy(req.strategy)
     sym = req.symbol.strip().upper()
     if not LIVE_SYMBOL_RE.match(sym):
         raise HTTPException(400, "bad symbol")
-    st = await live_status(user)
+    st = _live_status_of(strategy)
     if not st.get("running"):
-        raise HTTPException(409, "the real-orders bot isn't running — close it in Binance")
+        raise HTTPException(409, "this strategy's real-orders bot isn't running — close it in Binance")
     if sym.split(":")[0] not in {p["symbol"] for p in st.get("positions", [])}:
         raise HTTPException(404, "no open position on that coin")
     rid = uuid.uuid4().hex
     cmd = {"id": rid, "symbol": sym, "at_epoch": _time.time(), "by": user.get("email")}
-    _drop_request(IPC_DIR / "commands", IPC_DIR, rid, cmd)
+    _drop_request(IPC_DIR / strategy / "commands", IPC_DIR, rid, cmd)
     try:
         from app.telegram_bot import send_telegram
-        await send_telegram(f"🖐️ manual close requested from the site: {sym} ({user.get('email')})")
+        await send_telegram(f"🖐️ manual close requested from the site: {strategy} {sym} ({user.get('email')})")
     except Exception: pass
     return {"ok": True, "id": rid}
 
-@app.get("/api/live/close/{rid}")
-async def live_close_result(rid: str, user: dict = Depends(require_admin)):
+@app.get("/api/live/close/{strategy}/{rid}")
+async def live_close_result(strategy: str, rid: str, user: dict = Depends(require_admin)):
+    d = IPC_DIR / _live_strategy(strategy)
     if not re.fullmatch(r"[0-9a-f]{32}", rid):
         raise HTTPException(400, "bad id")
-    f = IPC_DIR / "results" / f"{rid}.json"
+    f = d / "results" / f"{rid}.json"
     if not f.exists():
-        pending = (IPC_DIR / "commands" / f"close-{rid}.json").exists()
+        pending = (d / "commands" / f"close-{rid}.json").exists()
         return {"done": False, "pending": pending}
     return {"done": True, **json.loads(f.read_text(encoding="utf-8"))}
 

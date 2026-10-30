@@ -57,3 +57,33 @@ crypto perpetuals by 30-day volume (membership refreshed weekly), once a day aft
 $20 × 2 per leg (21 pairs ≈ $840 margin), fees + real funding, no stop, paper only. In the fair backtest
 (research/ratio_fairness.py) its drawdown reached 795 and it lowered the three bots' combined result — it runs only
 to watch it, and the page marks it HIGH RISK. Page data `ratio.json`. Logs: `journalctl -u raqm-ratio -f`.
+
+## Real-orders bots: one per strategy on the admin's account
+
+`setup-live.sh <sha>` (as root, from the root-owned clone) installs the bots' code in `/opt/raqm-live`, the unit
+template `raqm-demo@.service`, one IPC folder per strategy (`/opt/raqm-ipc/<strategy>`) and the Demo risk ledger
+(`/opt/raqm-risk-demo`, play money only). Each strategy runs as its own service on the same Binance account:
+
+    systemctl enable --now raqm-demo@trend_daily raqm-demo@momentum_ls ...     # Binance Demo (play money)
+
+Options per strategy (size, leverage, universe): `/opt/raqm-live/strategies/<strategy>.env`, root-owned, one line
+`RAQM_ARGS=--leverage 2 --amount 100 --poll 60`. Strategies on one account never share a coin: the first to take
+it holds it until it closes (shared risk ledger), and each bot leaves the others' positions alone.
+
+### Real money
+
+1. The real account's keys, **without withdrawal permission**: `/opt/raqm-live/.env.real` (`BINANCE_API_KEY=`,
+   `BINANCE_SECRET=`), owner `raqmlive`, chmod 600.
+2. `/opt/raqm-live/allow-live.env`, owner root, chmod 600: `ALLOW_LIVE_TRADING=true` and
+   `BINANCE_LIVE_ACCOUNT=<a name>`. Set `ALLOW_LIVE_TRADING=true` in `/opt/raqm-api/.env` too (the dashboard's yes/no
+   needs it) and restart the API.
+3. Install the real-money template — this also freezes the API's automatic updates (`api/update.sh`):
+   `install -m 644 /root/raqm-src/deploy/vps/raqm-live@.service /etc/systemd/system/ && systemctl daemon-reload`
+4. Stop the Demo bots (`systemctl disable --now 'raqm-demo@*'`) and start the real ones you want available:
+   `systemctl enable --now raqm-live@trend_daily ...`
+5. Dashboard → التداول الحقيقي: the account name of step 2, then yes/no per strategy. Only the strategies marked yes
+   enter; one turned off stops entering and its open positions still exit on their own rules and stops. The kill
+   switch (Risk) stops every strategy's entries at once.
+
+The live bots are not restarted by the setup scripts (one stopped mid-order goes to review): restart them as a
+deliberate step, `systemctl restart 'raqm-live@*'`.
