@@ -16,14 +16,14 @@ LOOSE = {"risk_per_trade_pct": 100.0, "max_aggregate_risk_pct": 100.0, "max_corr
 class PlanTests(unittest.TestCase):
     def test_the_agreed_examples(self):
         for capital, margin, max_open in ((500, 30, 10), (1000, 30, 20), (3000, 30, 60), (5000, 50, 60)):
-            p = rm.capital_plan({**rm.DEFAULT_LIMITS, "capital_usdt": capital})
+            p = rm.capital_plan({**rm.DEFAULT_LIMITS, "capital_usdt": capital, "risk_per_trade_pct": 5.0})
             self.assertEqual((p["margin"], p["max_open"]), (margin, max_open), capital)
 
     def test_capital_counts_at_most_what_the_account_holds(self):
         # size and count both: 5,000 typed on a 2,000 account trades like 2,000 ($30 x 40), never $50 a trade
-        p = rm.capital_plan({**rm.DEFAULT_LIMITS, "capital_usdt": 5000}, 2000)
+        p = rm.capital_plan({**rm.DEFAULT_LIMITS, "capital_usdt": 5000, "risk_per_trade_pct": 5.0}, 2000)
         self.assertEqual((p["margin"], p["max_open"]), (30, 40))
-        typo = rm.capital_plan({**rm.DEFAULT_LIMITS, "capital_usdt": 50000}, 5000)        # a zero too many
+        typo = rm.capital_plan({**rm.DEFAULT_LIMITS, "capital_usdt": 50000, "risk_per_trade_pct": 5.0}, 5000)        # a zero too many
         self.assertEqual((typo["margin"], typo["max_open"]), (50, 60))
 
     def test_manual_margin_and_its_risk(self):
@@ -40,6 +40,17 @@ class PlanTests(unittest.TestCase):
 
     def test_a_setting_that_is_not_a_number_refuses(self):
         with self.assertRaises(ValueError): rm.capital_plan({**rm.DEFAULT_LIMITS, "capital_usdt": float("nan")})
+
+    def test_small_capital_still_trades_within_the_per_trade_limit(self):
+        # $400 with a 1% limit: $30 a trade would lose 6% at the stop and every entry was refused
+        lim = {**rm.DEFAULT_LIMITS, "capital_usdt": 400, "risk_per_trade_pct": 1.0}
+        p = rm.capital_plan(lim, 5000)
+        self.assertEqual((p["margin"], p["max_open"]), (4.95, 48))
+        self.assertLessEqual(p["loss_per_trade_pct"], 1.0)
+        self.assertEqual(rm.plan_vs_limits(lim, p)["binding"], "aggregate_risk")      # 40 trades by the 40% limit
+        big = rm.capital_plan({**lim, "capital_usdt": 5000}, 5000)
+        self.assertEqual(big["margin"], 50)                                              # the 1% rule where it fits
+        self.assertEqual(rm.capital_plan({**lim, "capital_usdt": 100}, 5000)["margin"], 3.0)   # never below Binance's minimum
 
     def test_no_capital_no_plan(self):
         self.assertIsNone(rm.capital_plan(rm.DEFAULT_LIMITS))
@@ -99,7 +110,7 @@ class BotSizingTests(unittest.TestCase):
     def test_live_bots_size_with_the_plans_margin(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d, mock.patch.object(botmod, "RISK_PATH", Path(d) / "r.json"), \
              mock.patch.dict(botmod.CONFIG, {"paper_trading": False, "trade_amount_usdt": 100, "use_percent_risk": False}):
-            rm.save_risk_state(botmod.RISK_PATH, rm._default_state({"capital_usdt": 5000}))
+            rm.save_risk_state(botmod.RISK_PATH, rm._default_state({"capital_usdt": 5000, "risk_per_trade_pct": 5.0}))
             self.assertEqual(botmod.position_size(100.0), 50.0)
             rm.update_limits(botmod.RISK_PATH, {"capital_usdt": None})
             self.assertEqual(botmod.position_size(100.0), 100.0)                          # no plan: the service's size
@@ -148,7 +159,7 @@ class ApiTests(ApiAuthTests):
     def test_capital_per_account_admin_only(self):
         self.assertEqual(self.c.post("/api/live/capital", headers=self.h("user-token"), json={"env": "demo", "capital_usdt": 1000}).status_code, 403)
         r = self.c.post("/api/live/capital", headers=self.h("admin-token"), json={"env": "demo", "capital_usdt": 1000})
-        self.assertEqual(r.json()["plan"]["max_open"], 20)
+        self.assertEqual(r.json()["plan"]["margin"], 3.09)                                  # 0.25% default limit: one stop costs <= 0.25%
         demo = rm.load_risk_state(Path(self.tmp.name) / "demo" / "risk_state.json")["limits"]["capital_usdt"]
         live = rm.load_risk_state(Path(self.tmp.name) / "live" / "risk_state.json")["limits"]["capital_usdt"]
         self.assertEqual((demo, live), (1000, None))                                       # the demo plan never reaches real money
