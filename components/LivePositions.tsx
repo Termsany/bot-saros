@@ -10,6 +10,20 @@ const pct = (from?: number|null, to?: number|null) => from && to ? `${((to / fro
 
 /** One real-orders bot (one strategy, Binance) for the admin: every position with its stop and exit level, and a
  *  button that asks that bot to close it. The backend allows this to the admin only; the bot only ever closes. */
+/** Why this bot isn't trading: a refusal from its last few cycles, or else it is only waiting for its signal. */
+function WhyNoTrade({ st }: { st: any }){
+  if(!st.running || st.entry_block) return null
+  const b = st.last_block
+  const recent = b?.at && Date.now() - new Date(b.at).getTime() < 10 * 60_000   // the bots run every minute
+  if(recent) return <div className="mt-2 rounded-lg bg-corona/10 px-3 py-2 text-xs text-corona">⏸️ آخر رفض ({ago(b.at)}): {b.reason}</div>
+  return (
+    <div className="mt-2 rounded-lg bg-line/30 px-3 py-2 text-xs text-muted">
+      🔎 مستني إشارة — مفيش حاجة مانعة الدخول
+      {b?.at && <div className="mt-0.5 text-[10px] text-faint">آخر رفض كان {ago(b.at)}: {b.reason}</div>}
+    </div>
+  )
+}
+
 export function LivePositions({ strategy, label, st, reload }: { strategy: string, label: string, st: any, reload: () => void }){
   const [busy, setBusy] = useState<Record<string, string>>({})
 
@@ -40,6 +54,7 @@ export function LivePositions({ strategy, label, st, reload }: { strategy: strin
         <span className={`text-[11px] ${st.running ? "text-profit" : "text-loss"}`}>{st.running ? `شغال · آخر تحديث ${ago(st.updated)}` : "البوت مش شغال"}</span>
       </div>
       {st.entry_block && <div className="mt-2 rounded-lg bg-loss/10 px-3 py-2 text-xs text-loss">⛔ الدخول متوقف: {st.entry_block}</div>}
+      <WhyNoTrade st={st} />
       {st.review && Object.keys(st.review).length > 0 && <div className="mt-2 rounded-lg bg-loss/10 px-3 py-2 text-xs text-loss">🚨 محتاج مراجعة: {Object.entries(st.review).map(([k, v]: any) => `${k.split(":")[0]} (${v.reason})`).join(" · ")}</div>}
       {!st.positions?.length ? <div className="py-6 text-center text-xs text-faint">مفيش صفقات مفتوحة</div> : (
         <div className="mt-3 overflow-x-auto">

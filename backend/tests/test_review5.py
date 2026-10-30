@@ -79,3 +79,18 @@ class RestartTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WhyNoTradeTests(unittest.TestCase):
+    """Owner (2026-10-30): the admin page says why a strategy isn't trading — its last refusal, or nothing blocking."""
+    def test_the_last_refusal_reaches_the_admin_page(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d, mock.patch.dict(os.environ, {"RAQM_IPC_DIR": d}), \
+             mock.patch.dict(botmod.CONFIG, {"enabled_strategies": ["vol_breakout"]}), mock.patch.object(botmod, "LOG_PATH", Path(d) / "l.log"):
+            botmod._LAST_BLOCK.clear()
+            botmod.log("📊 بريك أوت: 0 مفتوحة")                                    # not a refusal
+            botmod.write_live_status({"positions": {}, "history": []}, {})
+            self.assertIsNone(json.loads((Path(d) / "live_status.json").read_text(encoding="utf-8"))["last_block"])
+            botmod.log("⛔ SOL/USDT:USDT رفض بوابة المخاطر المركزية — per-trade risk 1.6% exceeds limit 1%")
+            botmod.write_live_status({"positions": {}, "history": []}, {})
+            last = json.loads((Path(d) / "live_status.json").read_text(encoding="utf-8"))["last_block"]
+            self.assertTrue(last["reason"].startswith("SOL/USDT:USDT رفض")); self.assertTrue(last["at"])
