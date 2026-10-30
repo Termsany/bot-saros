@@ -105,6 +105,8 @@ def _current_strategy_name():
 
 
 def _live_activation_gate(strategy):
+    if binance_env() == "demo":   # the dashboard's Demo yes/no (Demo ledger folder; nothing chosen yet = allowed)
+        return live_activation.demo_strategy_allowed(ACTIVATION_PATH, strategy=strategy)
     if binance_env() != "live":
         return True, None
     account = os.getenv("BINANCE_LIVE_ACCOUNT", "").strip()

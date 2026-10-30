@@ -81,14 +81,14 @@ export async function apiLiveStatus(): Promise<any|null>{
     const r=await fetch(`${API}/api/live/status`, { headers, cache: "no-store" }); return r.ok ? r.json() : null
   }catch{ return null }
 }
-export async function apiLiveStrategies(): Promise<any|null>{
+export async function apiLiveStrategies(env: "live"|"demo" = "live"): Promise<any|null>{
   try{
     const headers = await signedInHeaders(); if(!headers) return null
-    const r=await fetch(`${API}/api/live/strategies`, { headers, cache: "no-store" }); return r.ok ? r.json() : null
+    const r=await fetch(`${API}/api/live/strategies?env=${env}`, { headers, cache: "no-store" }); return r.ok ? r.json() : null
   }catch{ return null }
 }
-export async function apiSetLiveStrategies(account: string, strategies: string[]): Promise<any>{
-  const r=await fetch(`${API}/api/live/strategies`, { method:"POST", headers: await authHeaders(JSON_CT), body: JSON.stringify({ account, strategies }) })
+export async function apiSetLiveStrategies(env: "live"|"demo", account: string, strategies: string[]): Promise<any>{
+  const r=await fetch(`${API}/api/live/strategies`, { method:"POST", headers: await authHeaders(JSON_CT), body: JSON.stringify({ env, account, strategies }) })
   const d = await r.json().catch(()=>({}))
   if(!r.ok) throw new Error(typeof d.detail === "string" ? d.detail : "ما اتحفظش")
   return d

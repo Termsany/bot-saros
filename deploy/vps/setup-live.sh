@@ -85,8 +85,8 @@ done
 # limits and revoke must reach the bot. The bot and the API create the files themselves (mode 660).
 shared_dir /opt/raqm-risk
 # Demo has its own risk ledger, the bots' alone: play money never touches the real account's limits and kill switch
-[ -L /opt/raqm-risk-demo ] && { echo "refusing: /opt/raqm-risk-demo is a symlink" >&2; exit 3; }
-[ -d /opt/raqm-risk-demo ] || mkdir -m 700 /opt/raqm-risk-demo; chown -h raqmlive:raqmlive /opt/raqm-risk-demo
+# shared with the API like /opt/raqm-risk: the dashboard's Demo yes/no is written there
+shared_dir /opt/raqm-risk-demo
 # per-strategy options (RAQM_ARGS), root's: the daily trend trades the top 10 by volume
 install -d -o root -g root -m 755 "$L/strategies"
 [ -e "$L/strategies/trend_daily.env" ] || echo 'RAQM_ARGS=--leverage 2 --amount 100 --universe 10 --poll 60' > "$L/strategies/trend_daily.env"

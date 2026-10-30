@@ -85,6 +85,30 @@ class StrategyTogglesApiTests(ApiAuthTests):
             self.assertFalse(la.live_activation_allowed(path, strategy="ratio_trend", account="main")[0])
         self.assertEqual(self.put(["ict"]).status_code, 400)
 
+    def test_demo_yes_no_needs_no_server_switch_and_never_touches_the_live_record(self):
+        from app import live_activation as la
+        demo = Path(self.tmp.name) / "demo" / "live_activation.sqlite3"
+        with mock.patch.object(self.m, "DEMO_ACTIVATION_PATH", demo), mock.patch.dict(os.environ, {"ALLOW_LIVE_TRADING": ""}):
+            rows = self.c.get("/api/live/strategies?env=demo", headers=self.h("admin-token")).json()["strategies"]
+            self.assertTrue(all(r["on"] for r in rows))                         # nothing chosen yet: all may enter
+            r = self.c.post("/api/live/strategies", headers=self.h("admin-token"), json={"env": "demo", "strategies": ["momentum_ls"]})
+            self.assertEqual(r.status_code, 200)
+            self.assertTrue(la.demo_strategy_allowed(demo, strategy="momentum_ls")[0])
+            self.assertFalse(la.demo_strategy_allowed(demo, strategy="trend_daily")[0])
+            self.assertIsNone(la.active_record(self.m.LIVE_ACTIVATION_PATH))   # real money untouched
+
+
+class DemoGateTests(unittest.TestCase):
+    def test_demo_bot_obeys_the_demo_choice(self):
+        from app import live_activation as la
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d, mock.patch.dict(os.environ, {"BINANCE_ENV": "demo"}), \
+             mock.patch.object(botmod, "ACTIVATION_PATH", Path(d) / "live_activation.sqlite3"):
+            self.assertTrue(botmod._live_activation_gate("ratio_trend")[0])     # nothing chosen: allowed, file not created
+            self.assertFalse((Path(d) / "live_activation.sqlite3").exists())
+            la.set_demo_strategies(botmod.ACTIVATION_PATH, strategies=["trend_daily"], set_by="t")
+            self.assertFalse(botmod._live_activation_gate("ratio_trend")[0])
+            self.assertTrue(botmod._live_activation_gate("trend_daily")[0])
+
 
 if __name__ == "__main__":
     unittest.main()
