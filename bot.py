@@ -3729,13 +3729,29 @@ def strategy_exchange():
         _strategy_ex["keyed"] = ex
     return _strategy_ex["keyed"]
 
+def _write_basket_live_status(ex):
+    """The basket strategies (listing, momentum, ratio) write the admin page's live status too, after every cycle
+    whatever path it took — without it their bots showed as not running on the dashboard."""
+    if CONFIG["paper_trading"]: return
+    try:
+        state = load_state(); prices = {}
+        if state["positions"]:
+            try:
+                tick = ex.fetch_tickers(list(state["positions"]))
+                prices = {s: float((tick.get(s) or {}).get("last")) for s in state["positions"] if (tick.get(s) or {}).get("last")}
+            except Exception as e: log(f"live status prices: {e}")
+        write_live_status(state, prices)
+    except Exception as e: log(f"live status: {e}")
+
 def run_once():
     if breakout_mode(): return run_once_breakout(strategy_exchange())
     if rsi2_mode(): return run_once_rsi2(strategy_exchange())
     if tbreak_mode(): return run_once_tbreak(strategy_exchange())
-    if ratio_mode(): return run_once_ratio(strategy_exchange())
-    if momentum_mode(): return run_once_momentum(strategy_exchange())
-    if listing_mode(): return run_once_listing(strategy_exchange())
+    for mode, run in ((ratio_mode, run_once_ratio), (momentum_mode, run_once_momentum), (listing_mode, run_once_listing)):
+        if mode():
+            ex = strategy_exchange()
+            try: return run(ex)
+            finally: _write_basket_live_status(ex)
     if trend_mode(): CONFIG["timeframe"]="1d"
     state=load_state()
     ex,err=get_exchange(auth=not CONFIG["paper_trading"])
