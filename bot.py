@@ -2257,7 +2257,6 @@ def reconcile_live(state, ex):
             pnl = futures_net_pnl(pos["entry"], exit_px, pos["qty"], cs, pos.get("side", "long"), fee_rate=_fee_rate(pos, required=True), funding_pnl=_funding_pnl(pos, required=True))
             by_hand = exit_px > float(pos.get("sl") or 0) * 1.01   # well above the stop: closed by hand in the Binance app
             why = "اتقفلت يدوي من Binance" if by_hand else "وقف الحماية اتنفذ على المنصة"
-            if by_hand: state.setdefault("manual_hold", {})[sym] = datetime.now(timezone.utc).isoformat()
             log(f"🔒 {sym}: {why} @ {exit_px:.6g} PnL {pnl:+.2f}")
             notify(f"🔒 قفل {sym} — {why}\nدخول {pos['entry']:.6g} → خروج {exit_px:.6g}\nPnL {pnl:+.2f}$ ({_live_label()})")
             ids = pos.get("oco_ids") or {}
@@ -2459,12 +2458,11 @@ def process_manual_closes(state, ex, prices):
                 state["stats"]["trades"] += 1; state["stats"]["pnl"] += float(pnl); state["stats"]["wins" if pnl > 0 else "losses"] += 1
                 state["positions"].pop(match, None); state["last_trade"][match] = datetime.now(timezone.utc).isoformat()
                 state.get("recovery_required", {}).pop(match, None)
-                state.setdefault("manual_hold", {})[match] = datetime.now(timezone.utc).isoformat()
                 save_state(state)
                 _release_position_risk(match, pos)
                 out.update(ok=True, msg="اتقفلت", price=r["price"], qty=r["qty"], pnl=round(pnl, 4))
                 log(f"🖐️ قفل يدوي {match} @ {r['price']:.6g} PnL {pnl:+.2f} (طلب {req.get('by', '?')})")
-                notify(f"🖐️ قفل يدوي من الموقع: {match}\nدخول {pos['entry']:.6g} → خروج {r['price']:.6g}\nPnL {pnl:+.2f}$ ({_live_label()})\nمش هيشتري العملة دي تاني غير لما الترند يقف ويبدأ من جديد")
+                notify(f"🖐️ قفل يدوي من الموقع: {match}\nدخول {pos['entry']:.6g} → خروج {r['price']:.6g}\nPnL {pnl:+.2f}$ ({_live_label()})\nالمكان فضي — الاستراتيجية بتكمّل وتدخل على إشارتها الجاية")
         except Exception as e:
             out.update(ok=False, msg=f"القفل فشل: {e}")
             log(f"⚠️ قفل يدوي {sym} فشل: {e}"); notify(f"⚠️ القفل اليدوي لـ {sym} فشل: {e} — الوقف لسه على المنصة")
@@ -2619,7 +2617,9 @@ def try_enter_trend(symbol, analysis, state, ex):
         save_state(state)
         if live: _release_position_risk(symbol, pos)
         return
-    hold = state.get("manual_hold", {})
+    # paper: a coin closed by hand waits for its trend to turn off and on again. Live (the owner's account): a manual
+    # close frees the slot and the strategy keeps trading as usual — it may buy the coin again on its next signal
+    hold = state.get("manual_hold", {}) if not live else {}
     if symbol in hold:   # closed by hand: wait for the trend to turn off, then a new signal may buy it again
         if not sig["on"]: hold.pop(symbol, None); save_state(state)
         return

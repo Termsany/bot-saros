@@ -150,6 +150,22 @@ class LeverageAppliedOnceTests(Base):
         self.assertAlmostEqual(pos["qty"], 2.0)             # $100 x2 / $100 — what the paper bot opens
 
 
+class ManualCloseFreesTheSlotTests(Base):
+    """Owner's account (2026-10-30): a manual close doesn't stop the strategy — it may buy the coin again on its next
+    signal (paper keeps the old hold until the trend turns off and on)."""
+    def test_live_trend_buys_the_coin_again_after_a_manual_close(self):
+        st = botmod.load_state(); st.update(positions={}, last_trade={}, trend_seen={}, manual_hold={SYM: "2026-10-30T00:00:00+00:00"})
+        ex = FakeBinance()
+        botmod.try_enter(SYM, SIG_ON, st, ex)
+        self.assertIn(SYM, st["positions"])
+
+    def test_paper_trend_still_waits_for_the_trend_to_reset(self):
+        botmod.CONFIG["paper_trading"] = True
+        st = botmod.load_state(); st.update(positions={}, last_trade={}, trend_seen={}, manual_hold={SYM: "2026-10-30T00:00:00+00:00"})
+        botmod.try_enter(SYM, SIG_ON, st, FakeBinance())
+        self.assertNotIn(SYM, st["positions"])
+
+
 class FreshClientIdTests(Base):
     def test_single_leg_ids_differ_per_attempt(self):
         ids = []
