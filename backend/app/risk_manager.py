@@ -25,24 +25,69 @@ DEFAULT_LIMITS = {
     "capital_reserve_pct": 40.0,      # never put to work: losses and margin safety
     "capital_margin_pct": 1.0,        # margin per trade, % of capital ...
     "capital_min_margin_usdt": 30.0,  # ... never below this (BTC/ETH orders must meet Binance's minimum at x2)
+    "capital_margin_override_usdt": None,   # the owner's own margin per trade (dashboard), instead of the rule
 }
 
 
-def capital_plan(limits, equity_usdt=None):
-    """What the owner's capital allows: margin per trade and the most trades open at once, every strategy together.
-    margin = max(min margin, capital × margin %); max open = capital × (1 − reserve %) ÷ margin. The capital counts at
-    most what the account really holds (equity), so a typo can't open more than the money there. None = no plan set."""
+PLAN_LEVERAGE = 2          # every strategy runs at x2 (unit RAQM_ARGS)
+PLAN_STOP_LOSS = 0.40      # the strategies' protective stop: 40% of the price, i.e. 80% of a trade's margin at x2
+
+
+def _finite(v):
     try:
-        capital = float(limits.get("capital_usdt") or 0)
+        f = float(v)
     except (TypeError, ValueError):
         return None
+    return f if math.isfinite(f) else None
+
+
+def capital_plan(limits, equity_usdt=None):
+    """What the owner's capital allows, every strategy together: margin per trade and the most trades open at once.
+    The capital counts at most what the account really holds (equity), for the size of a trade and for the count, so
+    a typo can't trade more than the money there. Margin: the owner's own (manual) or max(min margin, capital ×
+    margin %); max open = capital × (1 − reserve %) ÷ margin. Also what one stop and every stop at once would cost.
+    None = no plan set; a value that isn't a finite number raises ValueError (the callers refuse the entry)."""
+    capital = _finite(limits.get("capital_usdt") or 0)
+    if capital is None:
+        raise ValueError("capital is not a number")
     if capital <= 0:
         return None
-    effective = min(capital, float(equity_usdt)) if _valid_equity(equity_usdt) else capital
-    margin = max(float(limits.get("capital_min_margin_usdt") or 30.0), capital * float(limits.get("capital_margin_pct") or 1.0) / 100.0)
-    usable = effective * (1.0 - float(limits.get("capital_reserve_pct") if limits.get("capital_reserve_pct") is not None else 40.0) / 100.0)
-    return {"capital": capital, "effective_capital": round(effective, 2), "margin": round(margin, 2),
-            "max_open": max(0, int(usable // margin))}
+    equity = _finite(equity_usdt)
+    effective = min(capital, equity) if equity and equity > 0 else capital
+    reserve = _finite(limits.get("capital_reserve_pct") if limits.get("capital_reserve_pct") is not None else 40.0)
+    pct = _finite(limits.get("capital_margin_pct") or 1.0); floor = _finite(limits.get("capital_min_margin_usdt") or 30.0)
+    manual = _finite(limits.get("capital_margin_override_usdt") or 0)
+    if None in (reserve, pct, floor, manual):
+        raise ValueError("capital plan setting is not a number")
+    margin = manual if manual > 0 else max(floor, effective * pct / 100.0)
+    usable = effective * (1.0 - reserve / 100.0)
+    max_open = max(0, int(usable // margin))
+    loss = margin * PLAN_LEVERAGE * PLAN_STOP_LOSS
+    return {"capital": capital, "effective_capital": round(effective, 2), "margin": round(margin, 2), "manual": manual > 0,
+            "max_open": max_open, "notional": round(margin * PLAN_LEVERAGE, 2),
+            "loss_per_trade": round(loss, 2), "loss_per_trade_pct": round(loss / effective * 100, 2),
+            "worst_case_pct": round(loss * max_open / effective * 100, 1), "level": risk_level(loss / effective * 100)}
+
+
+def risk_level(loss_pct):
+    """How much one stop costs, as a share of the capital: low < 1% ≤ medium < 2% ≤ high < 5% ≤ very high."""
+    return "low" if loss_pct < 1 else "medium" if loss_pct < 2 else "high" if loss_pct < 5 else "very_high"
+
+
+def plan_vs_limits(limits, plan):
+    """Which limit stops entries first with this plan: the count, the per-trade risk limit or the aggregate one."""
+    if not plan:
+        return None
+    per_trade = plan["loss_per_trade_pct"]
+    rpt = float(limits.get("risk_per_trade_pct") or 0); agg = float(limits.get("max_aggregate_risk_pct") or 0)
+    by_aggregate = int(agg // per_trade) if per_trade > 0 else plan["max_open"]
+    if per_trade > rpt:
+        binding, allowed = "risk_per_trade", 0
+    elif by_aggregate < plan["max_open"]:
+        binding, allowed = "aggregate_risk", by_aggregate
+    else:
+        binding, allowed = "capital", plan["max_open"]
+    return {"binding": binding, "allowed": allowed, "risk_per_trade_pct": rpt, "max_aggregate_risk_pct": agg}
 
 
 def _over_capital_plan(state, equity_usdt, adding):
@@ -76,6 +121,7 @@ def _default_state(limits=None):
         "kill_switch": {"tripped": False, "reason": None, "at": None, "by": None},
         "equity_high_water_mark": None,
         "equity_observed_at": None,
+        "equity_last": None,
         "daily": {"date": None, "realized_pnl": 0.0, "start_equity": None},
         "open_risk": {},
     }
@@ -137,7 +183,7 @@ def _ensure_legacy_migrated(con, path):
     _write_state_tx(con, state)
 
 
-_META_KEYS = ("limits", "kill_switch", "equity_high_water_mark", "equity_observed_at", "daily")
+_META_KEYS = ("limits", "kill_switch", "equity_high_water_mark", "equity_observed_at", "daily", "equity_last")
 
 
 def _write_meta_tx(con, state):
@@ -436,6 +482,7 @@ def update_equity_and_check_kill_switch(path, equity_usdt, *, equity_observed_at
             return True, reason
         equity_usdt = float(equity_usdt)
         state["equity_observed_at"] = equity_observed_at or _now()
+        state["equity_last"] = equity_usdt          # the dashboard and the bots' sizing cap the capital with it
         hwm = state.get("equity_high_water_mark")
         if hwm is None or equity_usdt > hwm:
             state["equity_high_water_mark"] = equity_usdt

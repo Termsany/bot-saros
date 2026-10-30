@@ -902,9 +902,16 @@ def htf_trend_ok(symbol, side, ex=None):
         return True
 
 def _capital_plan():
-    """The owner's capital plan from the shared risk ledger (dashboard), or None."""
-    try: return riskmgr.capital_plan(riskmgr.load_risk_state(RISK_PATH)["limits"])
-    except Exception: return None
+    """The owner's capital plan from the shared risk ledger (dashboard), capped by the last account equity; None = no
+    plan set. A ledger that can't be read raises: the entry is refused rather than sized with the service's default."""
+    state = riskmgr.load_risk_state(RISK_PATH)
+    return riskmgr.capital_plan(state["limits"], state.get("equity_last"))
+
+def _meets_min_order(ex, symbol, margin):
+    """margin × leverage reaches the exchange's minimum order value for this coin (BTC $50, ETH $20 ... on Binance)."""
+    try: min_cost = float(((ex.market(symbol).get("limits") or {}).get("cost") or {}).get("min") or 0)
+    except Exception: return True
+    return float(margin) * int(CONFIG.get("leverage", 2)) >= min_cost * 1.02
 
 def position_size(price, ex=None, stop_price=None):
     """Return quote margin; percent-risk mode targets configured worst-case stop loss. Live with a capital plan set on
@@ -3142,6 +3149,14 @@ def _phase2_live_basket(ex, state, strategy, intent, legs, *, reserve=True):
         return None
     if state.get("recovery_required") and not is_exit:
         return None
+    small = [leg["symbol"] for leg in legs if leg.get("action", "entry") == "entry" and not _meets_min_order(ex, leg["symbol"], leg["margin"])]
+    if small:   # Binance would refuse these legs after the others filled: the basket would only be unwound
+        log(f"⏸️ {intent}: المارجن أقل من أقل أمر على Binance لـ {', '.join(small)} — السلة مش هتدخل (ارفع المارجن)")
+        warned = state.setdefault("min_order_warned", {})
+        if warned.get(intent) != datetime.now(timezone.utc).date().isoformat():
+            warned[intent] = datetime.now(timezone.utc).date().isoformat(); save_state(state)
+            notify(f"⚠️ {strategy}: السلة مش هتدخل — المارجن أقل من أقل أمر على Binance لـ {', '.join(small)}. ارفع المارجن من الداشبورد.")
+        return None
     backoff = (state.get("basket_backoff") or {}).get(f"{strategy}:{intent}")
     if backoff and not is_exit and datetime.now(timezone.utc) < datetime.fromisoformat(backoff["until"]):
         return None   # this basket failed and was unwound lately: not again every poll
@@ -3339,6 +3354,8 @@ def _single_leg_live_entry(ex, state, symbol, side, margin, price, sl, tp, strat
         return None
     if _ENTRY_BLOCK.get("reason") or state.get("recovery_required"):
         return None
+    if not _meets_min_order(ex, symbol, margin):
+        log(f"⏸️ {symbol}: المارجن {margin:.2f}$ × {CONFIG.get('leverage', 2)} أقل من أقل أمر على Binance — مفيش دخول (ارفع المارجن)"); return None
     refused = state.get("stop_refused") or {}
     if symbol in refused and datetime.now(timezone.utc) - datetime.fromisoformat(refused[symbol]) < pd.Timedelta(days=1):
         return None   # the exchange refused this coin's stop today: buying again would only buy, refuse, sell again
