@@ -33,12 +33,17 @@ class SchedulerTestBase(unittest.TestCase):
         self._old_master = os.environ.get("VAULT_MASTER_KEY")
         from cryptography.fernet import Fernet
         os.environ["VAULT_MASTER_KEY"] = Fernet.generate_key().decode()
+        self._old_allow = os.environ.get("ALLOW_LIVE_TRADING"); os.environ["ALLOW_LIVE_TRADING"] = "true"
+        self._old_risk_dir = os.environ.pop("RAQM_RISK_DIR", None)
 
     def tearDown(self):
         self.vault_patch.stop()
         import os
         if self._old_master is None: os.environ.pop("VAULT_MASTER_KEY", None)
         else: os.environ["VAULT_MASTER_KEY"] = self._old_master
+        if self._old_allow is None: os.environ.pop("ALLOW_LIVE_TRADING", None)
+        else: os.environ["ALLOW_LIVE_TRADING"] = self._old_allow
+        if self._old_risk_dir is not None: os.environ["RAQM_RISK_DIR"] = self._old_risk_dir
         self.tmp.cleanup()
 
     def _enable(self, user_id, exchange="binance", **kw):
@@ -55,6 +60,29 @@ class ZeroUsersNoCallsTests(SchedulerTestBase):
                                            analysis_provider=lambda s: SIG_ON, exchange_factory=factory)
         self.assertEqual(result["users_processed"], 0)
         factory.assert_not_called()
+
+
+class ServerSwitchTests(SchedulerTestBase):
+    def test_tick_refuses_while_the_server_switch_is_off(self):
+        import os
+        os.environ["ALLOW_LIVE_TRADING"] = ""
+        self._enable("u1"); factory = mock.Mock()
+        r = sched.run_scheduler_tick(bot_dir=self.bot_dir, activation_path=self.activation_path, watch_symbols=["SOL/USDT:USDT"],
+                                     analysis_provider=lambda s: SIG_ON, exchange_factory=factory)
+        self.assertIn("ALLOW_LIVE_TRADING", r["skipped"]); factory.assert_not_called()
+
+    def test_tick_refuses_while_the_operator_kill_switch_is_tripped(self):
+        import os
+        riskmgr.save_risk_state(self.bot_dir / "risk_state.json", riskmgr._default_state())
+        riskmgr.trip_kill_switch(self.bot_dir / "risk_state.json", "operator")
+        os.environ["RAQM_RISK_DIR"] = str(self.bot_dir)
+        try:
+            self._enable("u1"); factory = mock.Mock()
+            r = sched.run_scheduler_tick(bot_dir=self.bot_dir, activation_path=self.activation_path, watch_symbols=["SOL/USDT:USDT"],
+                                         analysis_provider=lambda s: SIG_ON, exchange_factory=factory)
+        finally:
+            os.environ.pop("RAQM_RISK_DIR", None)
+        self.assertIn("kill switch", r["skipped"]); factory.assert_not_called()
 
 
 class PerUserIsolationTests(SchedulerTestBase):

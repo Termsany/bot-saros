@@ -102,8 +102,11 @@ app.add_middleware(CORSMiddleware, allow_origins=ALLOWED_ORIGINS, allow_methods=
 
 def llm_lab_allowed() -> bool:
     """Running LLM-written code is opt-in (ENABLE_LLM_LAB=true) and never on a server that can trade real money:
-    the sandbox is an AST blocklist + child process as the same OS user, which can read .env and vault.json."""
-    return os.getenv("ENABLE_LLM_LAB", "").strip().lower() == "true" and not live_trading_allowed()
+    the sandbox is an AST blocklist + child process as the same OS user, which can read .env and vault.json.
+    RAQM_RISK_DIR set means this API shares the real-money bot's risk ledger and activation record (and its IPC):
+    that bot keeps trading on its own flag even if this API's ALLOW_LIVE_TRADING is switched off."""
+    return (os.getenv("ENABLE_LLM_LAB", "").strip().lower() == "true" and not live_trading_allowed()
+            and not os.getenv("RAQM_RISK_DIR", "").strip())
 
 def _require_llm_lab():
     if not llm_lab_allowed():
@@ -878,6 +881,18 @@ class PaperCloseReq(BaseModel):
     bot: str
     symbol: str = Field(max_length=60)
 
+def _drop_request(d: Path, root: Path, rid: str, cmd: dict):
+    """A close request file in `d`: the folder must really be inside `root` (no link swapped in for it — a paper
+    bot's commands/ pointing at the real-money bot's folder would turn a paper close into a real one), and the file
+    is created new (O_EXCL, O_NOFOLLOW) then renamed in, so nothing planted there is written through."""
+    real, base = os.path.realpath(d), os.path.realpath(root)
+    if os.path.islink(d) or os.path.commonpath([real, base]) != base or real != os.path.normpath(os.path.join(base, os.path.relpath(d, root))):
+        raise HTTPException(500, "request folder is not where it should be — refused")
+    tmp = os.path.join(real, f".close-{rid}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o660)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh: fh.write(json.dumps(cmd))
+    os.replace(tmp, os.path.join(real, f"close-{rid}.json"))   # the bot only picks up close-*.json
+
 @app.post("/api/paper/close")
 async def paper_close(req: PaperCloseReq, user: dict = Depends(require_admin)):
     """Admin: close one position of a paper bot. The bot runs the request within a cycle (one minute) and only closes."""
@@ -889,10 +904,7 @@ async def paper_close(req: PaperCloseReq, user: dict = Depends(require_admin)):
     else: found = any(p.get("symbol", "").split(":")[0] == req.symbol.split(":")[0] for p in data.get("positions") or [])
     if not found: raise HTTPException(404, "no open position on that coin")
     rid = uuid.uuid4().hex
-    d = PAPER_IPC / req.bot / "commands"
-    tmp = d / f".close-{rid}.tmp"
-    tmp.write_text(json.dumps({"id": rid, "symbol": req.symbol, "at_epoch": _time.time(), "by": user.get("email")}), encoding="utf-8")
-    tmp.replace(d / f"close-{rid}.json")
+    _drop_request(PAPER_IPC / req.bot / "commands", PAPER_IPC, rid, {"id": rid, "symbol": req.symbol, "at_epoch": _time.time(), "by": user.get("email")})
     return {"ok": True, "id": rid}
 
 @app.get("/api/paper/close/{bot}/{rid}")
@@ -1147,10 +1159,7 @@ async def live_close(req: LiveCloseReq, user: dict = Depends(require_admin)):
         raise HTTPException(404, "no open position on that coin")
     rid = uuid.uuid4().hex
     cmd = {"id": rid, "symbol": sym, "at_epoch": _time.time(), "by": user.get("email")}
-    d = IPC_DIR / "commands"
-    tmp = d / f".close-{rid}.tmp"
-    tmp.write_text(json.dumps(cmd), encoding="utf-8")
-    tmp.replace(d / f"close-{rid}.json")   # the bot only picks up close-*.json: never a half-written file
+    _drop_request(IPC_DIR / "commands", IPC_DIR, rid, cmd)
     try:
         from app.telegram_bot import send_telegram
         await send_telegram(f"🖐️ manual close requested from the site: {sym} ({user.get('email')})")
@@ -1504,10 +1513,15 @@ async def keys_live(user: dict = Depends(require_admin)):
 USER_LIVE_ACTIVATION_PATH = BOT_DIR / "user_live_activation.sqlite3"
 
 class UserSaveKeyReq(_BM2):
-    exchange: str
-    apiKey: str
-    secret: str
-    passphrase: str = ""
+    # bounded: every save re-encrypts the whole shared vault on the API's single worker
+    exchange: str = Field(max_length=20)
+    apiKey: str = Field(max_length=256)
+    secret: str = Field(max_length=256)
+    passphrase: str = Field(default="", max_length=128)
+
+def _require_confirmed(user: dict):
+    if not user.get("email_confirmed"):
+        raise HTTPException(403, "confirm your email first")
 
 class UserLiveEnableReq(_BM2):
     exchange: str
@@ -1523,6 +1537,7 @@ async def user_keys_status(user: dict = Depends(require_user)):
 
 @app.post("/api/user/keys/save")
 async def user_keys_save(req: UserSaveKeyReq, user: dict = Depends(require_user)):
+    _require_confirmed(user)
     from app.user_keys_vault import save_user_keys
     try:
         save_user_keys(user["id"], req.exchange.lower().strip(), req.apiKey.strip(), req.secret.strip(), req.passphrase.strip())
@@ -1551,6 +1566,9 @@ async def user_live_status(user: dict = Depends(require_user)):
 
 @app.post("/api/user/live/enable")
 async def user_live_enable(req: UserLiveEnableReq, request: Request, user: dict = Depends(require_user)):
+    _require_confirmed(user)
+    if not live_trading_allowed():   # per-user live trading obeys the server's real-money switch like everything else
+        raise HTTPException(403, "live trading is off on this server")
     from app.user_keys_vault import has_live_configured_keys
     from app.user_live_activation import enable_user_live
     ex = req.exchange.lower().strip()

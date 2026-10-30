@@ -33,12 +33,20 @@ def _load_all():
 
 
 def _write_all(data):
+    """New file, then rename over the vault: a crash mid-write used to leave every user's keys unreadable."""
+    import os, tempfile
     f = get_fernet()
-    VAULT_PATH.write_bytes(f.encrypt(json.dumps(data, ensure_ascii=False).encode()))
+    blob = f.encrypt(json.dumps(data, ensure_ascii=False).encode())
+    fd, tmp = tempfile.mkstemp(dir=str(VAULT_PATH.parent), prefix=".user_vault-", suffix=".tmp")
     try:
-        VAULT_PATH.chmod(0o600)
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(blob); fh.flush(); os.fsync(fh.fileno())
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, VAULT_PATH)
     except Exception:
-        pass
+        try: os.unlink(tmp)
+        except OSError: pass
+        raise
 
 
 def save_user_keys(user_id: str, exchange: str, apiKey: str, secret: str, passphrase: str = ""):

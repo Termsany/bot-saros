@@ -108,6 +108,22 @@ def reconcile_user_positions(user_id: str, ex, bot_dir) -> dict:
     return findings
 
 
+def _server_allows_live():
+    """The server's own real-money switch and the operator's kill switch bind per-user trading too (not wired yet:
+    when it is, exits must still run while this refuses)."""
+    import os
+    if os.getenv("ALLOW_LIVE_TRADING", "").strip().lower() != "true":
+        return False, "ALLOW_LIVE_TRADING is off"
+    d = os.getenv("RAQM_RISK_DIR", "").strip()
+    if d:
+        try:
+            if riskmgr.load_risk_state(Path(d) / "risk_state.json")["kill_switch"].get("tripped"):
+                return False, "operator kill switch is tripped"
+        except Exception as e:
+            return False, f"operator risk ledger unreadable: {e}"
+    return True, None
+
+
 def poll_user_kill_switch(user_id: str, ex, bot_dir) -> tuple[bool, Optional[str]]:
     """Re-checks this user's own equity against their own risk ledger's
     kill-switch/drawdown limits, independent of any strategy signal. A trip
@@ -130,6 +146,9 @@ def run_scheduler_tick(*, bot_dir, activation_path=None, watch_symbols: Iterable
     defaults to the per-user-keys-only ccxt factory; tests inject a fake.
     """
     activation_path = activation_path or (Path(bot_dir) / "user_live_activation.sqlite3")
+    ok, why = _server_allows_live()
+    if not ok:
+        return {"skipped": why}
     if not _TICK_LOCK.acquire(blocking=False):
         return {"skipped": "previous tick still running"}
     try:
