@@ -30,6 +30,7 @@ DEFAULT_LIMITS = {
 
 
 PLAN_LEVERAGE = 2          # every strategy runs at x2 (unit RAQM_ARGS)
+MIN_MARGIN_USDT = 3.0      # Binance's smallest order is $5: at x2 a margin below ~$3 can't buy anything
 PLAN_STOP_LOSS = 0.40      # the strategies' protective stop: 40% of the price, i.e. 80% of a trade's margin at x2
 
 
@@ -59,7 +60,14 @@ def capital_plan(limits, equity_usdt=None):
     manual = _finite(limits.get("capital_margin_override_usdt") or 0)
     if None in (reserve, pct, floor, manual):
         raise ValueError("capital plan setting is not a number")
-    margin = manual if manual > 0 else max(floor, effective * pct / 100.0)
+    rule = max(floor, effective * pct / 100.0)
+    rpt = _finite(limits.get("risk_per_trade_pct") or DEFAULT_LIMITS["risk_per_trade_pct"])
+    if rpt is None or rpt <= 0:
+        raise ValueError("risk per trade is not a positive number")
+    # small capital (owner, 2026-10-30): the margin comes down until one stop costs at most the per-trade risk limit,
+    # so the plan always trades instead of every entry being refused; coins whose minimum order is above it are skipped
+    by_risk = math.floor(effective * rpt / 100.0 / (PLAN_LEVERAGE * PLAN_STOP_LOSS) * 0.99 * 100) / 100
+    margin = manual if manual > 0 else max(min(rule, by_risk), MIN_MARGIN_USDT)
     usable = effective * (1.0 - reserve / 100.0)
     max_open = max(0, int(usable // margin))
     loss = margin * PLAN_LEVERAGE * PLAN_STOP_LOSS
