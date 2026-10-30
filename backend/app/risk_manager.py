@@ -269,6 +269,12 @@ def strategy_open_risk_pct(state, equity_usdt, strategy):
                if r.get("strategy") == strategy) / float(equity_usdt) * 100.0
 
 
+def _plan_set(limits):
+    """The owner's capital plan is set: then only the account's count and limits bind (owner, 2026-10-30), so the
+    allocation is not split per strategy. The allocation is still validated: an invalid one still refuses."""
+    return capital_plan(limits) is not None
+
+
 def _strategy_cap_pct(limits, share):
     """Absolute strategy cap (in % of equity) from its share of the aggregate risk budget.
 
@@ -370,7 +376,7 @@ def pre_trade_gate(path, *, strategy, symbol, side, risk_usdt, notional_usdt,
                 con.execute("ROLLBACK")
                 return False, f"invalid strategy risk allocation {strategy_risk_share!r}"
             strat = strategy_open_risk_pct(state, equity_usdt, strategy) or 0.0
-            if strat + pct > strategy_cap + 1e-9:
+            if not _plan_set(limits) and strat + pct > strategy_cap + 1e-9:
                 con.execute("ROLLBACK")
                 return False, (f"strategy open risk {strat:.3f}% + new {pct:.3f}% would exceed its allocation "
                                f"{float(strategy_risk_share):.4g} of the aggregate budget ({strategy_cap:.3f}% of equity)")
@@ -453,7 +459,7 @@ def pre_trade_gate_basket(path, *, strategy, legs, equity_usdt, equity_observed_
             if strategy_cap is None:
                 con.execute("ROLLBACK"); return False, f"invalid strategy risk allocation {strategy_risk_share!r}"
             strat = strategy_open_risk_pct(state, equity_usdt, strategy) or 0.0
-            if strat + total_pct > strategy_cap + 1e-9:
+            if not _plan_set(limits) and strat + total_pct > strategy_cap + 1e-9:
                 con.execute("ROLLBACK")
                 return False, (f"strategy open risk {strat:.3f}% + basket {total_pct:.3f}% would exceed its allocation "
                                f"{float(strategy_risk_share):.4g} of the aggregate budget ({strategy_cap:.3f}% of equity)")
