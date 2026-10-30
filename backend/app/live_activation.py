@@ -104,6 +104,48 @@ def live_activation_allowed(path, *, strategy, account):
         con.close()
 
 
+# ── Demo (play money): yes/no per strategy, same meaning as the live record (an off strategy stops entering, its open
+# positions still exit) but no approval workflow and no ALLOW_LIVE_TRADING — it lives in the Demo ledger's folder, so
+# it can never be read by a real-money bot. No choice saved yet = every strategy may enter (as before).
+
+def _demo_table(con):
+    con.execute("""CREATE TABLE IF NOT EXISTS demo_selection (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, strategies TEXT NOT NULL, set_by TEXT NOT NULL, set_at TEXT NOT NULL)""")
+
+
+def set_demo_strategies(path, *, strategies, set_by):
+    con = _connect(path)
+    try:
+        _demo_table(con)
+        con.execute("INSERT INTO demo_selection(strategies,set_by,set_at) VALUES(?,?,?)",
+                    (json.dumps(sorted(set(strategies))), str(set_by), _now()))
+    finally:
+        con.close()
+
+
+def demo_strategies(path):
+    """The latest Demo choice as a list, or None when nothing was chosen yet."""
+    if not Path(path).exists():
+        return None                       # read-only: never creates the file
+    con = _connect(path)
+    try:
+        _demo_table(con)
+        row = con.execute("SELECT strategies FROM demo_selection ORDER BY id DESC LIMIT 1").fetchone()
+        return json.loads(row["strategies"]) if row else None
+    finally:
+        con.close()
+
+
+def demo_strategy_allowed(path, *, strategy):
+    try:
+        chosen = demo_strategies(path)
+    except (sqlite3.Error, json.JSONDecodeError, TypeError, ValueError) as exc:
+        return False, f"demo selection unavailable: {exc}"
+    if chosen is None or strategy in chosen:
+        return True, None
+    return False, "strategy is turned off for Demo on the dashboard"
+
+
 def active_record(path):
     con = _connect(path)
     try:

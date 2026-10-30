@@ -11,6 +11,7 @@ const LABELS: Record<string, string> = {
 /** The admin's own live account: yes/no per strategy (the activation record the bots check before every entry),
  *  and each strategy's bot with its positions. A strategy turned off stops entering; its open positions still exit. */
 export function LiveStrategies(){
+  const [env, setEnv] = useState<"demo"|"live">("demo")
   const [cfg, setCfg] = useState<any|null|undefined>(undefined)
   const [status, setStatus] = useState<any|null>(null)
   const [chosen, setChosen] = useState<Set<string>>(new Set())
@@ -19,21 +20,22 @@ export function LiveStrategies(){
   const [saving, setSaving] = useState(false)
 
   const load = useCallback(async () => {
-    const [c, s] = await Promise.all([apiLiveStrategies(), apiLiveStatus()])
+    const [c, s] = await Promise.all([apiLiveStrategies(env), apiLiveStatus()])
     setCfg(c); setStatus(s)
     if(c){
       setChosen(new Set(c.strategies.filter((r: any) => r.on).map((r: any) => r.id)))
       setAccount(a => a || c.account || "")
     }
-  }, [])
+  }, [env])
   useEffect(() => { load(); const t = setInterval(load, 15_000); return () => clearInterval(t) }, [load])
 
   async function save(){
     const list = [...chosen]
-    const text = list.length ? `تشغيل بفلوس حقيقية على حساب "${account}":\n${list.map(s => LABELS[s] || s).join("\n")}\n\nأي استراتيجية مش في القايمة هتبطّل تدخل صفقات جديدة.` : "إيقاف كل الاستراتيجيات عن الدخول بفلوس حقيقية؟"
+    const where = env === "demo" ? "على حساب الـ Demo (فلوس وهمية)" : `بفلوس حقيقية على حساب "${account}"`
+    const text = list.length ? `تشغيل ${where}:\n${list.map(s => LABELS[s] || s).join("\n")}\n\nأي استراتيجية مش في القايمة هتبطّل تدخل صفقات جديدة.` : `إيقاف كل الاستراتيجيات عن الدخول ${where}؟`
     if(!confirm(text)) return
     setSaving(true); setMsg("")
-    try{ await apiSetLiveStrategies(account.trim(), list); setMsg("✅ اتحفظ"); load() }
+    try{ await apiSetLiveStrategies(env, account.trim(), list); setMsg("✅ اتحفظ"); load() }
     catch(e: any){ setMsg(`⚠️ ${e.message}`) }
     finally{ setSaving(false) }
   }
@@ -45,13 +47,19 @@ export function LiveStrategies(){
     <div className="space-y-3">
       <div className="rounded-2xl border border-line bg-surface p-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-sm font-black">الاستراتيجيات على حسابك الحقيقي</h2>
-          <span className={`text-[11px] ${cfg.enabled ? "text-profit" : "text-loss"}`}>{cfg.enabled ? "التداول الحقيقي مسموح على السيرفر" : "التداول الحقيقي مقفول على السيرفر (ALLOW_LIVE_TRADING)"}</span>
+          <h2 className="text-sm font-black">الاستراتيجيات على حسابك</h2>
+          <div className="flex gap-1 text-xs">
+            {(["demo", "live"] as const).map(e => (
+              <button key={e} onClick={() => { setEnv(e); setCfg(undefined); setMsg("") }}
+                className={`rounded-lg px-3 py-1 font-bold ${env === e ? "bg-corona text-bg" : "border border-line text-muted"}`}>{e === "demo" ? "Demo (فلوس وهمية)" : "فلوس حقيقية"}</button>
+            ))}
+          </div>
         </div>
+        {env === "live" && <div className={`mt-1 text-[11px] ${cfg.enabled ? "text-profit" : "text-loss"}`}>{cfg.enabled ? "التداول الحقيقي مسموح على السيرفر" : "التداول الحقيقي مقفول على السيرفر (ALLOW_LIVE_TRADING)"}</div>}
         <p className="mt-1 text-xs text-muted">نعم = الاستراتيجية تقدر تدخل صفقات على حسابك. لا = مش هتدخل جديد، والمفتوح بيخرج على قاعدته ووقفه.</p>
-        <label className="mt-3 block text-xs text-muted">اسم الحساب (لازم يطابق BINANCE_LIVE_ACCOUNT على السيرفر)
+        {env === "live" && <label className="mt-3 block text-xs text-muted">اسم الحساب (لازم يطابق BINANCE_LIVE_ACCOUNT على السيرفر)
           <input value={account} onChange={e => setAccount(e.target.value)} dir="ltr" className="mt-1 block w-full max-w-xs rounded-lg border border-line bg-bg px-2 py-1.5 text-sm" />
-        </label>
+        </label>}
         <div className="mt-3 grid gap-2 sm:grid-cols-2">
           {cfg.strategies.map((r: any) => (
             <label key={r.id} className="flex cursor-pointer items-center justify-between gap-2 rounded-xl border border-line/70 px-3 py-2">
@@ -67,7 +75,7 @@ export function LiveStrategies(){
           ))}
         </div>
         <div className="mt-3 flex items-center gap-3">
-          <button onClick={save} disabled={saving || !changed || (!account.trim() && chosen.size > 0)}
+          <button onClick={save} disabled={saving || !changed || (env === "live" && !account.trim() && chosen.size > 0)}
             className="rounded-lg bg-corona px-4 py-2 text-xs font-black text-bg disabled:opacity-40">{saving ? "بيحفظ…" : "احفظ"}</button>
           {msg && <span className="text-xs text-muted">{msg}</span>}
         </div>

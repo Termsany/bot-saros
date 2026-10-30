@@ -15,6 +15,8 @@ Environment=RAQM_IPC_DIR=/opt/raqm-ipc
 Environment=RAQM_PAPER_IPC=/opt/raqm-ipc-paper
 # risk ledger + live activation record, shared with the real-orders bot (deploy/vps/setup-live.sh)
 Environment=RAQM_RISK_DIR=/opt/raqm-risk
+# the Demo bots' own ledger folder: the dashboard's Demo yes/no
+Environment=RAQM_RISK_DIR_DEMO=/opt/raqm-risk-demo
 # one worker: the admin bot loop and the rate limits live in this process's memory; nginx in front (api.da3m.io)
 ExecStart=/opt/raqm-api/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8100 --proxy-headers --forwarded-allow-ips 127.0.0.1
 Restart=always
@@ -23,7 +25,7 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-ReadWritePaths=/opt/raqm-api /opt/raqm-ipc /opt/raqm-ipc-paper /opt/raqm-risk
+ReadWritePaths=/opt/raqm-api /opt/raqm-ipc /opt/raqm-ipc-paper /opt/raqm-risk /opt/raqm-risk-demo
 
 [Install]
 WantedBy=multi-user.target

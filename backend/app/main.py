@@ -1102,8 +1102,12 @@ class LiveCloseReq(BaseModel):
     symbol: str
 
 class LiveStrategiesReq(BaseModel):
-    account: str = Field(min_length=1, max_length=120)
+    env: str = Field(default="live", pattern=r"^(live|demo)$")
+    account: str = Field(default="", max_length=120)
     strategies: List[str] = Field(max_length=len(LIVE_STRATEGIES))
+
+# Demo (play money) bots keep their own risk ledger and Demo yes/no here; never a real-money bot's folder
+DEMO_ACTIVATION_PATH = Path(os.getenv("RAQM_RISK_DIR_DEMO", "/opt/raqm-risk-demo")) / "live_activation.sqlite3"
 
 def _live_strategy(name: str) -> str:
     if name not in LIVE_STRATEGIES: raise HTTPException(400, "unknown live strategy")
@@ -1136,17 +1140,24 @@ async def live_status(user: dict = Depends(require_admin)):
 
 
 @app.get("/api/live/strategies")
-async def live_strategies(user: dict = Depends(require_admin)):
-    """Which strategies may trade on the admin's live account (the active activation record) and how each bot is."""
-    record = live_activation.active_record(LIVE_ACTIVATION_PATH)
-    on = set((record or {}).get("strategies") or [])
+async def live_strategies(env: str = "live", user: dict = Depends(require_admin)):
+    """Which strategies may enter on the admin's account — real money (the active activation record) or Demo (the Demo
+    yes/no) — and how each bot is."""
+    if env not in ("live", "demo"): raise HTTPException(400, "env must be live or demo")
+    if env == "demo":
+        chosen = live_activation.demo_strategies(DEMO_ACTIVATION_PATH)
+        record, on = None, set(LIVE_STRATEGIES if chosen is None else chosen)
+    else:
+        record = live_activation.active_record(LIVE_ACTIVATION_PATH)
+        on = set((record or {}).get("strategies") or [])
     rows = []
     for s in LIVE_STRATEGIES:
         st = _live_status_of(s)
         rows.append({"id": s, "on": s in on, "running": st.get("running", False), "env": st.get("env"),
                      "positions": len(st.get("positions") or []), "entry_block": st.get("entry_block") or "",
                      "review": list((st.get("review") or {}).keys())})
-    return {"enabled": live_trading_allowed(), "account": (record or {}).get("account"), "record": record, "strategies": rows}
+    return {"env": env, "enabled": live_trading_allowed() if env == "live" else True,
+            "account": (record or {}).get("account"), "record": record, "strategies": rows}
 
 
 @app.post("/api/live/strategies")
@@ -1155,6 +1166,12 @@ async def live_strategies_set(req: LiveStrategiesReq, user: dict = Depends(requi
     revoke). A strategy turned off stops entering; its open positions still exit on their own rules and stops."""
     for s in req.strategies: _live_strategy(s)
     actor = str(user.get("email") or user.get("id"))
+    if req.env == "demo":   # play money: no approval workflow, no server switch
+        live_activation.set_demo_strategies(DEMO_ACTIVATION_PATH, strategies=req.strategies, set_by=actor)
+        admin_control.audit(BOT_DIR, actor, "demo_strategies", "ok", {"strategies": sorted(set(req.strategies))})
+        return {"ok": True, "env": "demo", "strategies": sorted(set(req.strategies))}
+    if not req.account.strip():
+        raise HTTPException(422, "the live account name is required")
     if not req.strategies:
         live_activation.revoke(LIVE_ACTIVATION_PATH, reason=f"all live strategies turned off by {actor}")
         admin_control.audit(BOT_DIR, actor, "live_strategies", "ok", {"strategies": []})
