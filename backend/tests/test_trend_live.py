@@ -348,7 +348,7 @@ class ManualCloseTests(TrendLiveTests):
         (ipc / "commands" / "close-x.json").write_text(json.dumps({"id": rid or self.RID, "symbol": symbol,
                                                                    "at_epoch": time.time() - age if at is None else at, "by": "admin"}))
 
-    def test_site_close_closes_records_and_holds_the_coin(self):
+    def test_site_close_closes_records_and_frees_the_slot(self):
         ex = FakeBinance(); ipc = Path(self.td.name) / "ipc"
         botmod.try_enter("SOL/USDT:USDT", SIG_ON, self.state, ex)
         self._request(ipc, "SOL/USDT")
@@ -359,12 +359,9 @@ class ManualCloseTests(TrendLiveTests):
         self.assertTrue(res["ok"]); self.assertNotIn("SOL/USDT:USDT", self.state["positions"])
         self.assertEqual(self.state["history"][-1]["reason"], "قفل يدوي من الموقع")
         self.assertFalse(list((ipc / "commands").glob("*.json")))
-        n = len(ex.orders)                                   # trend still on, next day: no re-buy while held
+        n = len(ex.orders)                                   # owner's account: the slot is free, the next signal buys again
         botmod.try_enter("SOL/USDT:USDT", {**SIG_ON, "trend": {"on": True, "ts": 5, "size": 1.0}}, self.state, ex)
-        self.assertEqual(len(ex.orders), n)
-        botmod.try_enter("SOL/USDT:USDT", {**SIG_OFF, "trend": {"on": False, "ts": 6, "size": 1.0}}, self.state, ex)
-        botmod.try_enter("SOL/USDT:USDT", {**SIG_ON, "trend": {"on": True, "ts": 7, "size": 1.0}}, self.state, ex)
-        self.assertGreater(len(ex.orders), n)                # off then on again: a new signal may buy
+        self.assertGreater(len(ex.orders), n)
 
     def test_old_request_is_dropped_not_executed(self):
         ex = FakeBinance(); ipc = Path(self.td.name) / "ipc"
