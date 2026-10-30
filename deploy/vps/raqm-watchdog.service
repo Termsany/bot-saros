@@ -14,3 +14,5 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ReadWritePaths=/opt/raqm-live/state
+# the risk ledgers are SQLite: even a read needs their folder writable (journal/WAL files)
+ReadWritePaths=-/opt/raqm-risk-demo -/opt/raqm-risk
