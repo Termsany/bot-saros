@@ -1,0 +1,180 @@
+{
+ "meta": {
+  "generatedAt": "2026-10-30",
+  "from": "2019-09-01",
+  "margin_usdt": 20,
+  "leverage": 2,
+  "fee_per_side": 0.0004,
+  "note": "pnl and drawdown are per $ of margin: multiply by the Demo margin"
+ },
+ "strategies": {
+  "trend_daily": {
+   "all": {
+    "trades": 911,
+    "per_month": 11.4,
+    "win_rate": 30.4,
+    "avg_win_pct": 55.5,
+    "avg_loss_pct": -11.0,
+    "profit_factor": 2.2,
+    "max_dd_margins": 15.6,
+    "net_margins": 83.8
+   },
+   "since_2024": {
+    "trades": 406,
+    "per_month": 12.1,
+    "win_rate": 33.7,
+    "avg_win_pct": 47.7,
+    "avg_loss_pct": -10.8,
+    "profit_factor": 2.26,
+    "max_dd_margins": 5.3,
+    "net_margins": 36.4
+   },
+   "max_open": 20,
+   "to": "2026-10-20"
+  },
+  "listing_short": {
+   "all": {
+    "trades": 250,
+    "per_month": 3.7,
+    "win_rate": 52.8,
+    "avg_win_pct": 93.9,
+    "avg_loss_pct": -74.1,
+    "profit_factor": 1.42,
+    "max_dd_margins": 17.7,
+    "net_margins": 36.4
+   },
+   "since_2024": {
+    "trades": 153,
+    "per_month": 4.7,
+    "win_rate": 54.2,
+    "avg_win_pct": 92.6,
+    "avg_loss_pct": -74.4,
+    "profit_factor": 1.48,
+    "max_dd_margins": 9.6,
+    "net_margins": 24.8
+   },
+   "max_open": 11,
+   "to": "2026-10-20"
+  },
+  "momentum_ls": {
+   "all": {
+    "trades": 3400,
+    "per_month": 43.6,
+    "win_rate": 48.7,
+    "avg_win_pct": 36.3,
+    "avg_loss_pct": -29.0,
+    "profit_factor": 1.19,
+    "max_dd_margins": 12.1,
+    "net_margins": 94.0
+   },
+   "since_2024": {
+    "trades": 1469,
+    "per_month": 43.8,
+    "win_rate": 49.9,
+    "avg_win_pct": 41.2,
+    "avg_loss_pct": -32.7,
+    "profit_factor": 1.25,
+    "max_dd_margins": 9.1,
+    "net_margins": 61.1
+   },
+   "max_open": 20,
+   "to": "2026-10-20"
+  },
+  "ratio_trend": {
+   "all": {
+    "trades": 3931,
+    "per_month": 50.2,
+    "win_rate": 31.3,
+    "avg_win_pct": 47.9,
+    "avg_loss_pct": -15.9,
+    "profit_factor": 1.37,
+    "max_dd_margins": 39.7,
+    "net_margins": 159.8
+   },
+   "since_2024": {
+    "trades": 1766,
+    "per_month": 52.6,
+    "win_rate": 29.2,
+    "avg_win_pct": 50.1,
+    "avg_loss_pct": -15.8,
+    "profit_factor": 1.31,
+    "max_dd_margins": 39.7,
+    "net_margins": 61.4
+   },
+   "max_open": 29,
+   "to": "2026-10-20"
+  },
+  "vol_breakout": {
+   "all": {
+    "trades": 3319,
+    "per_month": 40.4,
+    "win_rate": 47.3,
+    "avg_win_pct": 8.7,
+    "avg_loss_pct": -6.4,
+    "profit_factor": 1.23,
+    "max_dd_margins": 6.1,
+    "net_margins": 25.4
+   },
+   "since_2024": {
+    "trades": 1347,
+    "per_month": 40.4,
+    "win_rate": 45.8,
+    "avg_win_pct": 8.8,
+    "avg_loss_pct": -6.2,
+    "profit_factor": 1.19,
+    "max_dd_margins": 2.5,
+    "net_margins": 8.8
+   },
+   "max_open": 13,
+   "to": "2026-10-12"
+  },
+  "rsi2_pullback": {
+   "all": {
+    "trades": 306,
+    "per_month": 4.0,
+    "win_rate": 65.4,
+    "avg_win_pct": 13.2,
+    "avg_loss_pct": -14.4,
+    "profit_factor": 1.73,
+    "max_dd_margins": 2.4,
+    "net_margins": 11.2
+   },
+   "since_2024": {
+    "trades": 142,
+    "per_month": 4.2,
+    "win_rate": 63.4,
+    "avg_win_pct": 13.1,
+    "avg_loss_pct": -11.2,
+    "profit_factor": 2.02,
+    "max_dd_margins": 1.4,
+    "net_margins": 6.0
+   },
+   "max_open": 8,
+   "to": "2026-10-20"
+  },
+  "trend_breakout": {
+   "all": {
+    "trades": 604,
+    "per_month": 8.2,
+    "win_rate": 36.3,
+    "avg_win_pct": 91.1,
+    "avg_loss_pct": -34.4,
+    "profit_factor": 1.5,
+    "max_dd_margins": 17.6,
+    "net_margins": 66.9
+   },
+   "since_2024": {
+    "trades": 340,
+    "per_month": 10.1,
+    "win_rate": 37.4,
+    "avg_win_pct": 89.9,
+    "avg_loss_pct": -35.4,
+    "profit_factor": 1.52,
+    "max_dd_margins": 17.6,
+    "net_margins": 38.9
+   },
+   "max_open": 66,
+   "to": "2026-10-20"
+  }
+ }
+}
