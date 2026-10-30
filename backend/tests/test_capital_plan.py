@@ -84,6 +84,20 @@ class BotSizingTests(unittest.TestCase):
                 self.assertEqual(botmod.position_size(100.0), 100.0)                      # paper never reads it
 
 
+class StrategyCapTests(unittest.TestCase):
+    """Owner's request (2026-10-30): no per-strategy number of trades — with a capital plan, only the account's count."""
+    def test_with_a_plan_only_the_account_count_limits(self):
+        state = {"positions": {f"C{i}/USDT:USDT": {} for i in range(10)}}
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d, mock.patch.object(botmod, "RISK_PATH", Path(d) / "r.json"), \
+             mock.patch.dict(botmod.CONFIG, {"paper_trading": False}):
+            rm.save_risk_state(botmod.RISK_PATH, rm._default_state())
+            self.assertTrue(botmod._strategy_full(state, 10))                 # no plan: the strategy's own cap
+            rm.update_limits(botmod.RISK_PATH, {"capital_usdt": 5000})
+            self.assertFalse(botmod._strategy_full(state, 10))                # plan: the account's count only
+            with mock.patch.dict(botmod.CONFIG, {"paper_trading": True}):
+                self.assertTrue(botmod._strategy_full(state, 10))             # paper keeps the tested cap
+
+
 class SafetyTests(unittest.TestCase):
     def test_unreadable_plan_refuses_instead_of_the_default_size(self):
         with mock.patch.dict(botmod.CONFIG, {"paper_trading": False, "trade_amount_usdt": 100}),              mock.patch.object(botmod.riskmgr, "load_risk_state", side_effect=OSError("database is locked")):
