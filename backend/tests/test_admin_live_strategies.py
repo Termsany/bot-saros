@@ -39,6 +39,15 @@ class SameAccountTests(unittest.TestCase):
         state = botmod.load_state(); botmod.reconcile_live(state, ex)
         self.assertIn("BTC/USDT", botmod._ENTRY_BLOCK["reason"])
 
+    def test_basket_bots_write_their_live_status_whatever_path_the_cycle_took(self):
+        for strat, fn in (("momentum_ls", "run_once_momentum"), ("ratio_trend", "run_once_ratio"), ("listing_short", "run_once_listing")):
+            botmod.CONFIG["enabled_strategies"] = [strat]
+            with mock.patch.object(botmod, "strategy_exchange", return_value=mock.Mock()), \
+                 mock.patch.object(botmod, fn, side_effect=RuntimeError("cycle failed")), \
+                 mock.patch.object(botmod, "write_live_status") as w:
+                with self.assertRaises(RuntimeError): botmod.run_once()
+            w.assert_called_once()
+
     def test_api_and_bot_list_the_same_live_strategies(self):
         import app.main as m
         self.assertEqual(set(m.LIVE_STRATEGIES), botmod.LIVE_READY_STRATEGIES)

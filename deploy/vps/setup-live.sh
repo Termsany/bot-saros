@@ -34,6 +34,7 @@ done
 # Phase 1 harness (scripts/demo_e2e.py): runs as raqmlive from this root-owned copy, refuses anything but Demo
 install -d -o root -g root -m 755 "$L/scripts"
 install -m 644 -o root -g root "$T/scripts/demo_e2e.py" "$L/scripts/demo_e2e.py"
+install -m 644 -o root -g root "$T/scripts/live_report.py" "$L/scripts/live_report.py"   # the daily report (read only)
 echo "$SHA" > "$L/DEPLOYED_COMMIT"
 # packages: only what the bot imports, pinned, from wheels (deploy/vps/live-requirements.txt)
 [ -x "$L/venv/bin/python" ] || python3 -m venv "$L/venv"
