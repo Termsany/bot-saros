@@ -53,10 +53,12 @@ def _mock_ex_for_place(ex_id="binance", hedge=False, fail_sl=False, fail_tp=Fals
     return ex
 
 class A_EmergencyCloseFailureTests(unittest.TestCase):
+    @mock.patch.dict(os.environ, {"BINANCE_ENV": "demo"})   # real-order code path, Demo account: no live activation needed
     def test_emergency_flatten_failure_persists_recovery_and_blocks_entries(self):
         import tempfile
         from pathlib import Path
         from unittest import mock
+        botmod._ENTRY_BLOCK["reason"] = ""
         with tempfile.TemporaryDirectory() as td:
             p = Path(td) / "state.json"
             botmod.STATE_PATH = p
@@ -97,10 +99,12 @@ class A_EmergencyCloseFailureTests(unittest.TestCase):
                                 self.assertIn("BTC/USDT", reloaded.get("positions", {}))
 
 class B_AmbiguousTimeoutTests(unittest.TestCase):
+    @mock.patch.dict(os.environ, {"BINANCE_ENV": "demo"})   # real-order code path, Demo account: no live activation needed
     def test_timeout_reconciles_via_fetch_open_orders(self):
         import tempfile
         from pathlib import Path
         from unittest import mock
+        botmod._ENTRY_BLOCK["reason"] = ""
         with tempfile.TemporaryDirectory() as td:
             botmod.STATE_PATH = Path(td)/"state.json"
             botmod.LOG_PATH = Path(td)/"trades.log"
@@ -136,7 +140,9 @@ class B_AmbiguousTimeoutTests(unittest.TestCase):
                                     self.assertIn("BTC/USDT", state.get("recovery_required", {}))
 
 class C_MissingProtectiveOrdersTests(unittest.TestCase):
+    @mock.patch.dict(os.environ, {"BINANCE_ENV": "demo"})   # real-order code path, Demo account: no live activation needed
     def test_verify_fail_closed_triggers_flatten(self):
+        botmod._ENTRY_BLOCK["reason"] = ""
         ex = _mock_ex_for_place(ex_id="binance", fail_sl=False, fail_tp=False, open_orders=[])
         res = place_oco_orders(ex, "BTC/USDT","long",0.01,49000,51000, paper=False, pos_id="abcd1234")
         self.assertTrue(res.get("verify_failed"))

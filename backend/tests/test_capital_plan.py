@@ -53,7 +53,7 @@ class GateTests(unittest.TestCase):
 
     def gate(self, sym, strategy="s"):
         return rm.pre_trade_gate(self.path, strategy=strategy, symbol=sym, side="long", risk_usdt=1, notional_usdt=60,
-                                 equity_usdt=1000, correlation_group="alts")
+                                 equity_usdt=1000, correlation_group="alts", equity_observed_at=rm._now())
 
     def test_the_eleventh_trade_is_refused_until_the_capital_is_raised(self):
         for i in range(10): self.assertTrue(self.gate(f"C{i}/USDT")[0], i)
@@ -65,10 +65,34 @@ class GateTests(unittest.TestCase):
     def test_a_basket_enters_whole_or_not_at_all(self):
         for i in range(5): self.gate(f"C{i}/USDT")
         legs = [{"symbol": f"B{i}/USDT", "side": "long", "risk_usdt": 1, "notional_usdt": 60, "correlation_group": "alts"} for i in range(6)]
-        ok, why = rm.pre_trade_gate_basket(self.path, strategy="momentum_ls", legs=legs, equity_usdt=1000)
+        ok, why = rm.pre_trade_gate_basket(self.path, strategy="momentum_ls", legs=legs, equity_usdt=1000, equity_observed_at=rm._now())
         self.assertFalse(ok); self.assertIn("max open trades", why)
         self.assertEqual(len(rm.load_risk_state(self.path)["open_risk"]), 5)             # nothing of it reserved
-        self.assertTrue(rm.pre_trade_gate_basket(self.path, strategy="momentum_ls", legs=legs[:5], equity_usdt=1000)[0])
+        self.assertTrue(rm.pre_trade_gate_basket(self.path, strategy="momentum_ls", legs=legs[:5], equity_usdt=1000, equity_observed_at=rm._now())[0])
+
+
+class AllocationWithPlanTests(unittest.TestCase):
+    """Owner (2026-10-30): with a capital plan, the live allocation does not split the risk budget per strategy."""
+    def setUp(self):
+        self.td = tempfile.TemporaryDirectory(ignore_cleanup_errors=True); self.path = Path(self.td.name) / "r.json"
+        rm.save_risk_state(self.path, rm._default_state({**LOOSE, "max_aggregate_risk_pct": 40.0}))
+    def tearDown(self): self.td.cleanup()
+
+    def gate(self, sym, share):
+        return rm.pre_trade_gate(self.path, strategy="s", symbol=sym, side="long", risk_usdt=20, notional_usdt=60,
+                                 equity_usdt=1000, equity_observed_at=rm._now(), strategy_risk_share=share)
+
+    def test_a_seventh_share_binds_without_a_plan_but_not_with_one(self):
+        self.assertTrue(self.gate("A/USDT", 1 / 7)[0]); self.assertTrue(self.gate("B/USDT", 1 / 7)[0])
+        self.assertIn("allocation", self.gate("C/USDT", 1 / 7)[1])                     # 6% > 40% / 7
+        rm.update_limits(self.path, {"capital_usdt": 1000})
+        self.assertTrue(self.gate("C/USDT", 1 / 7)[0])
+        self.assertTrue(rm.pre_trade_gate_basket(self.path, strategy="s", legs=[{"symbol": "D/USDT", "side": "long", "risk_usdt": 20,
+                        "notional_usdt": 60}], equity_usdt=1000, equity_observed_at=rm._now(), strategy_risk_share=1 / 7)[0])
+
+    def test_an_invalid_share_still_refuses_with_a_plan(self):
+        rm.update_limits(self.path, {"capital_usdt": 1000})
+        self.assertFalse(self.gate("A/USDT", 0.0)[0])
 
 
 class BotSizingTests(unittest.TestCase):

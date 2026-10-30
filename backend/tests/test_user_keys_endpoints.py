@@ -146,7 +146,7 @@ class UserKeysEndpointsTests(unittest.TestCase):
         with self.assertRaises(PermissionError):
             live_activation.activate(self.mainmod.LIVE_ACTIVATION_PATH, environment="live", account="admin",
                                       approved_by="admin", strategies=["trend_daily"],
-                                      risk_allocation={"trend_daily": 1.0}, readiness={"trend_daily": True})
+                                      risk_allocation={"trend_daily": 1.0})
 
 
 if __name__ == "__main__":

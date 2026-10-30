@@ -261,6 +261,36 @@ def correlated_risk_pct(state, equity_usdt, correlation_group, side):
                if r.get("correlation_group") == correlation_group and r.get("side") == side) / float(equity_usdt) * 100.0
 
 
+def strategy_open_risk_pct(state, equity_usdt, strategy):
+    """This strategy's open risk as a share of equity — what its activation allocation caps."""
+    if not equity_usdt or equity_usdt <= 0:
+        return None
+    return sum(float(r.get("risk_usdt", 0) or 0) for r in _rows(state)
+               if r.get("strategy") == strategy) / float(equity_usdt) * 100.0
+
+
+def _plan_set(limits):
+    """The owner's capital plan is set: then only the account's count and limits bind (owner, 2026-10-30), so the
+    allocation is not split per strategy. The allocation is still validated: an invalid one still refuses."""
+    return capital_plan(limits) is not None
+
+
+def _strategy_cap_pct(limits, share):
+    """Absolute strategy cap (in % of equity) from its share of the aggregate risk budget.
+
+    None = no allocation (paper/Demo, where there is no activation record). An invalid share returns None too: callers
+    must not treat it as unlimited — the gate rejects it explicitly.
+    """
+    try:
+        share = float(share)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(share) or not (0 < share <= 1.0):
+        return None
+    agg_cap = float(limits.get("max_aggregate_risk_pct", DEFAULT_LIMITS["max_aggregate_risk_pct"]))
+    return agg_cap * share
+
+
 def _conflicting_position(state, symbol, side, strategy=None):
     """Another strategy already on this coin. The account is one-way: two strategies on one coin share a single
     exchange position — same side, one exit closes both (the other keeps a phantom and a live reduceOnly stop);
@@ -278,19 +308,33 @@ def _valid_equity(value):
 
 
 def _equity_fresh(observed_at, max_age_s):
+    """Freshness gate, not a formality: no timestamp means no evidence that the figure is current, so it is stale.
+
+    The previous `None -> True` made the check a no-op for every caller that omitted the timestamp, which was every
+    production caller except the per-user scheduler. A timestamp from the future is also refused: that is a clock
+    problem, not fresh evidence (only a small skew is tolerated)."""
     if observed_at is None:
-        return True
+        return False
     try:
+        age_limit = float(max_age_s)
+        if not math.isfinite(age_limit) or age_limit <= 0:
+            return False
         stamp = datetime.fromisoformat(observed_at.replace("Z", "+00:00")) if isinstance(observed_at, str) else datetime.fromtimestamp(float(observed_at), tz=timezone.utc)
-        return (datetime.now(timezone.utc) - stamp).total_seconds() <= max_age_s
+        age = (datetime.now(timezone.utc) - stamp).total_seconds()
+        return -60.0 <= age <= age_limit
     except (TypeError, ValueError, OverflowError):
         return False
 
 
 def pre_trade_gate(path, *, strategy, symbol, side, risk_usdt, notional_usdt,
                     equity_usdt, correlation_group=None, allow_strategy_conflicts=False,
-                    equity_observed_at=None, max_equity_age_s=30):
-    """Atomically check all limits and reserve the requested risk."""
+                    equity_observed_at=None, max_equity_age_s=30, strategy_risk_share=None):
+    """Atomically check all limits and reserve the requested risk.
+
+    ``strategy_risk_share`` is the activation record's allocation for this strategy: a fraction of the account's
+    max aggregate risk budget that this strategy's open risk (existing + new) may not exceed. None = no activation
+    record (paper/Demo). A value that is not a finite number in (0, 1] is refused, never treated as unlimited.
+    """
     if not _valid_equity(equity_usdt):
         return False, "equity unavailable or invalid; refusing to reserve risk"
     if not _equity_fresh(equity_observed_at, max_equity_age_s):
@@ -326,6 +370,16 @@ def pre_trade_gate(path, *, strategy, symbol, side, risk_usdt, notional_usdt,
             return False, f"per-trade risk {pct:.3f}% exceeds limit {cap}%"
         agg = aggregate_open_risk_pct(state, equity_usdt) or 0.0
         agg_cap = float(limits.get("max_aggregate_risk_pct", DEFAULT_LIMITS["max_aggregate_risk_pct"]))
+        if strategy_risk_share is not None:
+            strategy_cap = _strategy_cap_pct(limits, strategy_risk_share)
+            if strategy_cap is None:
+                con.execute("ROLLBACK")
+                return False, f"invalid strategy risk allocation {strategy_risk_share!r}"
+            strat = strategy_open_risk_pct(state, equity_usdt, strategy) or 0.0
+            if not _plan_set(limits) and strat + pct > strategy_cap + 1e-9:
+                con.execute("ROLLBACK")
+                return False, (f"strategy open risk {strat:.3f}% + new {pct:.3f}% would exceed its allocation "
+                               f"{float(strategy_risk_share):.4g} of the aggregate budget ({strategy_cap:.3f}% of equity)")
         if agg + pct > agg_cap + 1e-9:
             con.execute("ROLLBACK")
             return False, f"aggregate open risk {agg:.3f}% + new {pct:.3f}% would exceed limit {agg_cap}%"
@@ -355,10 +409,13 @@ def pre_trade_gate(path, *, strategy, symbol, side, risk_usdt, notional_usdt,
         con.close()
 
 
-def pre_trade_gate_basket(path, *, strategy, legs, equity_usdt):
-    """Atomically reserve every leg of a basket or pair."""
+def pre_trade_gate_basket(path, *, strategy, legs, equity_usdt, equity_observed_at=None, max_equity_age_s=30,
+                          strategy_risk_share=None):
+    """Atomically reserve every leg of a basket or pair; the strategy allocation caps the basket's whole risk."""
     if not _valid_equity(equity_usdt) or not legs:
         return False, "equity unavailable or empty basket; refusing to reserve risk"
+    if not _equity_fresh(equity_observed_at, max_equity_age_s):
+        return False, "equity stale; refusing to reserve risk"
     con = _connect(path)
     try:
         con.execute("BEGIN IMMEDIATE")
@@ -397,6 +454,15 @@ def pre_trade_gate_basket(path, *, strategy, legs, equity_usdt):
                     con.execute("ROLLBACK"); return False, f"correlated basket risk exceeds limit {corr_cap}%"
         current_pct = aggregate_open_risk_pct(state, equity_usdt) or 0.0
         cap = float(limits.get("max_aggregate_risk_pct", DEFAULT_LIMITS["max_aggregate_risk_pct"]))
+        if strategy_risk_share is not None:
+            strategy_cap = _strategy_cap_pct(limits, strategy_risk_share)
+            if strategy_cap is None:
+                con.execute("ROLLBACK"); return False, f"invalid strategy risk allocation {strategy_risk_share!r}"
+            strat = strategy_open_risk_pct(state, equity_usdt, strategy) or 0.0
+            if not _plan_set(limits) and strat + total_pct > strategy_cap + 1e-9:
+                con.execute("ROLLBACK")
+                return False, (f"strategy open risk {strat:.3f}% + basket {total_pct:.3f}% would exceed its allocation "
+                               f"{float(strategy_risk_share):.4g} of the aggregate budget ({strategy_cap:.3f}% of equity)")
         if current_pct + total_pct > cap + 1e-9:
             con.execute("ROLLBACK"); return False, f"aggregate basket risk exceeds limit {cap}%"
         for leg, key, risk, notional in requested:
@@ -481,7 +547,7 @@ def update_equity_and_check_kill_switch(path, equity_usdt, *, equity_observed_at
             _write_state_tx(con, state); con.execute("COMMIT")
             return True, reason
         equity_usdt = float(equity_usdt)
-        state["equity_observed_at"] = equity_observed_at or _now()
+        state["equity_observed_at"] = equity_observed_at   # already proven fresh above; never substitute "now"
         state["equity_last"] = equity_usdt          # the dashboard and the bots' sizing cap the capital with it
         hwm = state.get("equity_high_water_mark")
         if hwm is None or equity_usdt > hwm:

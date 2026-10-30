@@ -1,6 +1,7 @@
 """Yes/no per strategy on the admin's own live account (2026-10-30): every live strategy runs as its own bot on the
 same Binance account; the activation record says which may enter. Bots must not take each other's positions for
 strangers."""
+import json
 import os, sys, tempfile, unittest
 from pathlib import Path
 from unittest import mock
@@ -10,6 +11,12 @@ import bot as botmod
 from backend.app import risk_manager as rm
 from test_trend_live import FakeBinance
 from test_security import ApiAuthTests
+
+
+def trusted_evidence(strategies):
+    fields = ("adapter_implemented", "recovery_tests", "security_approved", "testnet_validated")
+    return {"schema_version": 1, "provenance": {"source": "trusted-readiness", "verified": True},
+            "strategies": {s: {f: {"value": True, "verified": True} for f in fields} for s in strategies}}
 
 
 class SameAccountTests(unittest.TestCase):
@@ -66,6 +73,8 @@ class StrategyTogglesApiTests(ApiAuthTests):
         import app.main as m; self.m = m
         self.p = mock.patch.object(m, "LIVE_ACTIVATION_PATH", Path(self.tmp.name) / "act.sqlite3"); self.p.start()
         self.p_dir = mock.patch.object(m, "BOT_DIR", Path(self.tmp.name)); self.p_dir.start()   # the audit log
+        (Path(self.tmp.name) / "readiness_evidence.json").write_text(
+            json.dumps(trusted_evidence(m.LIVE_STRATEGIES)), encoding="utf-8")
 
     def tearDown(self):
         self.p.stop(); self.p_dir.stop(); super().tearDown()
@@ -76,6 +85,16 @@ class StrategyTogglesApiTests(ApiAuthTests):
     def test_refused_while_the_server_switch_is_off(self):
         with mock.patch.dict(os.environ, {"ALLOW_LIVE_TRADING": ""}):
             self.assertEqual(self.put(["trend_daily"]).status_code, 403)
+
+    def test_readiness_is_not_taken_from_the_request(self):
+        from app import live_activation as la
+        (Path(self.tmp.name) / "readiness_evidence.json").unlink()
+        with mock.patch.dict(os.environ, {"ALLOW_LIVE_TRADING": "true"}):
+            r = self.c.post("/api/live/strategies", headers=self.h("admin-token"), json={
+                "account": "main", "strategies": ["trend_daily"],
+                "readiness": {"trend_daily": True}, "risk_allocation": {"trend_daily": 1.0}})
+            self.assertEqual(r.status_code, 422)
+            self.assertIsNone(la.active_record(self.m.LIVE_ACTIVATION_PATH))
 
     def test_yes_no_per_strategy(self):
         from app import live_activation as la

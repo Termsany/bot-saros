@@ -1140,8 +1140,8 @@ class LiveActivationReq(BaseModel):
     environment: str
     account: str = Field(min_length=1, max_length=120)
     strategies: List[str] = Field(min_length=1, max_length=20)
-    risk_allocation: dict
-    readiness: dict
+    # No readiness / risk_allocation here: readiness is derived from the server's trusted evidence document and the
+    # allocation is split server-side. Accepting them from the request made both self-declared.
 
 @app.get("/api/live/status")
 async def live_status(user: dict = Depends(require_admin)):
@@ -1213,7 +1213,8 @@ async def live_strategies_set(req: LiveStrategiesReq, user: dict = Depends(requi
     chosen = sorted(set(req.strategies))
     try:
         aid = live_activation.activate(LIVE_ACTIVATION_PATH, environment="live", account=req.account, approved_by=actor,
-                                       strategies=chosen, risk_allocation={s: 1.0 for s in chosen}, readiness={s: True for s in chosen})
+                                       strategies=chosen,
+                                       readiness_evidence=_safe_json_file(BOT_DIR / "readiness_evidence.json") or {})
     except PermissionError as exc:
         raise HTTPException(403, str(exc))
     except ValueError as exc:
@@ -1237,7 +1238,7 @@ async def live_activation_create(req: LiveActivationReq, user: dict = Depends(re
     try:
         aid = live_activation.activate(LIVE_ACTIVATION_PATH, environment=req.environment, account=req.account,
             approved_by=str(user.get("email") or user.get("id")), strategies=req.strategies,
-            risk_allocation=req.risk_allocation, readiness=req.readiness)
+            readiness_evidence=_safe_json_file(BOT_DIR / "readiness_evidence.json") or {})
     except PermissionError as exc:
         raise HTTPException(403, str(exc))
     except ValueError as exc:

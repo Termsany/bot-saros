@@ -113,6 +113,20 @@ def _live_activation_gate(strategy):
     return live_activation.live_activation_allowed(ACTIVATION_PATH, strategy=strategy, account=account)
 
 
+def _live_risk_share(strategy):
+    """The activation record's allocation for this strategy (fraction of the aggregate risk budget), or None where no
+    activation record applies (paper/Demo). On live, an unreadable/missing allocation returns 0.0 so the risk gate
+    refuses the entry instead of silently trading uncapped."""
+    if binance_env() != "live":
+        return None
+    account = os.getenv("BINANCE_LIVE_ACCOUNT", "").strip()
+    try:
+        share = live_activation.strategy_risk_share(ACTIVATION_PATH, strategy=strategy, account=account)
+    except Exception:
+        return 0.0
+    return share if share and share > 0 else 0.0
+
+
 def _fetch_equity_usdt(ex):
     """Best-effort USDT account equity (free + used margin); None means unavailable —
     callers must fail closed on None, never substitute a guessed figure."""
@@ -129,6 +143,11 @@ def _fetch_equity_usdt(ex):
     except Exception:
         return None
 
+
+def _equity_now(ex):
+    """Equity and the instant it was observed, as one pair. The central risk gate refuses a figure with no
+    timestamp (freshness is a real gate, not a formality), so every live entry/equity check must carry both."""
+    return _fetch_equity_usdt(ex), datetime.now(timezone.utc).isoformat()
 
 def _estimate_trade_risk_usdt(margin_usdt, leverage, entry_price, sl_price):
     """Worst-case loss to the stop for a new position, used by the pre-trade risk gate.
@@ -2167,13 +2186,13 @@ def reconcile_live(state, ex):
     Flat there = its stop filled (or someone closed it): record it and clean up. Unknown positions or a size
     mismatch block new entries and alert once — the account must be used by the bot alone (a sub-account)."""
     _ENTRY_BLOCK["reason"] = ""
-    equity = _fetch_equity_usdt(ex)
+    equity, equity_at = _equity_now(ex)
     if equity is None:
         _ENTRY_BLOCK["reason"] = "account equity unavailable — blocking new entries until the risk gate can size risk"
         log(f"⚠️ {_ENTRY_BLOCK['reason']}")
     else:
         try:
-            tripped, kill_reason = riskmgr.update_equity_and_check_kill_switch(RISK_PATH, equity)
+            tripped, kill_reason = riskmgr.update_equity_and_check_kill_switch(RISK_PATH, equity, equity_observed_at=equity_at)
             if tripped:
                 _ENTRY_BLOCK["reason"] = f"Central Risk Manager kill switch is tripped — {kill_reason}"
                 log(f"🛑 {_ENTRY_BLOCK['reason']}")
@@ -2675,7 +2694,7 @@ def _enter_trend_live(symbol, analysis, state, ex, margin, lev, price):
         log(f"⏸️ {symbol} فحص الرصيد فشل — مفيش دخول: {e}"); return
     if free < margin * 1.02:
         log(f"⏸️ {symbol} رصيد {free:.2f}$ مش كفاية لهامش {margin:.2f}$"); return
-    equity = _fetch_equity_usdt(ex)
+    equity, equity_at = _equity_now(ex)
     if equity is None:
         log(f"⏸️ {symbol} equity unavailable — no entry"); return
     sl_estimate = price * (1 - stt.STOP_SHARE / lev)
@@ -2683,7 +2702,8 @@ def _enter_trend_live(symbol, analysis, state, ex, margin, lev, price):
     allowed, reason = riskmgr.pre_trade_gate(
         RISK_PATH, strategy="trend_daily", symbol=symbol, side="long",
         risk_usdt=risk_usdt, notional_usdt=margin * lev, equity_usdt=equity,
-        correlation_group=_correlation_group(symbol))
+        equity_observed_at=equity_at, correlation_group=_correlation_group(symbol),
+        strategy_risk_share=_live_risk_share("trend_daily"))
     if not allowed:
         log(f"⛔ {symbol} رفض بوابة المخاطر المركزية — {reason}"); return
     cid = "raqm-" + uuid.uuid4().hex[:27]   # per attempt — a fixed id per symbol matched trade #1's order on trade #2
@@ -2767,6 +2787,13 @@ def _enter_trend_live(symbol, analysis, state, ex, margin, lev, price):
 
 def try_enter(symbol, analysis, state, ex):
     """فيوتشر: لونج لو سكور > buy_threshold، شورت لو سكور < sell_threshold"""
+    if not CONFIG.get("paper_trading") and not in_position(state, symbol):
+        # Entries only: an open position still has to be able to exit on its signal.
+        activation_ok, activation_reason = _live_activation_gate(_current_strategy_name())
+        if not activation_ok:
+            _ENTRY_BLOCK["reason"] = f"live activation blocked — {activation_reason}"
+            log(f"⛔ {symbol} {_ENTRY_BLOCK['reason']}")
+            return
     if not CONFIG.get("paper_trading") and _ENTRY_BLOCK["reason"] and not in_position(state, symbol):
         log(f"⛔ {symbol} دخول متوقف — {_ENTRY_BLOCK['reason']}")
         return
@@ -2896,14 +2923,15 @@ def try_enter(symbol, analysis, state, ex):
                 if usdt < amount: log(f"رصيد غير كافي {usdt:.2f} < {amount:.2f}"); return
             except Exception as e:
                 log(f"فحص الرصيد فشل — مفيش دخول: {e}"); return
-            equity = _fetch_equity_usdt(ex)
+            equity, equity_at = _equity_now(ex)
             if equity is None:
                 log(f"⏸️ {symbol} equity unavailable — no entry"); return
             risk_usdt = _estimate_trade_risk_usdt(amount, CONFIG.get("leverage", 5), price, risk_sl)
             allowed, reason = riskmgr.pre_trade_gate(
                 RISK_PATH, strategy=_current_strategy_name(), symbol=symbol, side=side,
                 risk_usdt=risk_usdt, notional_usdt=amount * CONFIG.get("leverage", 5), equity_usdt=equity,
-                correlation_group=_correlation_group(symbol))
+                equity_observed_at=equity_at, correlation_group=_correlation_group(symbol),
+                strategy_risk_share=_live_risk_share(_current_strategy_name()))
             if not allowed:
                 log(f"⛔ {symbol} رفض بوابة المخاطر المركزية — {reason}"); return
         try:
@@ -3177,11 +3205,11 @@ def _phase2_live_basket(ex, state, strategy, intent, legs, *, reserve=True):
         legs = [leg for leg in legs if leg["symbol"] not in held]
         if not legs: return None
     held_exit = list(held) if is_exit else []
-    equity = _fetch_equity_usdt(ex)
+    equity, equity_at = _equity_now(ex)
     if equity is None and not is_exit:
         _ENTRY_BLOCK["reason"] = "account equity unavailable — blocking new entries"; return None
     if not is_exit:
-        tripped, reason = riskmgr.update_equity_and_check_kill_switch(RISK_PATH, equity)
+        tripped, reason = riskmgr.update_equity_and_check_kill_switch(RISK_PATH, equity, equity_observed_at=equity_at)
         if tripped:
             _ENTRY_BLOCK["reason"] = f"Central Risk Manager kill switch is tripped — {reason}"; return None
     equity = equity or 1.0
@@ -3290,7 +3318,9 @@ def _phase2_live_basket(ex, state, strategy, intent, legs, *, reserve=True):
     def protected(leg, result):
         if leg.get("action", "entry") == "exit": return True
         oco = result.get("oco") or {}; return not (oco.get("protection_missing") or oco.get("verify_failed") or oco.get("sl_unverified"))
-    result = engine.execute(strategy=strategy, intent=intent, legs=legs, equity_usdt=equity, execute_leg=execute_leg,
+    result = engine.execute(strategy=strategy, intent=intent, legs=legs, equity_usdt=equity,
+                            equity_observed_at=equity_at, strategy_risk_share=_live_risk_share(strategy),
+                            execute_leg=execute_leg,
                             compensate_leg=compensate, verify_protection=protected, state=state, reserve=reserve,
                             persist_fills=_persist_fills, cycle_token=cycle_token, unwind_failed_leg=unwind_failed_leg)
     if result.get("status") in ("compensated", "risk_blocked"):
@@ -3370,12 +3400,12 @@ def _single_leg_live_entry(ex, state, symbol, side, margin, price, sl, tp, strat
     refused = state.get("stop_refused") or {}
     if symbol in refused and datetime.now(timezone.utc) - datetime.fromisoformat(refused[symbol]) < pd.Timedelta(days=1):
         return None   # the exchange refused this coin's stop today: buying again would only buy, refuse, sell again
-    equity = _fetch_equity_usdt(ex)
+    equity, equity_at = _equity_now(ex)
     if equity is None:
         _ENTRY_BLOCK["reason"] = "account equity unavailable — blocking new entries"
         return None
     try:
-        tripped, reason = riskmgr.update_equity_and_check_kill_switch(RISK_PATH, equity)
+        tripped, reason = riskmgr.update_equity_and_check_kill_switch(RISK_PATH, equity, equity_observed_at=equity_at)
     except Exception as exc:
         _ENTRY_BLOCK["reason"] = f"risk ledger unavailable — blocking new entries: {exc}"
         return None
@@ -3387,7 +3417,9 @@ def _single_leg_live_entry(ex, state, symbol, side, margin, price, sl, tp, strat
     allowed, reason = riskmgr.pre_trade_gate(
         RISK_PATH, strategy=strategy, symbol=symbol, side=side,
         risk_usdt=risk_usdt, notional_usdt=margin * leverage,
-        equity_usdt=equity, correlation_group=_correlation_group(symbol))
+        equity_usdt=equity, equity_observed_at=equity_at,
+        correlation_group=_correlation_group(symbol),
+        strategy_risk_share=_live_risk_share(strategy))
     if not allowed:
         log(f"⛔ {symbol} رفض بوابة المخاطر المركزية — {reason}")
         return None

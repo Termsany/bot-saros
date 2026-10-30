@@ -27,7 +27,7 @@ class Phase2ExecutionTests(unittest.TestCase):
 
     def test_basket_is_deterministic_and_journaled(self):
         called = []
-        result = self.engine.execute(strategy="momentum_ls", intent="entry", legs=self.legs(), equity_usdt=1000,
+        result = self.engine.execute(equity_observed_at=risk_manager._now(), strategy="momentum_ls", intent="entry", legs=self.legs(), equity_usdt=1000,
             execute_leg=lambda leg: (called.append(leg["symbol"]) or {"qty": 1, "price": 10}),
             compensate_leg=lambda leg, fill: {"confirmed": True}, verify_protection=lambda leg, fill: True)
         self.assertTrue(result["ok"])
@@ -40,7 +40,7 @@ class Phase2ExecutionTests(unittest.TestCase):
             calls.append(("entry", leg["symbol"]))
             if leg["symbol"] == "BBB/USDT": raise RuntimeError("rejected")
             return {"qty": 1, "price": 10}
-        result = self.engine.execute(strategy="ratio_trend", intent="entry", legs=self.legs(), equity_usdt=1000,
+        result = self.engine.execute(equity_observed_at=risk_manager._now(), strategy="ratio_trend", intent="entry", legs=self.legs(), equity_usdt=1000,
             execute_leg=execute, compensate_leg=lambda leg, fill: calls.append(("close", leg["symbol"])) or {"confirmed": True},
             verify_protection=lambda leg, fill: True)
         self.assertEqual(result["status"], "compensated")
@@ -51,7 +51,7 @@ class Phase2ExecutionTests(unittest.TestCase):
         def execute(leg):
             if leg["symbol"] == "BBB/USDT": raise RuntimeError("second failed")
             return {"qty": 1, "price": 10}
-        result = self.engine.execute(strategy="listing_short", intent="entry", legs=self.legs(), equity_usdt=1000,
+        result = self.engine.execute(equity_observed_at=risk_manager._now(), strategy="listing_short", intent="entry", legs=self.legs(), equity_usdt=1000,
             execute_leg=execute, compensate_leg=lambda leg, fill: (_ for _ in ()).throw(RuntimeError("timeout")),
             verify_protection=lambda leg, fill: True)
         self.assertEqual(result["status"], "recovery_required")
@@ -61,7 +61,7 @@ class Phase2ExecutionTests(unittest.TestCase):
 
     def test_protection_failure_compensates_filled_legs(self):
         closed = []
-        result = self.engine.execute(strategy="listing_short", intent="entry", legs=self.legs(), equity_usdt=1000,
+        result = self.engine.execute(equity_observed_at=risk_manager._now(), strategy="listing_short", intent="entry", legs=self.legs(), equity_usdt=1000,
             execute_leg=lambda leg: {"qty": 1, "price": 10},
             compensate_leg=lambda leg, fill: closed.append(leg["symbol"]) or {"confirmed": True},
             verify_protection=lambda leg, fill: leg["symbol"] != "BBB/USDT")
@@ -69,12 +69,12 @@ class Phase2ExecutionTests(unittest.TestCase):
         self.assertEqual(closed, ["BBB/USDT", "AAA/USDT"])
 
     def test_restart_recovery_lists_durable_intent(self):
-        result = self.engine.execute(strategy="momentum_ls", intent="entry", legs=self.legs(), equity_usdt=1000,
+        result = self.engine.execute(equity_observed_at=risk_manager._now(), strategy="momentum_ls", intent="entry", legs=self.legs(), equity_usdt=1000,
             execute_leg=lambda leg: (_ for _ in ()).throw(RuntimeError("ambiguous")),
             compensate_leg=lambda leg, fill: {"confirmed": True}, verify_protection=lambda leg, fill: True)
         self.assertEqual(result["status"], "compensated")
         # A protection failure after a fill creates a pending recovery intent.
-        result = self.engine.execute(strategy="ratio_trend", intent="entry", legs=self.legs(), equity_usdt=1000,
+        result = self.engine.execute(equity_observed_at=risk_manager._now(), strategy="ratio_trend", intent="entry", legs=self.legs(), equity_usdt=1000,
             execute_leg=lambda leg: {"qty": 1, "price": 10}, compensate_leg=lambda leg, fill: (_ for _ in ()).throw(RuntimeError("unknown")),
             verify_protection=lambda leg, fill: False)
         restarted = MultiLegExecutionEngine(self.journal, risk_manager=risk_manager, risk_path=self.risk)
@@ -83,7 +83,7 @@ class Phase2ExecutionTests(unittest.TestCase):
     def test_kill_switch_blocks_basket_before_orders(self):
         risk_manager.trip_kill_switch(self.risk, "operator")
         called = []
-        result = self.engine.execute(strategy="momentum_ls", intent="entry", legs=self.legs(), equity_usdt=1000,
+        result = self.engine.execute(equity_observed_at=risk_manager._now(), strategy="momentum_ls", intent="entry", legs=self.legs(), equity_usdt=1000,
             execute_leg=lambda leg: called.append(leg) or {"qty": 1}, compensate_leg=lambda l, f: {"confirmed": True},
             verify_protection=lambda l, f: True)
         self.assertEqual(result["status"], "risk_blocked")
@@ -92,7 +92,7 @@ class Phase2ExecutionTests(unittest.TestCase):
     def test_concurrent_basket_reservations_are_atomic(self):
         answers = []
         def worker():
-            answers.append(risk_manager.pre_trade_gate_basket(self.risk, strategy="s", legs=self.legs(), equity_usdt=1000))
+            answers.append(risk_manager.pre_trade_gate_basket(self.risk, strategy="s", legs=self.legs(), equity_usdt=1000, equity_observed_at=risk_manager._now()))
         ts = [threading.Thread(target=worker) for _ in range(2)]
         for t in ts: t.start()
         for t in ts: t.join()
@@ -101,6 +101,7 @@ class Phase2ExecutionTests(unittest.TestCase):
     def test_completed_cycle_gets_new_identity_for_later_legitimate_cycle(self):
         calls = []
         kwargs = dict(strategy="momentum_ls", intent="same-intent", legs=self.legs(), equity_usdt=1000,
+                      equity_observed_at=risk_manager._now(),
                       execute_leg=lambda leg: calls.append(leg["client_order_id"]) or {"qty": 1, "price": 10},
                       compensate_leg=lambda leg, fill: {"confirmed": True}, verify_protection=lambda leg, fill: True)
         first = self.engine.execute(**kwargs)
@@ -110,6 +111,7 @@ class Phase2ExecutionTests(unittest.TestCase):
 
     def test_explicit_cycle_token_reuses_inflight_identity(self):
         kwargs = dict(strategy="momentum_ls", intent="retryable", cycle_token="cycle-1", legs=self.legs(), equity_usdt=1000,
+                      equity_observed_at=risk_manager._now(),
                       execute_leg=lambda leg: (_ for _ in ()).throw(RuntimeError("ambiguous")) if leg["symbol"] == "BBB/USDT" else {"qty": 1, "price": 10},
                       compensate_leg=lambda leg, fill: (_ for _ in ()).throw(RuntimeError("unknown")), verify_protection=lambda leg, fill: True)
         first = self.engine.execute(**kwargs)
@@ -121,7 +123,7 @@ class Phase2ExecutionTests(unittest.TestCase):
     def test_partial_fill_is_not_counted_as_complete(self):
         closed = []
         legs = self.legs(); legs[0]["requested_qty"] = 2
-        result = self.engine.execute(strategy="partial", intent="entry", legs=legs, equity_usdt=1000,
+        result = self.engine.execute(equity_observed_at=risk_manager._now(), strategy="partial", intent="entry", legs=legs, equity_usdt=1000,
             execute_leg=lambda leg: {"qty": 1, "price": 10},
             compensate_leg=lambda leg, fill: closed.append(leg["symbol"]) or {"confirmed": True},
             verify_protection=lambda leg, fill: True)
@@ -130,14 +132,14 @@ class Phase2ExecutionTests(unittest.TestCase):
 
     def test_authoritative_position_evidence_rejects_positive_but_partial_leg(self):
         legs = self.legs(); legs[0]["requested_qty"] = 2
-        result = self.engine.execute(strategy="authoritative", intent="entry", legs=legs, equity_usdt=1000,
+        result = self.engine.execute(equity_observed_at=risk_manager._now(), strategy="authoritative", intent="entry", legs=legs, equity_usdt=1000,
             execute_leg=lambda leg: {"qty": 2, "authoritative_qty": 1, "authoritative_fill_qty": 2, "price": 10},
             compensate_leg=lambda leg, fill: {"confirmed": True}, verify_protection=lambda leg, fill: True)
         self.assertEqual(result["status"], "compensated")
         self.assertFalse(self.engine.pending())
 
     def test_caller_persistence_failure_remains_pending(self):
-        result = self.engine.execute(strategy="persist", intent="entry", legs=self.legs(), equity_usdt=1000,
+        result = self.engine.execute(equity_observed_at=risk_manager._now(), strategy="persist", intent="entry", legs=self.legs(), equity_usdt=1000,
             execute_leg=lambda leg: {"qty": 1, "price": 10},
             compensate_leg=lambda leg, fill: {"confirmed": True}, verify_protection=lambda leg, fill: True,
             persist_fills=lambda fills: False)
@@ -145,7 +147,7 @@ class Phase2ExecutionTests(unittest.TestCase):
         self.assertTrue(self.engine.pending())
 
     def test_reconcile_invokes_exchange_lookup_and_resolution(self):
-        self.engine.execute(strategy="restart", intent="entry", legs=self.legs(), equity_usdt=1000,
+        self.engine.execute(equity_observed_at=risk_manager._now(), strategy="restart", intent="entry", legs=self.legs(), equity_usdt=1000,
             execute_leg=lambda leg: {"qty": 1, "price": 10},
             compensate_leg=lambda leg, fill: (_ for _ in ()).throw(RuntimeError("ambiguous")),
             verify_protection=lambda leg, fill: False)
