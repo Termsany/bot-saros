@@ -72,7 +72,8 @@ class SharedIpcTests(unittest.TestCase):
 
 class RestartTests(unittest.TestCase):
     def test_group_changes_restart_the_services(self):
-        self.assertIn("systemctl try-restart raqm-api raqm-trend-demo", (VPS / "setup-live.sh").read_text(encoding="utf-8"))
+        live = (VPS / "setup-live.sh").read_text(encoding="utf-8")
+        self.assertIn("systemctl try-restart raqm-api ", live); self.assertNotIn("try-restart raqm-api raqm-", live)   # live bots: by hand
         self.assertIn("systemctl try-restart raqm-api raqm-bot", (VPS / "setup-paper-ipc.sh").read_text(encoding="utf-8"))
 
 

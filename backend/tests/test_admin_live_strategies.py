@@ -1,0 +1,80 @@
+"""Yes/no per strategy on the admin's own live account (2026-10-30): every live strategy runs as its own bot on the
+same Binance account; the activation record says which may enter. Bots must not take each other's positions for
+strangers."""
+import os, sys, tempfile, unittest
+from pathlib import Path
+from unittest import mock
+ROOT = Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "backend")); sys.path.insert(0, str(Path(__file__).resolve().parent))
+import bot as botmod
+from backend.app import risk_manager as rm
+from test_trend_live import FakeBinance
+from test_security import ApiAuthTests
+
+
+class SameAccountTests(unittest.TestCase):
+    def setUp(self):
+        self.td = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self._saved = (botmod.STATE_PATH, botmod.LOG_PATH, botmod.RISK_PATH, dict(botmod.CONFIG))
+        botmod.STATE_PATH = Path(self.td.name) / "s.json"; botmod.LOG_PATH = Path(self.td.name) / "l.log"
+        botmod.RISK_PATH = Path(self.td.name) / "r.json"
+        rm.save_risk_state(botmod.RISK_PATH, rm._default_state())
+        botmod.CONFIG.update({"paper_trading": False, "enabled_strategies": ["vol_breakout"]})
+        botmod._ENTRY_BLOCK["reason"] = ""
+        p = mock.patch.object(botmod, "notify"); p.start(); self.addCleanup(p.stop)
+
+    def tearDown(self):
+        botmod.STATE_PATH, botmod.LOG_PATH, botmod.RISK_PATH, cfg = self._saved
+        botmod.CONFIG.clear(); botmod.CONFIG.update(cfg); botmod._ENTRY_BLOCK["reason"] = ""
+        self.td.cleanup()
+
+    def test_another_strategys_position_does_not_block_entries(self):
+        rm.register_open_risk(botmod.RISK_PATH, strategy="trend_daily", symbol="BTC/USDT:USDT", side="long", risk_usdt=1, notional_usdt=10)
+        ex = FakeBinance(); ex.positions["BTC/USDT"] = 0.5
+        state = botmod.load_state(); botmod.reconcile_live(state, ex)
+        self.assertEqual(botmod._ENTRY_BLOCK["reason"], "")
+
+    def test_a_position_no_strategy_holds_still_blocks(self):
+        ex = FakeBinance(); ex.positions["BTC/USDT"] = 0.5
+        state = botmod.load_state(); botmod.reconcile_live(state, ex)
+        self.assertIn("BTC/USDT", botmod._ENTRY_BLOCK["reason"])
+
+    def test_api_and_bot_list_the_same_live_strategies(self):
+        import app.main as m
+        self.assertEqual(set(m.LIVE_STRATEGIES), botmod.LIVE_READY_STRATEGIES)
+
+
+class StrategyTogglesApiTests(ApiAuthTests):
+    def setUp(self):
+        super().setUp()
+        import app.main as m; self.m = m
+        self.p = mock.patch.object(m, "LIVE_ACTIVATION_PATH", Path(self.tmp.name) / "act.sqlite3"); self.p.start()
+
+    def tearDown(self):
+        self.p.stop(); super().tearDown()
+
+    def put(self, strategies):
+        return self.c.post("/api/live/strategies", headers=self.h("admin-token"), json={"account": "main", "strategies": strategies})
+
+    def test_refused_while_the_server_switch_is_off(self):
+        with mock.patch.dict(os.environ, {"ALLOW_LIVE_TRADING": ""}):
+            self.assertEqual(self.put(["trend_daily"]).status_code, 403)
+
+    def test_yes_no_per_strategy(self):
+        from app import live_activation as la
+        path = self.m.LIVE_ACTIVATION_PATH
+        with mock.patch.dict(os.environ, {"ALLOW_LIVE_TRADING": "true"}):
+            self.assertEqual(self.put(["trend_daily", "momentum_ls"]).status_code, 200)
+            self.assertTrue(la.live_activation_allowed(path, strategy="momentum_ls", account="main")[0])
+            self.assertFalse(la.live_activation_allowed(path, strategy="ratio_trend", account="main")[0])
+            rows = {r["id"]: r["on"] for r in self.c.get("/api/live/strategies", headers=self.h("admin-token")).json()["strategies"]}
+            self.assertEqual({k for k, v in rows.items() if v}, {"trend_daily", "momentum_ls"})
+            self.put(["ratio_trend"])                                            # a new choice replaces the old one
+            self.assertFalse(la.live_activation_allowed(path, strategy="momentum_ls", account="main")[0])
+            self.put([])                                                         # all off
+            self.assertFalse(la.live_activation_allowed(path, strategy="ratio_trend", account="main")[0])
+        self.assertEqual(self.put(["ict"]).status_code, 400)
+
+
+if __name__ == "__main__":
+    unittest.main()

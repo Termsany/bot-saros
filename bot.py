@@ -651,10 +651,17 @@ def run_once_ratio(ex):
                                       "correlation_group": _correlation_group(leg["sym"])})
             if exits:
                 result = _phase2_live_basket(ex, state, "ratio_trend", "ratio-rebalance-exit", exits, reserve=False)
-                if not result or result.get("status") != "filled":
+                if result and result.get("status") == "held":
+                    # a leg under review stays open: its pair stays on the books, the others are done and the flips
+                    # below still run (returning here froze every pair's exits until a person cleared the mark)
+                    for key in list(state["pairs"]):
+                        if key not in wanted and not any(l["sym"] in state["positions"] for l in state["pairs"][key]["legs"]):
+                            state["pairs"].pop(key, None)
+                elif not result or result.get("status") != "filled":
                     save_state(state); return
-                for key in list(state["pairs"]):
-                    if key not in wanted: state["pairs"].pop(key, None)
+                else:
+                    for key in list(state["pairs"]):
+                        if key not in wanted: state["pairs"].pop(key, None)
             for key in sorted(wanted):
                 a, b = key.split("|")
                 try: sig = ratio_signal(ex, a, b, cache)
@@ -669,6 +676,7 @@ def run_once_ratio(ex):
                                          "price": float(ex.fetch_ticker(leg["sym"])["last"]), "order": len(legs_out), "risk_usdt": 0, "notional_usdt": 0,
                                          "correlation_group": _correlation_group(leg["sym"])})
                     result = _phase2_live_basket(ex, state, "ratio_trend", f"ratio-flip-exit:{key}", legs_out, reserve=False)
+                    if result and result.get("status") == "held": continue   # this pair waits for its review; the others go on
                     if not result or result.get("status") != "filled": save_state(state); return
                     state["pairs"].pop(key, None)
                 ordered = ((a, "long"), (b, "short")) if sig == 1 else ((b, "long"), (a, "short"))
@@ -2255,7 +2263,7 @@ def reconcile_live(state, ex):
                 notify(f"🚨 {sym}: الكمية على المنصة {q} مختلفة عن البوت {pos['qty']} — راجعها. البوت وقف أي دخول جديد.")
     _protect_pending(ex, state, live)
     mine = {k.split(":")[0] for k in state["positions"]}
-    unknown = sorted(set(live) - mine)
+    unknown = sorted(set(live) - mine - _held_by_other_strategies())
     if unknown:
         _ENTRY_BLOCK["reason"] = f"صفقات على المنصة البوت مفتحهاش: {', '.join(unknown)}"
         if state.get("_unknown_seen") != unknown:
@@ -2322,6 +2330,17 @@ def _protect_pending(ex, state, live):
             state.setdefault("recovery_required", {}).setdefault(sym, {"reason": "position on the exchange without a recorded entry", "qty": q, "at": datetime.now(timezone.utc).isoformat()})
         notify(f"🛡️ {sym}: اتحط وقف على المنصة عند {info['sl']:.6g} لكمية {q} — الصفقة لسه محتاجة مراجعة")
     save_state(state)
+
+def _held_by_other_strategies():
+    """Coins another strategy holds on this account, from the shared risk ledger (reserved, open or in recovery). Every
+    live strategy runs as its own bot on the same account; without this each saw the others' positions as strangers
+    and stopped entering. A position no strategy has in the ledger still blocks. Ledger unreadable: none (fail closed)."""
+    me = _current_strategy_name()
+    try:
+        rows = riskmgr.load_risk_state(RISK_PATH).get("open_risk") or {}
+    except Exception:
+        return set()
+    return {str(r.get("symbol", "")).split(":")[0] for r in rows.values() if r.get("strategy") != me}
 
 def _ipc_dir():
     """Folder shared with the backend (RAQM_IPC_DIR, e.g. /opt/raqm-ipc): live status out, close requests in."""

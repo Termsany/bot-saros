@@ -1,5 +1,5 @@
 #!/bin/sh
-# The real-orders bot (raqm-trend-demo.service) runs apart from the 7 paper bots: its own user, its own copy of the
+# The real-orders bots (raqm-demo@<strategy> / raqm-live@<strategy>) run apart from the 7 paper bots: its own user, its own copy of the
 # code that only root can change, its keys readable by that user alone. A compromised paper bot (user raqm, which
 # can write /opt/raqm-bot) can then neither read the exchange keys nor change the code that trades.
 #
@@ -76,11 +76,25 @@ shared_dir() {   # $1 = path; its parent must be root's (/opt) or created by thi
     find "$1" -maxdepth 1 -type f -exec chown -h :raqmrisk {} +
 }
 # manual close requests and the live status (the live bot writes the status and removes the requests)
-shared_dir /opt/raqm-ipc; shared_dir /opt/raqm-ipc/commands; shared_dir /opt/raqm-ipc/results
+shared_dir /opt/raqm-ipc
+for s in trend_daily vol_breakout rsi2_pullback trend_breakout listing_short momentum_ls ratio_trend; do   # one folder per live bot
+    shared_dir "/opt/raqm-ipc/$s"; shared_dir "/opt/raqm-ipc/$s/commands"; shared_dir "/opt/raqm-ipc/$s/results"
+done
 # risk ledger + live activation record shared with the API (RAQM_RISK_DIR in both units): the dashboard's kill switch,
 # limits and revoke must reach the bot. The bot and the API create the files themselves (mode 660).
 shared_dir /opt/raqm-risk
-# new group lists reach a process only when it starts: without this the API couldn't open the shared folders and the
-# live bot couldn't read ledger files the API created (try-restart: only services already running)
-systemctl try-restart raqm-api raqm-trend-demo 2>/dev/null || true
+# Demo has its own risk ledger, the bots' alone: play money never touches the real account's limits and kill switch
+[ -L /opt/raqm-risk-demo ] && { echo "refusing: /opt/raqm-risk-demo is a symlink" >&2; exit 3; }
+[ -d /opt/raqm-risk-demo ] || mkdir -m 700 /opt/raqm-risk-demo; chown -h raqmlive:raqmlive /opt/raqm-risk-demo
+# per-strategy options (RAQM_ARGS), root's: the daily trend trades the top 10 by volume
+install -d -o root -g root -m 755 "$L/strategies"
+[ -e "$L/strategies/trend_daily.env" ] || echo 'RAQM_ARGS=--leverage 2 --amount 100 --universe 10 --poll 60' > "$L/strategies/trend_daily.env"
+# the Demo unit template (raqm-demo@<strategy>); the real-money one (raqm-live@) is installed by hand when going live —
+# installing it also freezes the API's automatic updates (api/update.sh)
+install -m 644 -o root -g root "$T/deploy/vps/raqm-demo@.service" /etc/systemd/system/raqm-demo@.service
+systemctl daemon-reload
+# new group lists reach a process only when it starts: the API (try-restart: only if running). The live bots are not
+# restarted here — one stopped in the middle of an order goes to review; restart them as a deliberate step:
+#   systemctl restart 'raqm-demo@*' / 'raqm-live@*'
+systemctl try-restart raqm-api 2>/dev/null || echo "warning: raqm-api restart failed" >&2
 echo "raqm-live ready: $(ls "$L" | tr '\n' ' ')"

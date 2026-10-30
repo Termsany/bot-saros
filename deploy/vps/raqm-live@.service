@@ -1,0 +1,42 @@
+[Unit]
+Description=Raqm live bot %i with REAL MONEY on Binance Futures
+After=network-online.target
+Wants=network-online.target
+Conflicts=raqm-demo@%i.service
+# real money starts only when both files exist (setup: deploy/vps/README.md, "Real money")
+ConditionPathExists=/opt/raqm-live/.env.real
+ConditionPathExists=/opt/raqm-live/allow-live.env
+
+[Service]
+# its own user and read-only code copy, apart from the paper bots (deploy/vps/setup-live.sh)
+User=raqmlive
+Group=raqmlive
+WorkingDirectory=/opt/raqm-live
+# TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID
+EnvironmentFile=-/opt/raqm-live/.env.telegram
+# BINANCE_API_KEY / BINANCE_SECRET of the real account (no withdrawal permission) — chmod 600, owner raqmlive
+EnvironmentFile=/opt/raqm-live/.env.real
+# root-owned, chmod 600: ALLOW_LIVE_TRADING=true and BINANCE_LIVE_ACCOUNT=<the account name of the dashboard's activation>.
+# Which strategies may enter is the dashboard's yes/no (the activation record); an off strategy still exits.
+EnvironmentFile=/opt/raqm-live/allow-live.env
+Environment=BINANCE_ENV=live
+# this strategy's own folder for the admin page: live_status.json out, manual close requests in
+Environment=RAQM_IPC_DIR=/opt/raqm-ipc/%i
+Environment=RAQM_RISK_DIR=/opt/raqm-risk
+# sizing and options per strategy: /opt/raqm-live/strategies/%i.env (root-owned, RAQM_ARGS=...) overrides this default
+Environment="RAQM_ARGS=--leverage 2 --amount 100 --poll 60"
+EnvironmentFile=-/opt/raqm-live/strategies/%i.env
+UnsetEnvironment=PYTHONPATH PYTHONHOME PYTHONSTARTUP PYTHONUSERBASE PYTHONINSPECT
+# -E -s: no PYTHON* variable and no user site-packages can change what Python loads (-u: unbuffered logs).
+# --expect-env live: the bot refuses to start if anything (an EnvironmentFile line) set BINANCE_ENV to something else.
+ExecStart=/opt/raqm-live/venv/bin/python -E -s -u bot.py --live --expect-env live --strategy %i $RAQM_ARGS --notify --state state/live-%i.json
+Restart=always
+RestartSec=60
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/raqm-live/state /opt/raqm-ipc /opt/raqm-risk
+
+[Install]
+WantedBy=multi-user.target

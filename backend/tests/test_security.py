@@ -269,34 +269,46 @@ if __name__ == "__main__":
 
 
 class LiveCloseApiTests(ApiAuthTests):
-    """Manual close from the admin page: admin only, only an open position, written as a request file for the bot."""
+    """Manual close from the admin page: admin only, only an open position of that strategy's bot, written as a request
+    file in that bot's own folder (RAQM_IPC_DIR/<strategy>)."""
     def setUp(self):
         super().setUp()
         import app.main as m
-        self.ipc = Path(self.tmp.name) / "ipc"; (self.ipc / "commands").mkdir(parents=True); (self.ipc / "results").mkdir()
+        self.ipc = Path(self.tmp.name) / "ipc"; self.bot = self.ipc / "trend_daily"
+        (self.bot / "commands").mkdir(parents=True); (self.bot / "results").mkdir()
         self.p_ipc = mock.patch.object(m, "IPC_DIR", self.ipc); self.p_ipc.start()
         from datetime import datetime, timezone
         import json as _j
-        (self.ipc / "live_status.json").write_text(_j.dumps({"updated": datetime.now(timezone.utc).isoformat(), "env": "demo",
-            "positions": [{"symbol": "SOL/USDT", "entry": 100, "qty": 1, "sl": 84}]}), encoding="utf-8")
+        (self.bot / "live_status.json").write_text(_j.dumps({"updated": datetime.now(timezone.utc).isoformat(), "env": "demo",
+            "strategy": "trend_daily", "positions": [{"symbol": "SOL/USDT", "entry": 100, "qty": 1, "sl": 84}]}), encoding="utf-8")
     def tearDown(self):
         self.p_ipc.stop(); super().tearDown()
 
+    def close(self, symbol, strategy="trend_daily", token="admin-token"):
+        return self.c.post("/api/live/close", headers=self.h(token), json={"strategy": strategy, "symbol": symbol})
+
     def test_admin_only(self):
         self.assertEqual(self.c.get("/api/live/status", headers=self.h("user-token")).status_code, 403)
-        self.assertEqual(self.c.post("/api/live/close", headers=self.h("user-token"), json={"symbol": "SOL/USDT"}).status_code, 403)
+        self.assertEqual(self.close("SOL/USDT", token="user-token").status_code, 403)
+        self.assertEqual(self.c.get("/api/live/strategies", headers=self.h("user-token")).status_code, 403)
+        self.assertEqual(self.c.post("/api/live/strategies", headers=self.h("user-token"), json={"account": "a", "strategies": []}).status_code, 403)
 
-    def test_close_writes_one_request_for_an_open_position(self):
-        r = self.c.post("/api/live/close", headers=self.h("admin-token"), json={"symbol": "SOL/USDT"})
+    def test_close_writes_one_request_in_that_strategys_folder(self):
+        r = self.close("SOL/USDT")
         self.assertEqual(r.status_code, 200)
-        files = list((self.ipc / "commands").glob("close-*.json"))
-        self.assertEqual(len(files), 1)
-        self.assertEqual(self.c.get(f"/api/live/close/{r.json()['id']}", headers=self.h("admin-token")).json(), {"done": False, "pending": True})
+        self.assertEqual(len(list((self.bot / "commands").glob("close-*.json"))), 1)
+        self.assertEqual(self.c.get(f"/api/live/close/trend_daily/{r.json()['id']}", headers=self.h("admin-token")).json(), {"done": False, "pending": True})
 
-    def test_refuses_unknown_coin_and_junk(self):
-        self.assertEqual(self.c.post("/api/live/close", headers=self.h("admin-token"), json={"symbol": "ETH/USDT"}).status_code, 404)
-        self.assertEqual(self.c.post("/api/live/close", headers=self.h("admin-token"), json={"symbol": "../../x"}).status_code, 400)
-        self.assertEqual(self.c.get("/api/live/close/../../etc", headers=self.h("admin-token")).status_code in (400, 404), True)
+    def test_status_lists_every_strategy(self):
+        st = self.c.get("/api/live/status", headers=self.h("admin-token")).json()
+        self.assertTrue(st["strategies"]["trend_daily"]["running"]); self.assertFalse(st["strategies"]["momentum_ls"]["running"])
+
+    def test_refuses_unknown_coin_strategy_and_junk(self):
+        self.assertEqual(self.close("ETH/USDT").status_code, 404)
+        self.assertEqual(self.close("SOL/USDT", strategy="momentum_ls").status_code, 409)   # that bot isn't running
+        self.assertEqual(self.close("SOL/USDT", strategy="ict").status_code, 400)
+        self.assertEqual(self.close("../../x").status_code, 400)
+        self.assertIn(self.c.get("/api/live/close/trend_daily/../../etc", headers=self.h("admin-token")).status_code, (400, 404))
 
 
 class ManualCloseApiTests(unittest.TestCase):

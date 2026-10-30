@@ -74,21 +74,33 @@ export async function apiPaperCloseResult(bot: string, id: string): Promise<any>
   return r.ok ? r.json() : { done: false }
 }
 
-// ── real-orders bot (admin only): positions, manual close, its result
+// ── real-orders bots (admin only, one per strategy on the admin's account): yes/no per strategy, positions, manual close
 export async function apiLiveStatus(): Promise<any|null>{
   try{
     const headers = await signedInHeaders(); if(!headers) return null
     const r=await fetch(`${API}/api/live/status`, { headers, cache: "no-store" }); return r.ok ? r.json() : null
   }catch{ return null }
 }
-export async function apiLiveClose(symbol: string): Promise<{ id: string }>{
-  const r=await fetch(`${API}/api/live/close`, { method:"POST", headers: await authHeaders(JSON_CT), body: JSON.stringify({ symbol }) })
+export async function apiLiveStrategies(): Promise<any|null>{
+  try{
+    const headers = await signedInHeaders(); if(!headers) return null
+    const r=await fetch(`${API}/api/live/strategies`, { headers, cache: "no-store" }); return r.ok ? r.json() : null
+  }catch{ return null }
+}
+export async function apiSetLiveStrategies(account: string, strategies: string[]): Promise<any>{
+  const r=await fetch(`${API}/api/live/strategies`, { method:"POST", headers: await authHeaders(JSON_CT), body: JSON.stringify({ account, strategies }) })
+  const d = await r.json().catch(()=>({}))
+  if(!r.ok) throw new Error(typeof d.detail === "string" ? d.detail : "ما اتحفظش")
+  return d
+}
+export async function apiLiveClose(strategy: string, symbol: string): Promise<{ id: string }>{
+  const r=await fetch(`${API}/api/live/close`, { method:"POST", headers: await authHeaders(JSON_CT), body: JSON.stringify({ strategy, symbol }) })
   const d = await r.json().catch(()=>({}))
   if(!r.ok) throw new Error(d.detail || "الطلب ما اتبعتش")
   return d
 }
-export async function apiLiveCloseResult(id: string): Promise<any>{
-  const r=await fetch(`${API}/api/live/close/${id}`, { headers: await authHeaders(), cache: "no-store" })
+export async function apiLiveCloseResult(strategy: string, id: string): Promise<any>{
+  const r=await fetch(`${API}/api/live/close/${strategy}/${id}`, { headers: await authHeaders(), cache: "no-store" })
   return r.ok ? r.json() : { done: false }
 }
 export function chartUrl(file:string){ return `${API}/api/chart?file=${encodeURIComponent(file)}` }

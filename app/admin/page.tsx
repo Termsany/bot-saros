@@ -2,6 +2,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react"
 import { Activity, BarChart3, Bot, CircleDollarSign, ClipboardList, Gauge, History, LockKeyhole, Settings2, ShieldAlert, ShieldCheck, Users as UsersIcon, WalletCards } from "lucide-react"
 import { Logo } from "@/components/Logo"
+import { LiveStrategies } from "@/components/LiveStrategies"
 import { TIERS } from "@/lib/strategies"
 import { apiIsAdmin } from "@/lib/api"
 import { authHeaders } from "@/lib/supabase"
@@ -15,6 +16,7 @@ const sections: [string, string, React.ComponentType<{ size?: number; strokeWidt
   ["users", "المستخدمون والباقات", UsersIcon],
   ["finance", "المالية", CircleDollarSign],
   ["live", "البوتات الحية", Bot],
+  ["real", "التداول الحقيقي", WalletCards],
   ["strategies", "الاستراتيجيات", BarChart3],
   ["paper", "المحفظة الورقية", WalletCards],
   ["risk", "المخاطر والأمان", ShieldCheck],
@@ -276,7 +278,7 @@ export default function AdminPage() {
     url.searchParams.set("tab", id)
     window.history.replaceState({}, "", `${url.pathname}?${url.searchParams.toString()}`)
   }
-  const sectionEndpoints: Record<string, string[]> = { overview: ["overview", "recovery"], users: ["users"], finance: ["finance"], live: ["paper"], strategies: ["strategies"], paper: ["paper"], risk: ["risk", "recovery"], readiness: ["readiness"], health: ["health", "recovery", "activation"], recovery: ["recovery"], timeline: ["audit", "recovery"], audit: ["audit"], settings: [] }
+  const sectionEndpoints: Record<string, string[]> = { overview: ["overview", "recovery"], users: ["users"], finance: ["finance"], live: ["paper"], real: [], strategies: ["strategies"], paper: ["paper"], risk: ["risk", "recovery"], readiness: ["readiness"], health: ["health", "recovery", "activation"], recovery: ["recovery"], timeline: ["audit", "recovery"], audit: ["audit"], settings: [] }
   const currentSectionErrors = sectionEndpoints[section]?.map(key => endpointErrors[key]).filter(Boolean) as string[] || []
   useEffect(() => {
     const requested = new URLSearchParams(window.location.search).get("tab")
@@ -495,6 +497,8 @@ export default function AdminPage() {
             </Panel>
           </div>
         )}
+
+        {section === "real" && <LiveStrategies />}
 
         {section === "live" && (
           <div className="space-y-3">
