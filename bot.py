@@ -898,8 +898,17 @@ def htf_trend_ok(symbol, side, ex=None):
     except:
         return True
 
+def _capital_plan():
+    """The owner's capital plan from the shared risk ledger (dashboard), or None."""
+    try: return riskmgr.capital_plan(riskmgr.load_risk_state(RISK_PATH)["limits"])
+    except Exception: return None
+
 def position_size(price, ex=None, stop_price=None):
-    """Return quote margin; percent-risk mode targets configured worst-case stop loss."""
+    """Return quote margin; percent-risk mode targets configured worst-case stop loss. Live with a capital plan set on
+    the dashboard: the plan's margin per trade, for every strategy (the gate caps how many trades are open)."""
+    if not CONFIG.get("paper_trading"):
+        plan = _capital_plan()
+        if plan: return float(plan["margin"])
     base=float(CONFIG.get("trade_amount_usdt", 20))
     if not CONFIG.get("use_percent_risk"):
         return base

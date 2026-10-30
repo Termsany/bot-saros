@@ -20,7 +20,40 @@ DEFAULT_LIMITS = {
     "max_drawdown_pct": 5.0,
     "leverage": 1,
     "margin_mode": "isolated",
+    # the owner's capital plan (dashboard): None = not set (no count limit, the bots' own sizes)
+    "capital_usdt": None,
+    "capital_reserve_pct": 40.0,      # never put to work: losses and margin safety
+    "capital_margin_pct": 1.0,        # margin per trade, % of capital ...
+    "capital_min_margin_usdt": 30.0,  # ... never below this (BTC/ETH orders must meet Binance's minimum at x2)
 }
+
+
+def capital_plan(limits, equity_usdt=None):
+    """What the owner's capital allows: margin per trade and the most trades open at once, every strategy together.
+    margin = max(min margin, capital × margin %); max open = capital × (1 − reserve %) ÷ margin. The capital counts at
+    most what the account really holds (equity), so a typo can't open more than the money there. None = no plan set."""
+    try:
+        capital = float(limits.get("capital_usdt") or 0)
+    except (TypeError, ValueError):
+        return None
+    if capital <= 0:
+        return None
+    effective = min(capital, float(equity_usdt)) if _valid_equity(equity_usdt) else capital
+    margin = max(float(limits.get("capital_min_margin_usdt") or 30.0), capital * float(limits.get("capital_margin_pct") or 1.0) / 100.0)
+    usable = effective * (1.0 - float(limits.get("capital_reserve_pct") if limits.get("capital_reserve_pct") is not None else 40.0) / 100.0)
+    return {"capital": capital, "effective_capital": round(effective, 2), "margin": round(margin, 2),
+            "max_open": max(0, int(usable // margin))}
+
+
+def _over_capital_plan(state, equity_usdt, adding):
+    plan = capital_plan(state["limits"], equity_usdt)
+    if not plan:
+        return None
+    n = len(state.get("open_risk") or {})
+    if n + adding > plan["max_open"]:
+        return (f"max open trades for capital ${plan['effective_capital']:.0f} reached: {n} open + {adding} new > {plan['max_open']} "
+                f"(raise the capital on the dashboard to allow more)")
+    return None
 _DB_SUFFIX = ".sqlite3"
 
 
@@ -232,6 +265,10 @@ def pre_trade_gate(path, *, strategy, symbol, side, risk_usdt, notional_usdt,
             con.execute("ROLLBACK")
             return False, f"kill switch is tripped: {state['kill_switch'].get('reason')}"
         limits = state["limits"]
+        over = _over_capital_plan(state, equity_usdt, 1)
+        if over:
+            con.execute("ROLLBACK")
+            return False, over
         pct = risk_usdt / float(equity_usdt) * 100.0
         cap = float(limits.get("risk_per_trade_pct", DEFAULT_LIMITS["risk_per_trade_pct"]))
         key = f"{strategy}:{symbol}"
@@ -285,6 +322,9 @@ def pre_trade_gate_basket(path, *, strategy, legs, equity_usdt):
             con.execute("ROLLBACK")
             return False, f"kill switch is tripped: {state['kill_switch'].get('reason')}"
         limits = state["limits"]
+        over = _over_capital_plan(state, equity_usdt, len(legs))   # a basket enters whole or not at all
+        if over:
+            con.execute("ROLLBACK"); return False, over
         requested = []
         for leg in legs:
             try:

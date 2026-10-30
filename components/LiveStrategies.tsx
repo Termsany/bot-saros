@@ -1,7 +1,51 @@
 "use client"
 import { useCallback, useEffect, useState } from "react"
-import { apiLiveStatus, apiLiveStrategies, apiSetLiveStrategies } from "@/lib/api"
+import { apiLiveStatus, apiLiveStrategies, apiSetCapital, apiSetLiveStrategies } from "@/lib/api"
 import { LivePositions } from "@/components/LivePositions"
+
+const usd = (v: number) => `$${v.toLocaleString("en-US", { maximumFractionDigits: 2 })}`
+
+/** Same rule as risk_manager.capital_plan: margin = max(min, capital × margin %); max open = capital × (1 − reserve %) ÷ margin. */
+function plan(capital: number, c: any){
+  if(!(capital > 0)) return null
+  const margin = Math.max(c?.capital_min_margin_usdt ?? 30, capital * (c?.capital_margin_pct ?? 1) / 100)
+  return { margin, maxOpen: Math.floor(capital * (1 - (c?.capital_reserve_pct ?? 40) / 100) / margin) }
+}
+
+/** The owner's capital for this account: it decides the margin per trade and the most trades open at once (all the
+ *  strategies together). Entries beyond that count are refused until the capital is raised. */
+function CapitalPanel({ env, cfg, reload }: { env: "demo"|"live", cfg: any, reload: () => void }){
+  const c = cfg.capital || {}
+  const [value, setValue] = useState<string>(c.capital_usdt ? String(c.capital_usdt) : "")
+  const [msg, setMsg] = useState("")
+  useEffect(() => { setValue(c.capital_usdt ? String(c.capital_usdt) : ""); setMsg("") }, [env, c.capital_usdt])
+  const p = plan(Number(value), c)
+  async function save(){
+    const n = Number(value) || 0
+    if(!confirm(n ? `راس المال ${usd(n)} على ${env === "demo" ? "الـ Demo" : "الحساب الحقيقي"}:\nمارجن ${usd(p!.margin)} لكل صفقة، وبحد أقصى ${p!.maxOpen} صفقة مفتوحة.` : "إلغاء خطة راس المال؟")) return
+    try{ await apiSetCapital(env, n); setMsg("✅ اتحفظ"); reload() } catch(e: any){ setMsg(`⚠️ ${e.message}`) }
+  }
+  return (
+    <div className="rounded-2xl border border-line bg-surface p-4">
+      <h2 className="text-sm font-black">راس المال</h2>
+      <p className="mt-1 text-xs text-muted">بيحدد المارجن لكل صفقة وأقصى عدد صفقات مفتوحة في نفس الوقت (كل الاستراتيجيات مع بعض). أي صفقة زيادة بتترفض لحد ما ترفع راس المال. {c.capital_reserve_pct ?? 40}% بيفضل احتياطي، والمارجن {c.capital_margin_pct ?? 1}% من راس المال ومش أقل من {usd(c.capital_min_margin_usdt ?? 30)}، رافعة 2x.</p>
+      <div className="mt-3 flex flex-wrap items-end gap-3">
+        <label className="text-xs text-muted">راس المال (USDT)
+          <input type="number" min={0} inputMode="decimal" value={value} onChange={e => setValue(e.target.value)} dir="ltr" placeholder="مثلا 1000"
+            className="mt-1 block w-40 rounded-lg border border-line bg-bg px-2 py-1.5 text-sm" />
+        </label>
+        <button onClick={save} disabled={Number(value) === (c.capital_usdt || 0)} className="rounded-lg bg-corona px-4 py-2 text-xs font-black text-bg disabled:opacity-40">احفظ</button>
+        {msg && <span className="text-xs text-muted">{msg}</span>}
+      </div>
+      {p ? <div className="mt-3 grid gap-2 text-xs sm:grid-cols-3">
+        <div className="rounded-xl border border-line/70 p-2">المارجن لكل صفقة<div className="font-mono text-base font-black" dir="ltr">{usd(p.margin)}</div></div>
+        <div className="rounded-xl border border-line/70 p-2">أقصى صفقات مفتوحة<div className="font-mono text-base font-black" dir="ltr">{p.maxOpen}</div></div>
+        <div className="rounded-xl border border-line/70 p-2">مفتوح دلوقتي<div className="font-mono text-base font-black" dir="ltr">{c.open_trades ?? "—"}{c.plan ? ` / ${c.plan.max_open}` : ""}</div></div>
+      </div> : <div className="mt-2 text-xs text-faint">مفيش خطة: كل بوت بيدخل بالحجم المضبوط في خدمته ومفيش حد لعدد الصفقات.</div>}
+      {c.plan && c.plan.effective_capital < c.plan.capital && <div className="mt-2 text-xs text-loss">رصيد الحساب أقل من راس المال: العدد محسوب على {usd(c.plan.effective_capital)}.</div>}
+    </div>
+  )
+}
 
 const LABELS: Record<string, string> = {
   trend_daily: "ترند يومي", vol_breakout: "اختراق التقلب", rsi2_pullback: "RSI2 الارتداد", trend_breakout: "اختراق الترند",
@@ -45,6 +89,7 @@ export function LiveStrategies(){
   const changed = cfg.strategies.some((r: any) => r.on !== chosen.has(r.id))
   return (
     <div className="space-y-3">
+      <CapitalPanel env={env} cfg={cfg} reload={load} />
       <div className="rounded-2xl border border-line bg-surface p-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-sm font-black">الاستراتيجيات على حسابك</h2>
