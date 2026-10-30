@@ -23,3 +23,5 @@ for b in status momentum listing ratio breakout rsi2 tbreak; do
     own_dir "$P/$b/commands" raqmapi:raqmpaper 02770     # the bot deletes requests it ran (group write)
     own_dir "$P/$b/results" raqm:raqmpaper 02770
 done
+# new group lists reach a process only when it starts (try-restart: only services already running)
+systemctl try-restart raqm-api raqm-bot raqm-listing raqm-momentum raqm-ratio raqm-breakout raqm-rsi2 raqm-tbreak 2>/dev/null || true

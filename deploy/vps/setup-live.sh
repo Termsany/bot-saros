@@ -80,4 +80,7 @@ shared_dir /opt/raqm-ipc; shared_dir /opt/raqm-ipc/commands; shared_dir /opt/raq
 # risk ledger + live activation record shared with the API (RAQM_RISK_DIR in both units): the dashboard's kill switch,
 # limits and revoke must reach the bot. The bot and the API create the files themselves (mode 660).
 shared_dir /opt/raqm-risk
+# new group lists reach a process only when it starts: without this the API couldn't open the shared folders and the
+# live bot couldn't read ledger files the API created (try-restart: only services already running)
+systemctl try-restart raqm-api raqm-trend-demo 2>/dev/null || true
 echo "raqm-live ready: $(ls "$L" | tr '\n' ' ')"

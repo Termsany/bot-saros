@@ -127,7 +127,7 @@ class FailedExitBasketTests(Base):
     def test_failed_leg_is_flagged_closed_leg_is_booked_later_exits_still_run(self):
         ex = Closes(); self.open_three(ex); ex.fail = B
         res = botmod._phase2_live_basket(ex, self.state, "momentum_ls", "rebalance-exit", self.exits(A, B, C), reserve=False)
-        self.assertEqual(res["status"], "recovery_required")
+        self.assertEqual(res["status"], "exit_retry")                               # nothing changed for B: retried, nothing pending
         self.assertEqual([r["leg"]["symbol"] for r in res["residual"]], [B])        # the coin still open
         self.assertNotIn(A, self.state["positions"])                                 # A really closed: booked
         self.assertNotIn(f"momentum_ls:{A}", self.risk_rows())

@@ -240,6 +240,12 @@ class MultiLegExecutionEngine:
                         if persist_fills(filled) is not True: raise RuntimeError("closed exit legs not persisted")
                     except Exception as pexc:
                         residual.extend({"leg": leg, "fill": r, "reason": f"closed, not booked: {pexc}"} for leg, r in filled)
+                if all("unchanged" in str(item["reason"]) for item in residual):
+                    # nothing happened on the exchange for the legs left: the caller simply tries them again. A
+                    # recovery row here stayed pending, re-marked the coin after the retry had closed it, and blocked
+                    # every entry for good
+                    self._write_execution(execution_id, strategy, intent, "exit_retry", payload, residual)
+                    return {"ok": False, "status": "exit_retry", "execution_id": execution_id, "residual": residual, "fills": filled}
                 self._write_execution(execution_id, strategy, intent, "recovery_required", payload, residual)
                 con = self._connect()
                 try:
@@ -260,7 +266,8 @@ class MultiLegExecutionEngine:
                     self._write_execution(execution_id, strategy, intent, "post_fill_recovery", payload,
                                            [{"leg": leg, "fill": result, "reason": reason} for leg, result in filled])
                     self.block("post-fill caller persistence requires recovery")
-                    return {"ok": False, "status": "post_fill_recovery", "execution_id": execution_id}
+                    return {"ok": False, "status": "post_fill_recovery", "execution_id": execution_id,
+                            "residual": [{"leg": leg, "fill": result, "reason": reason} for leg, result in filled]}
             self._write_execution(execution_id, strategy, intent, "filled", payload)
             return {"ok": True, "status": "filled", "execution_id": execution_id, "fills": filled}
         except Exception as exc:
