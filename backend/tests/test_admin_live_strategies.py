@@ -49,9 +49,10 @@ class StrategyTogglesApiTests(ApiAuthTests):
         super().setUp()
         import app.main as m; self.m = m
         self.p = mock.patch.object(m, "LIVE_ACTIVATION_PATH", Path(self.tmp.name) / "act.sqlite3"); self.p.start()
+        self.p_dir = mock.patch.object(m, "BOT_DIR", Path(self.tmp.name)); self.p_dir.start()   # the audit log
 
     def tearDown(self):
-        self.p.stop(); super().tearDown()
+        self.p.stop(); self.p_dir.stop(); super().tearDown()
 
     def put(self, strategies):
         return self.c.post("/api/live/strategies", headers=self.h("admin-token"), json={"account": "main", "strategies": strategies})
