@@ -59,3 +59,11 @@ class WatchdogTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WatchdogUnitTests(unittest.TestCase):
+    def test_the_unit_lets_it_open_the_risk_ledgers(self):
+        # ProtectSystem=strict made /opt read-only: SQLite couldn't open the ledger, a false "ledger unreadable" alert
+        unit = (ROOT / "deploy" / "vps" / "raqm-watchdog.service").read_text(encoding="utf-8")
+        paths = " ".join(l.split("=", 1)[1] for l in unit.splitlines() if l.startswith("ReadWritePaths="))
+        for d in wd.LEDGERS.values(): self.assertIn(f"-{d.as_posix()}", paths.split())
