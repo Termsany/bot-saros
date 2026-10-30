@@ -131,11 +131,12 @@ class FailedExitBasketTests(Base):
         self.assertEqual([r["leg"]["symbol"] for r in res["residual"]], [B])        # the coin still open
         self.assertNotIn(A, self.state["positions"])                                 # A really closed: booked
         self.assertNotIn(f"momentum_ls:{A}", self.risk_rows())
-        self.assertEqual(list(self.state["recovery_required"]), [B])
+        self.assertNotIn(C, self.state["positions"]); self.assertEqual(ex.positions["C/USDT"], 0.0)   # tried after B: closed too
+        # B's close was refused and B is exactly as it was: retried, not locked for a person (full review, 2026-10-30)
+        self.assertNotIn(B, self.state.get("recovery_required", {})); self.assertTrue(self.notified)
         ex.fail = None; botmod._ENTRY_BLOCK["reason"] = ""
-        later = botmod._phase2_live_basket(ex, self.state, "momentum_ls", "other-exit", self.exits(C), reserve=False)
-        self.assertEqual(later["status"], "filled"); self.assertEqual(ex.positions["C/USDT"], 0.0)
-        self.assertTrue(botmod._ENTRY_BLOCK["reason"])                               # entries stay blocked meanwhile
+        later = botmod._phase2_live_basket(ex, self.state, "momentum_ls", "retry-exit", self.exits(B), reserve=False)
+        self.assertEqual(later["status"], "filled"); self.assertEqual(ex.positions["B/USDT"], 0.0)
 
     def test_residual_clears_itself_once_flat_and_its_stops_are_gone(self):
         ex = Closes(); self.open_three(ex); ex.fail = B

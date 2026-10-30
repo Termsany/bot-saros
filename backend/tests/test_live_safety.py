@@ -193,7 +193,9 @@ class CloseLivePositionTests(unittest.TestCase):
         ex.fetch_positions.return_value = [{"symbol": "SOL/USDT:USDT", "contracts": 1.0}]
         res = botmod.close_live_position(ex, "SOL/USDT", {"side": "long", "qty": 1.0}, 90.0)
         self.assertFalse(res["accounting_verified"])
-        self.assertTrue(res["recovery_required"])
+        # still exactly as before: nothing happened, so it is retried next cycle (a reduceOnly close can't overshoot)
+        # rather than locked for a person
+        self.assertTrue(res["unchanged"]); self.assertFalse(res["recovery_required"])
         with self.assertRaises(Exception):
             botmod._require_verified_close(res)
 

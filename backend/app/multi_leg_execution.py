@@ -157,6 +157,11 @@ class MultiLegExecutionEngine:
             self._write_execution(execution_id, strategy, intent, "risk_blocked", payload, {"reason": reason})
             return {"ok": False, "status": "risk_blocked", "reason": reason, "execution_id": execution_id}
         filled = []
+        # an exit-only basket: every leg is an independent reduce-only close. One that fails is left as residual and
+        # the others are still tried and booked — stopping at the first failure left a rebalance half-closed (a
+        # lopsided, directional book) until a person stepped in
+        all_exits = all(leg.get("action", "entry") == "exit" for leg in ordered)
+        exit_failures = []
         try:
             for n, leg in enumerate(ordered, 1):
                 self._write_step(execution_id, n, leg, "started")
@@ -181,6 +186,9 @@ class MultiLegExecutionEngine:
                     self._write_step(execution_id, n, leg, "filled", result=result)
                 except Exception as exc:
                     self._write_step(execution_id, n, leg, "failed", error=exc)
+                    if all_exits:
+                        exit_failures.append({"leg": leg, "fill": None, "reason": f"exit leg failed: {exc}"})
+                        continue
                     residual = []
                     if leg.get("action", "entry") == "exit":
                         # the position this exit leg was closing is still open (or unknown): it is the exposure
@@ -225,6 +233,22 @@ class MultiLegExecutionEngine:
                     return {"ok": False, "status": "compensated", "execution_id": execution_id}
                 if not verify_protection(leg, result):
                     raise ExecutionRecoveryRequired(f"protective order verification failed for {leg['symbol']}")
+            if exit_failures:
+                residual = list(exit_failures)
+                if filled and persist_fills is not None:
+                    try:
+                        if persist_fills(filled) is not True: raise RuntimeError("closed exit legs not persisted")
+                    except Exception as pexc:
+                        residual.extend({"leg": leg, "fill": r, "reason": f"closed, not booked: {pexc}"} for leg, r in filled)
+                self._write_execution(execution_id, strategy, intent, "recovery_required", payload, residual)
+                con = self._connect()
+                try:
+                    con.execute("INSERT OR REPLACE INTO execution_residuals VALUES(?,?,?,?,?)",
+                                (execution_id, json.dumps(residual, default=str), "open", _now(), _now()))
+                finally:
+                    con.close()
+                return {"ok": False, "status": "recovery_required", "execution_id": execution_id, "residual": residual,
+                        "fills": filled}
             if persist_fills is not None:
                 try:
                     persisted = persist_fills(filled)
