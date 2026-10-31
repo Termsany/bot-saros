@@ -13,7 +13,7 @@ import sys, re, uuid
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from app.db import init_db, async_session, Trade, BacktestRun, UserSetting, UserClose
+from app.db import init_db, async_session, Trade, BacktestRun, UserSetting, UserClose, PlanPrice, Invitation, PlanGrant
 from app.auth import require_user, require_admin, require_admin_or_cron, is_admin
 from app import live_activation
 from sqlalchemy import select, desc
@@ -23,6 +23,7 @@ from . import admin_control
 from app import risk_manager
 from app import live_bots_feed
 from app import admin_users
+from app import plans_invites as pi
 
 try:
     from dotenv import load_dotenv; load_dotenv()
@@ -90,6 +91,7 @@ async def lifespan(app: FastAPI):
     print("DB ready")
     asyncio.create_task(check_supabase_service_key())  # don't delay startup on a slow Supabase
     asyncio.create_task(_resume_bot_after_restart())
+    asyncio.create_task(_gift_reminder_loop())
     yield
 
 # API docs list every endpoint — off in production unless ENABLE_API_DOCS=true
@@ -158,30 +160,47 @@ def backtest_span_days(req) -> float:
     return req.limit * TF_MINUTES[req.timeframe] / 1440
 _tier_cache: dict = {}
 
+async def _paid_tier(user: dict) -> str:
+    """The plan in Supabase profiles (Stripe writes it). Raises on a failed lookup (callers decide what that means)."""
+    url, key = os.getenv("SUPABASE_URL", "").rstrip("/"), os.getenv("SUPABASE_SERVICE_KEY", "")
+    if not (url and key): return "free"
+    import httpx
+    async with httpx.AsyncClient(timeout=8) as client:
+        r = await client.get(f"{url}/rest/v1/profiles", params={"id": f"eq.{user['id']}", "select": "tier"},
+                             headers={"apikey": key, "Authorization": f"Bearer {key}"})
+    rows = r.json() if r.status_code == 200 else []
+    return rows[0]["tier"] if rows and rows[0].get("tier") in TIER_STRATEGY_COUNT else "free"
+
+async def _gift_of(user_id: str) -> dict | None:
+    """The user's gift while it lasts: {"tier", "expires_at"}, else None."""
+    async with async_session() as sess:
+        g = await sess.get(PlanGrant, user_id)
+    if g is None: return None
+    grant = {"tier": g.tier, "expires_at": g.expires_at}
+    return grant if pi.active_grant_tier(grant) else None
+
 async def get_tier(user: dict) -> str:
-    """Tier from Supabase profiles (service key). Fails closed to 'free'; admins get everything."""
-    from app.auth import _admin_emails
+    """Paid plan (Supabase profiles) or an active gift, whichever is higher. Fails closed to 'free'; admins get everything."""
     if is_admin(user):
         return "elite"
     hit = _tier_cache.get(user["id"])
     if hit and hit[0] > _time.monotonic():
         return hit[1]
-    tier = "free"
-    url, key = os.getenv("SUPABASE_URL", "").rstrip("/"), os.getenv("SUPABASE_SERVICE_KEY", "")
-    if url and key:
-        try:
-            import httpx
-            async with httpx.AsyncClient(timeout=8) as client:
-                r = await client.get(f"{url}/rest/v1/profiles", params={"id": f"eq.{user['id']}", "select": "tier"},
-                                     headers={"apikey": key, "Authorization": f"Bearer {key}"})
-            rows = r.json() if r.status_code == 200 else []
-            if rows and rows[0].get("tier") in TIER_STRATEGY_COUNT:
-                tier = rows[0]["tier"]
-        except Exception as e:
-            print(f"get_tier error: {e}")
-            return "free"  # don't cache failures
+    try:
+        gift = await _gift_of(user["id"])
+    except Exception as e:
+        print(f"get_tier gift error: {type(e).__name__}")
+        gift = None
+    try:
+        tier = await _paid_tier(user)
+    except Exception as e:
+        print(f"get_tier error: {e}")
+        return gift["tier"] if gift else "free"  # don't cache failures
+    if gift: tier = pi.higher_tier(tier, gift["tier"])
     if len(_tier_cache) > 5000: _tier_cache.clear()
-    _tier_cache[user["id"]] = (_time.monotonic() + 60, tier)
+    # a gift ending inside the cache window must not outlive its end
+    ttl = 60 if not gift else max(1, min(60, (pi.parse(gift["expires_at"]) - pi.now()).total_seconds()))
+    _tier_cache[user["id"]] = (_time.monotonic() + ttl, tier)
     return tier
 
 def _cleanup_backtest_files(max_age_s: int = 3600):
@@ -917,8 +936,11 @@ async def paper_close_result(bot: str, rid: str, user: dict = Depends(require_ad
 
 @app.get("/api/user/tier")
 async def user_tier(user: dict = Depends(require_user)):
-    """يرجع باقة المستخدم الحالي من Supabase — server-side verification"""
-    return {"tier": await get_tier(user)}
+    """The caller's plan (paid or gift, the higher) — server-side verification; gift = an active gift's plan and end."""
+    gift = None
+    try: gift = None if is_admin(user) else await _gift_of(user["id"])
+    except Exception: pass
+    return {"tier": await get_tier(user), "gift": gift}
 
 
 @app.post("/api/optimizer/run")
@@ -1469,7 +1491,13 @@ async def admin_users_list(user: dict = Depends(require_admin)):
     async with async_session() as sess:
         rows = (await sess.execute(select(UserSetting))).scalars().all()
     local = {r.user_id: {"capital": r.capital, "strategy": r.strategy, "started_at": r.started_at, "updated_at": r.updated_at} for r in rows}
-    return admin_users.merge_users(gotrue, tiers, local)
+    merged = admin_users.merge_users(gotrue, tiers, local)
+    grants, at = await _grants(), pi.now()
+    for u in merged["users"]:
+        g = grants.get(u["id"])
+        u["gift_tier"] = pi.active_grant_tier(g, at)
+        u["gift_expires_at"] = g["expires_at"] if u["gift_tier"] else None
+    return merged
 
 @app.post("/api/admin/users/{target_user_id}/ban")
 async def admin_user_ban(target_user_id: str, req: UserBanReq, user: dict = Depends(require_admin)):
@@ -1527,9 +1555,267 @@ async def admin_finance(user: dict = Depends(require_admin)):
         rows = (await sess.execute(select(UserSetting))).scalars().all()
     local = {r.user_id: {"capital": r.capital, "strategy": r.strategy, "started_at": r.started_at, "updated_at": r.updated_at} for r in rows}
     merged = admin_users.merge_users(gotrue, tiers, local)
-    finance = admin_users.compute_finance_summary(merged["plan_counts"])
-    return {"available": merged["available"], "error": merged["error"], "plan_counts": merged["plan_counts"], "finance": finance}
+    prices = pi.effective_prices(await _saved_prices())
+    finance = admin_users.compute_finance_summary(merged["plan_counts"], prices)
+    return {"available": merged["available"], "error": merged["error"], "plan_counts": merged["plan_counts"], "finance": finance, "prices": prices}
 
+
+
+# ── Plan prices and invitations (app/plans_invites.py has the rules)
+async def _saved_prices() -> dict[str, int]:
+    async with async_session() as sess:
+        rows = (await sess.execute(select(PlanPrice))).scalars().all()
+    return {r.tier: r.price_usd for r in rows}
+
+async def _grants() -> dict[str, dict]:
+    async with async_session() as sess:
+        rows = (await sess.execute(select(PlanGrant))).scalars().all()
+    return {r.user_id: {"tier": r.tier, "expires_at": r.expires_at, "email": r.email, "invite_id": r.invite_id,
+                        "granted_at": r.granted_at} for r in rows}
+
+@app.get("/api/plans")
+async def plans_public():
+    """Every plan's current monthly price (USD) — the pricing page and the Stripe checkout read this."""
+    return {"currency": "usd", "prices": pi.effective_prices(await _saved_prices())}
+
+@app.get("/api/admin/plans")
+async def admin_plans(user: dict = Depends(require_admin)):
+    async with async_session() as sess:
+        rows = (await sess.execute(select(PlanPrice))).scalars().all()
+    saved = {r.tier: r.price_usd for r in rows}
+    return {"prices": pi.effective_prices(saved), "defaults": dict(admin_users.TIER_PRICES_USD),
+            "changed": {r.tier: {"price_usd": r.price_usd, "updated_at": r.updated_at, "updated_by": r.updated_by} for r in rows}}
+
+class PlanPricesReq(AdminModel):
+    prices: dict
+    confirm: bool = False
+
+@app.post("/api/admin/plans")
+async def admin_plans_set(req: PlanPricesReq, user: dict = Depends(require_admin)):
+    """Change paid plans' monthly prices. New checkouts charge them; existing Stripe subscribers keep their price."""
+    rate_limit(user["id"], "admin_mutation", 30, 60)
+    if not req.confirm: raise HTTPException(400, "confirmation required")
+    try: patch = pi.validate_prices(req.prices)
+    except ValueError as e: raise HTTPException(400, str(e))
+    actor, at = await _admin_actor(user), pi.iso(pi.now())
+    async with async_session() as sess:
+        for tier, price in patch.items():
+            row = await sess.get(PlanPrice, tier)
+            if row is None: sess.add(PlanPrice(tier=tier, price_usd=price, updated_at=at, updated_by=actor))
+            else: row.price_usd, row.updated_at, row.updated_by = price, at, actor
+        await sess.commit()
+    admin_control.audit(BOT_DIR, actor, "plan_prices", "ok", patch)
+    return {"ok": True, "prices": pi.effective_prices(await _saved_prices())}
+
+def _invite_out(inv: Invitation, prices: dict, paid_tier_by_email: dict | None = None) -> dict:
+    d = {c: getattr(inv, c) for c in ("id", "email", "tier", "kind", "days", "status", "note", "created_at", "created_by",
+                                     "link_expires_at", "emailed_at", "email_error", "opened_checkout_at", "accepted_at")}
+    d["state"] = pi.invite_state(d)
+    if inv.kind in ("trial", "paid") and d["state"] == "pending" and paid_tier_by_email is not None:
+        if pi.TIER_RANK.get(paid_tier_by_email.get(inv.email, "free"), 0) >= pi.TIER_RANK.get(inv.tier, 0):
+            d["state"] = "subscribed"
+    d["link"] = pi.invite_link(inv.id)
+    d["offer"] = pi.offer_text(inv.tier, inv.kind, inv.days, prices.get(inv.tier))
+    return d
+
+@app.get("/api/admin/invites")
+async def admin_invites(user: dict = Depends(require_admin)):
+    rate_limit(user["id"], "admin_users", 20, 60)
+    prices = pi.effective_prices(await _saved_prices())
+    gotrue = await admin_users.fetch_gotrue_users()
+    tiers = await admin_users.fetch_profile_tiers()
+    by_email = {pi.normalize_email(u.get("email")): tiers.get("tiers", {}).get(u.get("id")) or "free"
+                for u in gotrue.get("users", []) if u.get("email")}
+    async with async_session() as sess:
+        rows = (await sess.execute(select(Invitation).order_by(desc(Invitation.created_at)).limit(200))).scalars().all()
+    grants = await _grants()
+    at = pi.now()
+    return {"email_configured": pi.email_configured(),
+            "invites": [_invite_out(r, prices, by_email if gotrue.get("available") else None) for r in rows],
+            "grants": [{"user_id": uid, **g, "active": bool(pi.active_grant_tier(g, at))} for uid, g in grants.items()]}
+
+class InviteReq(AdminModel):
+    email: str = Field(max_length=254)
+    tier: str
+    kind: str
+    days: Optional[int] = Field(None, ge=1, le=pi.MAX_DAYS)
+    note: Optional[str] = Field(None, max_length=200)
+    send_email: bool = True
+    confirm: bool = False
+
+async def _email_invite(inv: Invitation, prices: dict) -> dict:
+    subject, body = pi.invite_email(inv.tier, inv.kind, inv.days, prices.get(inv.tier), pi.invite_link(inv.id))
+    return await pi.send_email(inv.email, subject, body)
+
+@app.post("/api/admin/invites")
+async def admin_invite_create(req: InviteReq, user: dict = Depends(require_admin)):
+    rate_limit(user["id"], "admin_mutation", 30, 60)
+    if not req.confirm: raise HTTPException(400, "confirmation required")
+    email = pi.normalize_email(req.email)
+    if not pi.valid_email(email): raise HTTPException(400, "invalid email")
+    if req.tier not in pi.PAID_TIERS: raise HTTPException(400, f"tier must be one of {pi.PAID_TIERS}")
+    if req.kind not in pi.KINDS: raise HTTPException(400, f"kind must be one of {pi.KINDS}")
+    if req.kind in ("gift", "trial") and not req.days: raise HTTPException(400, "days required for a gift or a trial")
+    at = pi.now()
+    async with async_session() as sess:
+        open_ = (await sess.execute(select(Invitation).where(Invitation.email == email, Invitation.status == "pending"))).scalars().all()
+        if any(pi.invite_state({"status": r.status, "link_expires_at": r.link_expires_at}, at) == "pending" for r in open_):
+            raise HTTPException(409, "there is already a pending invitation for this email — revoke or resend it")
+        inv = Invitation(id=pi.new_invite_id(), email=email, tier=req.tier, kind=req.kind,
+                         days=req.days if req.kind != "paid" else None, status="pending", note=(req.note or "").strip() or None,
+                         created_at=pi.iso(at), created_by=await _admin_actor(user),
+                         link_expires_at=pi.iso(at + pi.timedelta(days=pi.LINK_DAYS)))
+        sess.add(inv)
+        await sess.commit()
+    prices = pi.effective_prices(await _saved_prices())
+    sent = {"ok": False, "error": None}
+    if req.send_email:
+        sent = await _email_invite(inv, prices)
+        async with async_session() as sess:
+            row = await sess.get(Invitation, inv.id)
+            if sent["ok"]: row.emailed_at = pi.iso(pi.now())
+            row.email_error = sent["error"]
+            await sess.commit()
+            inv = row
+    admin_control.audit(BOT_DIR, inv.created_by, "invite_create", "ok",
+                         {"invite": inv.id[:6], "email": email, "tier": req.tier, "kind": req.kind, "days": inv.days, "emailed": sent["ok"]})
+    return {"ok": True, "invite": _invite_out(inv, prices), "emailed": sent["ok"], "email_error": sent["error"]}
+
+class InviteActionReq(AdminModel):
+    confirm: bool = False
+
+@app.post("/api/admin/invites/{invite_id}/revoke")
+async def admin_invite_revoke(invite_id: str, req: InviteActionReq, user: dict = Depends(require_admin)):
+    rate_limit(user["id"], "admin_mutation", 30, 60)
+    if not req.confirm: raise HTTPException(400, "confirmation required")
+    async with async_session() as sess:
+        inv = await sess.get(Invitation, invite_id)
+        if inv is None: raise HTTPException(404, "invitation not found")
+        if inv.status != "pending": raise HTTPException(409, f"invitation is {inv.status}")
+        inv.status = "revoked"
+        await sess.commit()
+    admin_control.audit(BOT_DIR, await _admin_actor(user), "invite_revoke", "ok", {"invite": invite_id[:6], "email": inv.email})
+    return {"ok": True}
+
+@app.post("/api/admin/invites/{invite_id}/resend")
+async def admin_invite_resend(invite_id: str, req: InviteActionReq, user: dict = Depends(require_admin)):
+    """Email the invitation again; the link gets a fresh LINK_DAYS."""
+    rate_limit(user["id"], "admin_mutation", 30, 60)
+    if not req.confirm: raise HTTPException(400, "confirmation required")
+    async with async_session() as sess:
+        inv = await sess.get(Invitation, invite_id)
+        if inv is None: raise HTTPException(404, "invitation not found")
+        if inv.status != "pending": raise HTTPException(409, f"invitation is {inv.status}")
+        inv.link_expires_at = pi.iso(pi.now() + pi.timedelta(days=pi.LINK_DAYS))
+        await sess.commit()
+    prices = pi.effective_prices(await _saved_prices())
+    sent = await _email_invite(inv, prices)
+    async with async_session() as sess:
+        row = await sess.get(Invitation, invite_id)
+        if sent["ok"]: row.emailed_at = pi.iso(pi.now())
+        row.email_error = sent["error"]
+        await sess.commit()
+    admin_control.audit(BOT_DIR, await _admin_actor(user), "invite_resend", "ok" if sent["ok"] else "failed", {"invite": invite_id[:6], "email": inv.email})
+    return {"ok": True, "emailed": sent["ok"], "email_error": sent["error"]}
+
+@app.post("/api/admin/grants/{target_user_id}/end")
+async def admin_grant_end(target_user_id: str, req: InviteActionReq, user: dict = Depends(require_admin)):
+    """End a gift now: the user is back on their paid plan (or free)."""
+    rate_limit(user["id"], "admin_mutation", 30, 60)
+    if not req.confirm: raise HTTPException(400, "confirmation required")
+    async with async_session() as sess:
+        g = await sess.get(PlanGrant, target_user_id)
+        if g is None: raise HTTPException(404, "no gift for this user")
+        g.expires_at = pi.iso(pi.now())
+        await sess.commit()
+    _tier_cache.pop(target_user_id, None)
+    admin_control.audit(BOT_DIR, await _admin_actor(user), "gift_end", "ok", {"target_user_id": target_user_id})
+    return {"ok": True}
+
+async def _load_invite(invite_id: str) -> Invitation:
+    if not re.fullmatch(r"[A-Za-z0-9_-]{16,64}", invite_id or ""): raise HTTPException(404, "invitation not found")
+    async with async_session() as sess:
+        inv = await sess.get(Invitation, invite_id)
+    if inv is None: raise HTTPException(404, "invitation not found")
+    return inv
+
+@app.get("/api/invites/{invite_id}")
+async def invite_public(invite_id: str, request: Request):
+    """What the invitation offers, for its page. The email is masked: the link alone doesn't reveal the address."""
+    rate_limit(request.client.host if request.client else "?", "invite_view", 30, 60)
+    inv = await _load_invite(invite_id)
+    prices = pi.effective_prices(await _saved_prices())
+    return {"state": pi.invite_state({"status": inv.status, "link_expires_at": inv.link_expires_at}), "tier": inv.tier,
+            "kind": inv.kind, "days": inv.days, "price_usd": prices.get(inv.tier), "email_hint": pi.mask_email(inv.email),
+            "offer": pi.offer_text(inv.tier, inv.kind, inv.days, prices.get(inv.tier))}
+
+def _check_invitee(inv: Invitation, user: dict):
+    if pi.invite_state({"status": inv.status, "link_expires_at": inv.link_expires_at}) != "pending":
+        raise HTTPException(409, "invitation is no longer valid")
+    if not user.get("email_confirmed"): raise HTTPException(403, "confirm your email first")
+    if pi.normalize_email(user.get("email")) != inv.email: raise HTTPException(403, "this invitation is for another email")
+
+@app.post("/api/invites/{invite_id}/accept")
+async def invite_accept(invite_id: str, user: dict = Depends(require_user)):
+    """Take a gift invitation: the plan for its days, on top of the paid plan (the higher one counts)."""
+    rate_limit(user["id"], "invite_accept", 10, 60)
+    inv = await _load_invite(invite_id)
+    _check_invitee(inv, user)
+    if inv.kind != "gift": raise HTTPException(400, "this invitation is taken through checkout")
+    at = pi.now()
+    async with async_session() as sess:
+        row = await sess.get(Invitation, invite_id)
+        if row.status != "pending": raise HTTPException(409, "invitation is no longer valid")
+        g = await sess.get(PlanGrant, user["id"])
+        tier, end = pi.grant_end({"tier": g.tier, "expires_at": g.expires_at} if g else None, inv.tier, inv.days or 0, at)
+        if g is None:
+            sess.add(PlanGrant(user_id=user["id"], email=inv.email, tier=tier, expires_at=pi.iso(end), invite_id=inv.id, granted_at=pi.iso(at)))
+        else:
+            g.tier, g.expires_at, g.invite_id, g.granted_at, g.reminded_at, g.email = tier, pi.iso(end), inv.id, pi.iso(at), None, inv.email
+        row.status, row.accepted_at, row.accepted_user_id = "accepted", pi.iso(at), user["id"]
+        await sess.commit()
+    _tier_cache.pop(user["id"], None)
+    admin_control.audit(BOT_DIR, inv.email, "invite_accept", "ok", {"invite": inv.id[:6], "tier": tier, "until": pi.iso(end)})
+    return {"ok": True, "kind": "gift", "tier": tier, "expires_at": pi.iso(end)}
+
+@app.post("/api/invites/{invite_id}/checkout")
+async def invite_checkout_terms(invite_id: str, user: dict = Depends(require_user)):
+    """For the Stripe checkout route: the plan, price and free days of a trial/paid invitation, for its invitee only."""
+    rate_limit(user["id"], "invite_accept", 10, 60)
+    inv = await _load_invite(invite_id)
+    _check_invitee(inv, user)
+    if inv.kind not in ("trial", "paid"): raise HTTPException(400, "a gift needs no checkout")
+    if pi.TIER_RANK.get(await _paid_tier(user), 0) >= pi.TIER_RANK.get(inv.tier, 0):
+        async with async_session() as sess:
+            row = await sess.get(Invitation, invite_id)
+            row.status, row.accepted_at, row.accepted_user_id = "accepted", pi.iso(pi.now()), user["id"]
+            await sess.commit()
+        raise HTTPException(409, "you already have this plan or a higher one")
+    async with async_session() as sess:
+        row = await sess.get(Invitation, invite_id)
+        row.opened_checkout_at = pi.iso(pi.now())
+        await sess.commit()
+    prices = pi.effective_prices(await _saved_prices())
+    return {"tier": inv.tier, "kind": inv.kind, "trial_days": inv.days if inv.kind == "trial" else None, "price_usd": prices.get(inv.tier)}
+
+async def _gift_reminder_loop():
+    """Hourly: email gifts ending within REMIND_BEFORE_DAYS once (only when email is configured)."""
+    while True:
+        try:
+            if pi.email_configured():
+                at = pi.now()
+                async with async_session() as sess:
+                    rows = (await sess.execute(select(PlanGrant).where(PlanGrant.reminded_at.is_(None)))).scalars().all()
+                    for g in rows:
+                        end = pi.parse(g.expires_at)
+                        if not g.email or not end or not (at < end <= at + pi.timedelta(days=pi.REMIND_BEFORE_DAYS)): continue
+                        subject, body = pi.reminder_email(g.tier, max(1, (end - at).days or 1),
+                                                          (os.getenv("SITE_URL") or "https://bot-saros.vercel.app").rstrip("/") + "/#pricing")
+                        if (await pi.send_email(g.email, subject, body))["ok"]: g.reminded_at = pi.iso(at)
+                    await sess.commit()
+        except Exception as e:
+            print(f"gift reminder: {type(e).__name__}")
+        await asyncio.sleep(3600)
 
 @app.get("/api/admin/readiness")
 async def admin_readiness(user: dict = Depends(require_admin)):

@@ -22,7 +22,19 @@ const FAQ = [
   { q: "الدفع آمن؟", a: "الدفع كله عن طريق Stripe، وبيانات الكارت مش بتعدّي على سيرفراتنا أصلاً." },
 ]
 
-export default function Page(){
+const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+export const revalidate = 300
+
+/** The plans' current prices (the admin can change them), or none so Pricing shows its defaults. */
+async function planPrices(): Promise<Record<string, number> | undefined>{
+  try{
+    const r = await fetch(`${API}/api/plans`, { next: { revalidate: 300 }, signal: AbortSignal.timeout(4000) })
+    return r.ok ? (await r.json()).prices : undefined
+  }catch{ return undefined }
+}
+
+export default async function Page(){
+  const prices = await planPrices()
   return (
     <main className="min-h-screen overflow-x-clip bg-void text-ink">
       <header className="sticky top-0 z-30 border-b border-line/70 bg-void/80 backdrop-blur">
@@ -161,7 +173,7 @@ export default function Page(){
         <div className="mx-auto max-w-[1180px] px-5 py-20">
           <h2 className="text-center text-[30px] font-black">الباقات</h2>
           <p className="mt-2 text-center text-sm text-muted">ابدأ مجاناً بالترند اليومي، ورقّي وقت ما تحتاج بوتات أكتر</p>
-          <div className="mt-10"><Pricing/></div>
+          <div className="mt-10"><Pricing prices={prices}/></div>
         </div>
       </section>
 

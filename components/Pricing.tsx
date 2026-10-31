@@ -4,7 +4,8 @@ import { Check } from "lucide-react"
 import { TIERS } from "@/lib/strategies"
 import { authHeaders } from "@/lib/supabase"
 
-export function Pricing(){
+/** `prices` = the plans' current monthly prices from the backend (the admin can change them); TIERS has the defaults. */
+export function Pricing({ prices }: { prices?: Record<string, number> }){
   const [loading, setLoading] = useState<string|null>(null)
   const [err, setErr] = useState("")
 
@@ -37,7 +38,7 @@ export function Pricing(){
               {t.popular && <span className="rounded-full border border-corona/40 bg-corona/10 px-2.5 py-0.5 text-[12px] font-semibold text-corona">الأكثر طلباً</span>}
             </div>
             <div className="mt-4 flex items-baseline gap-1" dir="ltr" style={{justifyContent:"flex-end"}}>
-              <span className="font-mono text-[36px] font-bold leading-none">{t.price}</span>
+              <span className="font-mono text-[36px] font-bold leading-none">{prices?.[t.id] != null ? `${prices[t.id]}$` : t.price}</span>
               <span className="text-sm text-muted">{t.per}</span>
             </div>
             <ul className="mt-6 flex-1 space-y-2.5 text-sm">

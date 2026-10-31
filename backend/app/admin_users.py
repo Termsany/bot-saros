@@ -149,16 +149,18 @@ def _public_user_fields(raw: dict, tier: str, settings: dict) -> dict:
 TIER_PRICES_USD: dict[str, int] = {"free": 0, "starter": 29, "pro": 59, "elite": 99}
 
 
-def compute_finance_summary(plan_counts: dict[str, int]) -> dict:
-    """MRR + per-tier revenue from plan_counts (tier -> user count) x TIER_PRICES_USD.
+def compute_finance_summary(plan_counts: dict[str, int], prices: dict[str, int] | None = None) -> dict:
+    """MRR + per-tier revenue from plan_counts (tier -> user count) x the plan prices (the admin's, from
+    plans_invites.effective_prices; TIER_PRICES_USD when not given).
 
     Pure arithmetic, no network/DB access — deterministic and trivial to unit test.
     Unknown tier ids (should never happen; merge_users defaults to "free") are priced at 0
     rather than raising, so a bad/old tier value degrades instead of crashing the endpoint.
     """
+    prices = TIER_PRICES_USD if prices is None else prices
     per_tier = {
-        tier: {"users": count, "price_usd": TIER_PRICES_USD.get(tier, 0),
-               "revenue_usd": count * TIER_PRICES_USD.get(tier, 0)}
+        tier: {"users": count, "price_usd": prices.get(tier, 0),
+               "revenue_usd": count * prices.get(tier, 0)}
         for tier, count in plan_counts.items()
     }
     mrr_usd = sum(t["revenue_usd"] for t in per_tier.values())

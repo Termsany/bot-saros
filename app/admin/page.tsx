@@ -6,6 +6,7 @@ import { AppShell } from "@/components/AppShell"
 import { CardHeader, Dot, PageHeader, Pill, Toggle, btn, field, label, type Tone } from "@/components/ui"
 import { LiveStrategies } from "@/components/LiveStrategies"
 import { AdminOverview } from "@/components/AdminOverview"
+import { AdminInvites, PlanPrices } from "@/components/AdminInvites"
 import { TIERS } from "@/lib/strategies"
 import { apiIsAdmin } from "@/lib/api"
 import { authHeaders } from "@/lib/supabase"
@@ -303,7 +304,7 @@ export default function AdminPage() {
     url.searchParams.set("tab", id)
     window.history.replaceState({}, "", `${url.pathname}?${url.searchParams.toString()}`)
   }
-  const sectionEndpoints: Record<string, string[]> = { overview: ["overview", "recovery", "finance"], users: ["users"], finance: ["finance"], live: ["paper"], real: [], strategies: ["strategies"], paper: ["paper"], risk: ["risk", "recovery"], readiness: ["readiness"], health: ["health", "recovery", "activation"], recovery: ["recovery"], timeline: ["audit", "recovery"], audit: ["audit"], settings: [] }
+  const sectionEndpoints: Record<string, string[]> = { overview: ["overview", "recovery", "finance"], users: ["users", "finance"], finance: ["finance"], live: ["paper"], real: [], strategies: ["strategies"], paper: ["paper"], risk: ["risk", "recovery"], readiness: ["readiness"], health: ["health", "recovery", "activation"], recovery: ["recovery"], timeline: ["audit", "recovery"], audit: ["audit"], settings: [] }
   const currentSectionErrors = sectionEndpoints[section]?.map(key => endpointErrors[key]).filter(Boolean) as string[] || []
   useEffect(() => {
     const requested = new URLSearchParams(window.location.search).get("tab")
@@ -348,6 +349,7 @@ export default function AdminPage() {
   const liveBotsPortfolio: Json = data.paper?.live_bots || {}
   const liveStrategies: Json = liveBotsPortfolio.strategies || {}
   const liveSummaryOverview: Json = o.live_bots?.summary || liveBotsPortfolio.aggregate || {}
+  const prices: Record<string, number> = data.finance?.prices || Object.fromEntries(TIERS.map(t => [t.id, parseInt(t.price)]))
   const dashboardBot: Json = data.paper?.dashboard_bot || { positions: data.paper?.positions || [], history: data.paper?.history || [] }
   const recoveryRequired = recovery.recovery_required || {}
   const recoveryAlerts = Object.entries(recoveryRequired).map(([symbol, item]: [string, any]) => ({ title: `Recovery مطلوب · ${symbol}`, message: item?.reason || "يوجد وضع يحتاج مراجعة", severity: "critical", at: item?.at }))
@@ -457,6 +459,7 @@ export default function AdminPage() {
                   "تأكيد تعديل رأس المال/الاستراتيجية المخصصة لهذا المستخدم؟ (إعدادات محلية فقط — لا علاقة ببوتات VPS السبعة)",
                   () => action(`/api/admin/users/${id}/settings`, "PATCH", { ...patch, confirm: true }))} />
             </Panel>
+            <AdminInvites prices={prices} />
           </div>
         )}
 
@@ -471,7 +474,8 @@ export default function AdminPage() {
             {data.finance && !data.finance.available && (
               <Notice tone="loss">تعذر الوصول إلى Supabase الآن{data.finance.error ? ` (${data.finance.error})` : ""}. لا تُعرض أرقام ملفّقة.</Notice>
             )}
-            <Panel title="الإيراد حسب الباقة" sub="عدد المستخدمين في كل باقة × سعرها من lib/strategies.ts — مفيش اتصال بـ Stripe هنا">
+            <PlanPrices onSaved={() => void load()} />
+            <Panel title="الإيراد حسب الباقة" sub="المشتركين في كل باقة × سعرها الحالي — تقدير، مش أرقام Stripe الفعلية (الهدايا مش محسوبة)">
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[480px] text-[13px]">
                   <thead><tr>{["الباقة", "السعر", "المستخدمون", "الإيراد الشهري"].map(h => <th key={h} className={TH}>{h}</th>)}</tr></thead>
@@ -481,7 +485,7 @@ export default function AdminPage() {
                       return (
                         <tr key={t.id} className="border-t border-line">
                           <td className={`${TD} text-[14px] font-semibold`}>{t.name}</td>
-                          <td className={`${TD} font-mono tabular text-muted`} dir="ltr" style={{ textAlign: "right" }}>{t.price}/شهر</td>
+                          <td className={`${TD} font-mono tabular text-muted`} dir="ltr" style={{ textAlign: "right" }}>${prices[t.id] ?? parseInt(t.price)}/mo</td>
                           <td className={`${TD} font-mono tabular`}>{row?.users ?? 0}</td>
                           <td className={`${TD} font-mono font-semibold tabular text-profit`} dir="ltr" style={{ textAlign: "right" }}>${row?.revenue_usd ?? 0}</td>
                         </tr>
@@ -651,7 +655,7 @@ export default function AdminPage() {
         {section === "settings" && (
           <div className="grid items-start gap-5 xl:grid-cols-2">
             <Panel title="الباقات المنشورة">
-              <div className="grid gap-3 sm:grid-cols-2">{Object.entries(TIERS).map(([key, tier]: [string, any]) => <div key={key} className="rounded-[12px] bg-surface2 p-4"><div className="flex items-center justify-between gap-2"><b className="text-[14px]">{tier?.name || key}</b><span className="font-mono text-[13px] text-corona" dir="ltr">{tier?.price ?? "—"}</span></div><div className="mt-1 text-[12px] text-muted">{(tier?.features || []).join(" · ") || "إعداد منشور"}</div></div>)}</div>
+              <div className="grid gap-3 sm:grid-cols-2">{Object.entries(TIERS).map(([key, tier]: [string, any]) => <div key={key} className="rounded-[12px] bg-surface2 p-4"><div className="flex items-center justify-between gap-2"><b className="text-[14px]">{tier?.name || key}</b><span className="font-mono text-[13px] text-corona" dir="ltr">${prices[tier?.id] ?? "—"}/mo</span></div><div className="mt-1 text-[12px] text-muted">{(tier?.features || []).join(" · ") || "إعداد منشور"}</div></div>)}</div>
             </Panel>
             <Panel title="التكاملات والأمان" sub="الأسرار مش بتظهر في الواجهة · أي تغيير حساس بيتسجل في سجل التدقيق">
               <div className="flex flex-wrap gap-2">
@@ -867,7 +871,7 @@ function UsersTable({ users, busy, onToggleBan, onUpdateSettings }: { users: Jso
               <Fragment key={u.id}>
                 <tr className="border-t border-line">
                   <td className={`${TD} whitespace-nowrap font-semibold`} dir="ltr" style={{ textAlign: "right" }}>{u.email || "—"}</td>
-                  <td className={TD}><Pill tone={(u.tier || "free") === "free" ? "neutral" : "corona"}>{u.tier || "free"}</Pill></td>
+                  <td className={TD}><div className="flex flex-wrap items-center gap-1"><Pill tone={(u.tier || "free") === "free" ? "neutral" : "corona"}>{u.tier || "free"}</Pill>{u.gift_tier && <Pill tone="signal" className="text-[11px]">هدية {u.gift_tier} · لحد {new Date(u.gift_expires_at).toLocaleDateString("ar-EG", { day: "numeric", month: "short" })}</Pill>}</div></td>
                   <td className={`${TD} whitespace-nowrap text-muted`}>{timeAgo(u.created_at)}</td>
                   <td className={`${TD} whitespace-nowrap text-muted`}>{u.last_sign_in_at ? timeAgo(u.last_sign_in_at) : "—"}</td>
                   <td className={`${TD} font-mono tabular`}>{u.capital != null ? fmtNum(u.capital) : "—"}</td>
