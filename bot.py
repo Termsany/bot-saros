@@ -933,16 +933,39 @@ def _capital_plan():
     state = riskmgr.load_risk_state(RISK_PATH)
     return riskmgr.capital_plan(state["limits"], state.get("equity_last"))
 
+def _strategies_sharing():
+    """How many strategies share the account's open-trade count: the ones switched on for it (live: the activation
+    record; Demo: the dashboard's yes/no, nothing chosen = all seven). None on paper. A choice that can't be read
+    counts all seven: the smallest share, never the whole account."""
+    if CONFIG.get("paper_trading"):
+        return None
+    try:
+        if binance_env() == "demo":
+            chosen = live_activation.demo_strategies(ACTIVATION_PATH)
+            on = LIVE_READY_STRATEGIES if chosen is None else set(chosen) & LIVE_READY_STRATEGIES
+        elif not Path(ACTIVATION_PATH).exists():   # no record yet (entries are refused anyway): read only, never create it
+            on = set()
+        else:
+            on = set((live_activation.active_record(ACTIVATION_PATH) or {}).get("strategies") or []) & LIVE_READY_STRATEGIES
+    except Exception:
+        return len(LIVE_READY_STRATEGIES)
+    return max(1, len(on))
+
 def _strategy_full(state, cap):
-    """The strategy's own cap on open positions. On the owner's account with a capital plan set, the account's count
-    (risk gate) is the only limit: a strategy enters every signal it gets until the account is full. Paper, or no plan
-    (or a plan that can't be read): the strategy's own cap, as tested."""
+    """The strategy's own cap on open positions, as tested. On the owner's account with a capital plan set, also its
+    even share of the account's count (risk_manager.strategy_slots): one strategy on gets the whole account (up to its
+    own cap), several can't crowd each other out. The risk gate checks the same share for every strategy."""
+    n = len(state["positions"])
+    if n >= cap:
+        return True
     if not CONFIG.get("paper_trading"):
         try:
-            if _capital_plan(): return False
+            slots = riskmgr.strategy_slots(_capital_plan(), _strategies_sharing())
         except Exception:
-            pass
-    return len(state["positions"]) >= cap
+            return False   # the risk gate refuses when the ledger can't be read
+        if slots is not None and n >= slots:
+            return True
+    return False
 
 def _meets_min_order(ex, symbol, margin):
     """margin × leverage reaches the exchange's minimum order value for this coin (BTC $50, ETH $20 ... on Binance)."""
@@ -2715,7 +2738,7 @@ def _enter_trend_live(symbol, analysis, state, ex, margin, lev, price):
         RISK_PATH, strategy="trend_daily", symbol=symbol, side="long",
         risk_usdt=risk_usdt, notional_usdt=margin * lev, equity_usdt=equity,
         equity_observed_at=equity_at, correlation_group=_correlation_group(symbol),
-        strategy_risk_share=_live_risk_share("trend_daily"))
+        strategy_risk_share=_live_risk_share("trend_daily"), strategies_sharing=_strategies_sharing())
     if not allowed:
         log(f"⛔ {symbol} رفض بوابة المخاطر المركزية — {reason}"); return
     cid = "raqm-" + uuid.uuid4().hex[:27]   # per attempt — a fixed id per symbol matched trade #1's order on trade #2
@@ -2943,7 +2966,7 @@ def try_enter(symbol, analysis, state, ex):
                 RISK_PATH, strategy=_current_strategy_name(), symbol=symbol, side=side,
                 risk_usdt=risk_usdt, notional_usdt=amount * CONFIG.get("leverage", 5), equity_usdt=equity,
                 equity_observed_at=equity_at, correlation_group=_correlation_group(symbol),
-                strategy_risk_share=_live_risk_share(_current_strategy_name()))
+                strategy_risk_share=_live_risk_share(_current_strategy_name()), strategies_sharing=_strategies_sharing())
             if not allowed:
                 log(f"⛔ {symbol} رفض بوابة المخاطر المركزية — {reason}"); return
         try:
@@ -3332,7 +3355,7 @@ def _phase2_live_basket(ex, state, strategy, intent, legs, *, reserve=True):
         oco = result.get("oco") or {}; return not (oco.get("protection_missing") or oco.get("verify_failed") or oco.get("sl_unverified"))
     result = engine.execute(strategy=strategy, intent=intent, legs=legs, equity_usdt=equity,
                             equity_observed_at=equity_at, strategy_risk_share=_live_risk_share(strategy),
-                            execute_leg=execute_leg,
+                            strategies_sharing=_strategies_sharing(), execute_leg=execute_leg,
                             compensate_leg=compensate, verify_protection=protected, state=state, reserve=reserve,
                             persist_fills=_persist_fills, cycle_token=cycle_token, unwind_failed_leg=unwind_failed_leg)
     if result.get("status") in ("compensated", "risk_blocked"):
@@ -3431,7 +3454,7 @@ def _single_leg_live_entry(ex, state, symbol, side, margin, price, sl, tp, strat
         risk_usdt=risk_usdt, notional_usdt=margin * leverage,
         equity_usdt=equity, equity_observed_at=equity_at,
         correlation_group=_correlation_group(symbol),
-        strategy_risk_share=_live_risk_share(strategy))
+        strategy_risk_share=_live_risk_share(strategy), strategies_sharing=_strategies_sharing())
     if not allowed:
         log(f"⛔ {symbol} رفض بوابة المخاطر المركزية — {reason}")
         return None

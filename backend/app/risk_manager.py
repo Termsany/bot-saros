@@ -98,14 +98,34 @@ def plan_vs_limits(limits, plan):
     return {"binding": binding, "allowed": allowed, "risk_per_trade_pct": rpt, "max_aggregate_risk_pct": agg}
 
 
-def _over_capital_plan(state, equity_usdt, adding):
+def strategy_slots(plan, strategies_sharing):
+    """One strategy's fair share of the plan's open-trade count (owner, 2026-10-31): the count split evenly between the
+    strategies switched on for the account, at least 1. One strategy on gets the whole account; with several, the
+    busiest can't take the others' slots. None = no plan, or nothing shares it (paper)."""
+    try:
+        n = int(strategies_sharing or 0)
+    except (TypeError, ValueError):
+        n = 0
+    if not plan or n <= 0:
+        return None
+    return max(1, plan["max_open"] // n)
+
+
+def _over_capital_plan(state, equity_usdt, adding, strategy=None, strategies_sharing=None):
     plan = capital_plan(state["limits"], equity_usdt)
     if not plan:
         return None
-    n = len(state.get("open_risk") or {})
+    rows = state.get("open_risk") or {}
+    n = len(rows)
     if n + adding > plan["max_open"]:
         return (f"max open trades for capital ${plan['effective_capital']:.0f} reached: {n} open + {adding} new > {plan['max_open']} "
                 f"(raise the capital on the dashboard to allow more)")
+    slots = strategy_slots(plan, strategies_sharing) if strategy is not None else None
+    if slots is not None:
+        mine = sum(1 for r in rows.values() if r.get("strategy") == strategy)
+        if mine + adding > slots:
+            return (f"{strategy}'s share of the open trades reached: {mine} open + {adding} new > {slots} "
+                    f"({plan['max_open']} for the account ÷ {int(strategies_sharing)} strategies on)")
     return None
 _DB_SUFFIX = ".sqlite3"
 
@@ -278,8 +298,9 @@ def strategy_open_risk_pct(state, equity_usdt, strategy):
 
 
 def _plan_set(limits):
-    """The owner's capital plan is set: then only the account's count and limits bind (owner, 2026-10-30), so the
-    allocation is not split per strategy. The allocation is still validated: an invalid one still refuses."""
+    """The owner's capital plan is set: then the account's count, each strategy's even share of it and the account
+    limits bind (owner, 2026-10-30/31), not the risk allocation. The allocation is still validated: an invalid one
+    still refuses."""
     return capital_plan(limits) is not None
 
 
@@ -336,12 +357,14 @@ def _equity_fresh(observed_at, max_age_s):
 
 def pre_trade_gate(path, *, strategy, symbol, side, risk_usdt, notional_usdt,
                     equity_usdt, correlation_group=None, allow_strategy_conflicts=False,
-                    equity_observed_at=None, max_equity_age_s=30, strategy_risk_share=None):
+                    equity_observed_at=None, max_equity_age_s=30, strategy_risk_share=None, strategies_sharing=None):
     """Atomically check all limits and reserve the requested risk.
 
     ``strategy_risk_share`` is the activation record's allocation for this strategy: a fraction of the account's
     max aggregate risk budget that this strategy's open risk (existing + new) may not exceed. None = no activation
     record (paper/Demo). A value that is not a finite number in (0, 1] is refused, never treated as unlimited.
+    ``strategies_sharing`` is how many strategies are on for the account: with a capital plan, each gets an even share
+    of its open-trade count (strategy_slots). None = no share check.
     """
     if not _valid_equity(equity_usdt):
         return False, "equity unavailable or invalid; refusing to reserve risk"
@@ -363,7 +386,7 @@ def pre_trade_gate(path, *, strategy, symbol, side, risk_usdt, notional_usdt,
             con.execute("ROLLBACK")
             return False, f"kill switch is tripped: {state['kill_switch'].get('reason')}"
         limits = state["limits"]
-        over = _over_capital_plan(state, equity_usdt, 1)
+        over = _over_capital_plan(state, equity_usdt, 1, strategy, strategies_sharing)
         if over:
             con.execute("ROLLBACK")
             return False, over
@@ -418,8 +441,9 @@ def pre_trade_gate(path, *, strategy, symbol, side, risk_usdt, notional_usdt,
 
 
 def pre_trade_gate_basket(path, *, strategy, legs, equity_usdt, equity_observed_at=None, max_equity_age_s=30,
-                          strategy_risk_share=None):
-    """Atomically reserve every leg of a basket or pair; the strategy allocation caps the basket's whole risk."""
+                          strategy_risk_share=None, strategies_sharing=None):
+    """Atomically reserve every leg of a basket or pair; the strategy allocation caps the basket's whole risk, and
+    with a capital plan every leg counts against the strategy's share of the open trades."""
     if not _valid_equity(equity_usdt) or not legs:
         return False, "equity unavailable or empty basket; refusing to reserve risk"
     if not _equity_fresh(equity_observed_at, max_equity_age_s):
@@ -433,7 +457,7 @@ def pre_trade_gate_basket(path, *, strategy, legs, equity_usdt, equity_observed_
             con.execute("ROLLBACK")
             return False, f"kill switch is tripped: {state['kill_switch'].get('reason')}"
         limits = state["limits"]
-        over = _over_capital_plan(state, equity_usdt, len(legs))   # a basket enters whole or not at all
+        over = _over_capital_plan(state, equity_usdt, len(legs), strategy, strategies_sharing)   # whole basket or nothing
         if over:
             con.execute("ROLLBACK"); return False, over
         requested = []
