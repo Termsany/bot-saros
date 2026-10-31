@@ -1,9 +1,9 @@
 "use client"
 import { Fragment, useEffect, useMemo, useRef, useState } from "react"
-import { Activity, BarChart3, Bot, CircleDollarSign, ClipboardList, Gauge, History, LockKeyhole, Settings2, ShieldAlert, ShieldCheck, Users as UsersIcon, WalletCards } from "lucide-react"
+import { Activity, BarChart3, Bot, ChevronDown, CircleDollarSign, ClipboardList, Gauge, History, LockKeyhole, Settings2, ShieldAlert, ShieldCheck, Users as UsersIcon, WalletCards } from "lucide-react"
 import { Logo } from "@/components/Logo"
 import { AppShell } from "@/components/AppShell"
-import { PageHeader, Pill } from "@/components/ui"
+import { CardHeader, Dot, PageHeader, Pill, Toggle, btn, field, label, type Tone } from "@/components/ui"
 import { LiveStrategies } from "@/components/LiveStrategies"
 import { AdminOverview } from "@/components/AdminOverview"
 import { TIERS } from "@/lib/strategies"
@@ -44,16 +44,35 @@ const REAL_BOT_IDS = ["trend_daily", "listing_short", "momentum_ls", "ratio_tren
 const NO_SERVICE_IDS = ["default"]
 const ALL_STRATEGY_IDS = [...REAL_BOT_IDS, ...NO_SERVICE_IDS]
 
-const STATUS_META: Record<string, [string, string]> = {
-  running: ["يعمل", "bg-emerald-500/15 text-profit border-emerald-500/40"],
-  stale: ["بيانات قديمة", "bg-yellow-500/15 text-yellow-300 border-yellow-500/40"],
-  unavailable: ["غير متاح", "bg-loss/15 text-loss border-loss/40"],
-  no_service: ["لا توجد خدمة", "bg-neutral-500/15 text-neutral-300 border-neutral-500/40"],
+const STATUS_META: Record<string, [string, Tone]> = {
+  running: ["يعمل", "profit"],
+  stale: ["بيانات قديمة", "corona"],
+  unavailable: ["غير متاح", "loss"],
+  no_service: ["لا توجد خدمة", "neutral"],
 }
 
 function StatusBadge({ status }: { status?: string }) {
-  const [label, cls] = STATUS_META[status || ""] || ["—", "bg-neutral-500/15 text-neutral-300 border-neutral-500/40"]
-  return <span className={`px-2 py-0.5 rounded-lg text-[10px] font-bold border whitespace-nowrap ${cls}`}>{label}</span>
+  const [text, tone] = STATUS_META[status || ""] || ["—", "neutral" as Tone]
+  return <Pill tone={tone}><Dot tone={tone} />{text}</Pill>
+}
+
+// the admin tables, chips, buttons and notices share these, so every tab reads the same (ui.tsx tokens)
+const TH = "whitespace-nowrap px-2 py-2 text-right text-[12px] font-semibold text-faint"
+const TD = "px-2 py-3"
+const BTN_SM = "inline-flex items-center gap-1.5 whitespace-nowrap rounded-xl border border-line bg-surface2 px-3 py-1.5 text-[13px] font-semibold text-ink transition hover:border-corona/40 disabled:opacity-40"
+const BTN_DANGER = "inline-flex items-center gap-1.5 whitespace-nowrap rounded-xl border border-loss/40 bg-loss/10 px-[18px] py-2.5 text-sm font-semibold text-loss transition hover:bg-loss/20 disabled:opacity-40"
+
+function Chip({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return <button onClick={onClick} className={`rounded-full border px-3 py-1 text-[12px] font-semibold transition ${active ? "border-corona/40 bg-corona/10 text-corona" : "border-line text-muted hover:text-ink"}`}>{children}</button>
+}
+
+function Notice({ tone = "neutral", children, className = "" }: { tone?: "loss" | "corona" | "profit" | "neutral"; children: React.ReactNode; className?: string }) {
+  const cls = { loss: "border-loss/30 bg-loss/10 text-loss", corona: "border-corona/30 bg-corona/10 text-corona", profit: "border-profit/30 bg-profit/10 text-profit", neutral: "border-line bg-surface2 text-muted" }[tone]
+  return <div className={`rounded-[10px] border px-3.5 py-2.5 text-[13px] leading-6 ${cls} ${className}`}>{children}</div>
+}
+
+function Empty({ children }: { children: React.ReactNode }) {
+  return <div className="rounded-[10px] border border-dashed border-line p-6 text-center text-[13px] text-faint">{children}</div>
 }
 
 function timeAgo(iso?: string | null): string {
@@ -67,7 +86,7 @@ function timeAgo(iso?: string | null): string {
   return `منذ ${Math.floor(diff / 86400)} يوم`
 }
 
-function pnlColor(v: number): string { return v >= 0 ? "text-profit" : "text-loss" }
+function pnlColor(v: number): string { return v > 0 ? "text-profit" : v < 0 ? "text-loss" : "text-muted" }
 function fmtNum(v: any, digits = 2): string {
   const n = Number(v)
   return Number.isFinite(n) ? n.toFixed(digits) : "—"
@@ -75,8 +94,8 @@ function fmtNum(v: any, digits = 2): string {
 
 /** Cumulative-PnL equity sparkline built from a bot's own trade history — plain inline SVG, no chart library. */
 function EquitySparkline({ points }: { points: number[] }) {
-  if (!points.length) return <div className="text-[11px] text-muted">لا يوجد سجل صفقات كافٍ لرسم المنحنى</div>
-  const w = 300, h = 64, pad = 6
+  if (!points.length) return <div className="text-[12px] text-faint">لا يوجد سجل صفقات كافٍ لرسم المنحنى</div>
+  const w = 600, h = 72, pad = 6
   const min = Math.min(...points, 0), max = Math.max(...points, 0)
   const range = max - min || 1
   const step = points.length > 1 ? (w - pad * 2) / (points.length - 1) : 0
@@ -86,12 +105,12 @@ function EquitySparkline({ points }: { points: number[] }) {
     return `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`
   }).join(" ")
   const last = points[points.length - 1]
-  const color = last >= 0 ? "#34d399" : "#f87171"
+  const color = last >= 0 ? "#22D3A0" : "#FF5470"   // profit / loss tokens
   const zeroY = h - pad - ((0 - min) / range) * (h - pad * 2)
   return (
-    <svg width={w} height={h} className="overflow-visible" role="img" aria-label="equity curve">
-      <line x1={pad} y1={zeroY} x2={w - pad} y2={zeroY} stroke="#444" strokeDasharray="2,2" />
-      <path d={path} fill="none" stroke={color} strokeWidth={1.6} />
+    <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" className="h-[72px] w-full overflow-visible" role="img" aria-label="equity curve">
+      <line x1={pad} y1={zeroY} x2={w - pad} y2={zeroY} stroke="#232838" strokeDasharray="3,3" vectorEffect="non-scaling-stroke" />
+      <path d={path} fill="none" stroke={color} strokeWidth={1.8} vectorEffect="non-scaling-stroke" />
     </svg>
   )
 }
@@ -120,16 +139,15 @@ function SortableTable({ columns, rows, filterKey }: { columns: Column[]; rows: 
   }, [rows, sortKey, sortDir, filter, filterKey])
   return (
     <div>
-      <input value={filter} onChange={e => setFilter(e.target.value)} placeholder="تصفية..."
-        className="mb-2 px-2 py-1 rounded-lg border border-line bg-void text-xs w-full max-w-[220px]" />
+      <input value={filter} onChange={e => setFilter(e.target.value)} placeholder="تصفية بالرمز..." className={`${field} mb-3 max-w-[240px] py-2`} />
       <div className="overflow-auto">
-        <table className="w-full text-[11px]">
+        <table className="w-full text-[13px]">
           <thead>
-            <tr className="text-muted">
+            <tr>
               {columns.map(c => (
                 <th key={c.key}
                   onClick={() => { if (sortKey === c.key) setSortDir(d => (d * -1) as 1 | -1); else { setSortKey(c.key); setSortDir(-1) } }}
-                  className="p-1.5 text-right cursor-pointer select-none whitespace-nowrap">
+                  className={`${TH} cursor-pointer select-none hover:text-muted`}>
                   {c.label}{sortKey === c.key ? (sortDir === 1 ? " ▲" : " ▼") : ""}
                 </th>
               ))}
@@ -138,33 +156,34 @@ function SortableTable({ columns, rows, filterKey }: { columns: Column[]; rows: 
           <tbody>
             {filtered.map((r, i) => (
               <tr key={i} className="border-t border-line">
-                {columns.map(c => <td key={c.key} className="p-1.5 whitespace-nowrap">{c.fmt ? c.fmt(r[c.key], r) : String(r[c.key] ?? "—")}</td>)}
+                {columns.map(c => <td key={c.key} className={`${TD} whitespace-nowrap ${typeof r[c.key] === "number" ? "font-mono tabular" : ""}`}>{c.fmt ? c.fmt(r[c.key], r) : String(r[c.key] ?? "—")}</td>)}
               </tr>
             ))}
           </tbody>
         </table>
       </div>
-      {filtered.length === 0 && <div className="text-[11px] text-muted p-2">لا توجد بيانات</div>}
+      {filtered.length === 0 && <div className="py-6 text-center text-[13px] text-faint">لا توجد بيانات</div>}
     </div>
   )
 }
 
+const SIDE = (v: any) => String(v).toLowerCase() === "short" || String(v).toLowerCase() === "sell" ? <Pill tone="loss">SHORT</Pill> : v ? <Pill tone="profit">LONG</Pill> : "—"
 const POSITION_COLUMNS: Column[] = [
-  { key: "symbol", label: "الرمز" }, { key: "side", label: "الجهة" },
+  { key: "symbol", label: "الرمز" }, { key: "side", label: "الجهة", fmt: SIDE },
   { key: "entry", label: "الدخول", fmt: v => fmtNum(v) }, { key: "price", label: "السعر", fmt: v => fmtNum(v) },
   { key: "qty", label: "الكمية", fmt: v => fmtNum(v, 4) },
   { key: "pnl", label: "PnL", fmt: v => <span className={pnlColor(Number(v) || 0)}>{fmtNum(v)}</span> },
   { key: "pnl_pct", label: "PnL%", fmt: v => fmtNum(v) }, { key: "sl", label: "SL", fmt: v => fmtNum(v) }, { key: "tp", label: "TP", fmt: v => fmtNum(v) },
 ]
 const HISTORY_COLUMNS: Column[] = [
-  { key: "symbol", label: "الرمز" }, { key: "side", label: "الجهة" },
+  { key: "symbol", label: "الرمز" }, { key: "side", label: "الجهة", fmt: SIDE },
   { key: "entry", label: "الدخول", fmt: v => fmtNum(v) }, { key: "exit", label: "الخروج", fmt: v => fmtNum(v) },
   { key: "qty", label: "الكمية", fmt: v => fmtNum(v, 4) },
   { key: "pnl", label: "PnL", fmt: v => <span className={pnlColor(Number(v) || 0)}>{fmtNum(v)}</span> },
 ]
 
-function Mini({ label, value }: { label: string; value: any }) {
-  return <div className="rounded-lg border border-line p-2"><div className="text-muted text-[10px]">{label}</div><div className="font-bold text-sm mt-1">{String(value)}</div></div>
+function Mini({ label, value, tone }: { label: string; value: any; tone?: string }) {
+  return <div className="min-w-0 rounded-[10px] bg-surface2 px-3 py-2.5"><div className="truncate text-[11px] text-muted">{label}</div><div className={`mt-0.5 truncate font-mono text-[15px] font-semibold tabular ${tone || ""}`} dir="ltr" style={{ textAlign: "right" }}>{String(value)}</div></div>
 }
 
 /** One real (or no-service) VPS bot — expandable: positions table, history table, equity sparkline. */
@@ -181,49 +200,49 @@ function LiveBotCard({ id, entry }: { id: string; entry: Json | undefined }) {
     return (history as Json[]).map(h => { acc += Number(h.pnl) || 0; return acc })
   }, [history])
   return (
-    <div className="rounded-xl border border-line bg-surface/60 p-3">
-      <button onClick={() => setOpen(o => !o)} className="w-full flex flex-wrap items-center justify-between gap-2 text-right">
-        <div className="flex items-center gap-2"><span className="font-bold text-xs">{STRATEGY_LABELS_AR[id] || id}</span><StatusBadge status={status} /></div>
-        <div className="flex items-center gap-3 text-[11px] text-muted">
+    <section className={`min-w-0 rounded-2xl border bg-surface p-5 transition ${open ? "border-corona/30 md:col-span-2" : "border-line"}`}>
+      <button onClick={() => setOpen(o => !o)} aria-expanded={open} className="flex w-full flex-wrap items-center justify-between gap-3 text-right">
+        <div className="flex items-center gap-2.5"><span className="text-[16px] font-bold">{STRATEGY_LABELS_AR[id] || id}</span><StatusBadge status={status} /></div>
+        <div className="flex items-center gap-4 text-[12px] text-muted">
           {status !== "no_service" && <>
-            <span>مراكز: {positions.length}</span>
-            <span className={pnlColor(totalPnl)}>PnL: {fmtNum(totalPnl)}</span>
-            <span>{timeAgo(e.updated)}</span>
+            <span>مراكز <b className="font-mono text-ink">{positions.length}</b></span>
+            <span>PnL <b className={`font-mono tabular ${pnlColor(totalPnl)}`} dir="ltr">{fmtNum(totalPnl)}</b></span>
+            <span className="text-faint">{timeAgo(e.updated)}</span>
           </>}
-          <span>{open ? "▲" : "▼"}</span>
+          <ChevronDown size={16} className={`transition ${open ? "rotate-180 text-corona" : ""}`} />
         </div>
       </button>
       {open && (
-        <div className="mt-3 space-y-3">
+        <div className="mt-4 space-y-4 border-t border-line pt-4">
           {status === "no_service" ? (
-            <p className="text-xs text-muted">لا توجد خدمة تشغيل حقيقية (systemd) لهذه الاستراتيجية على الـ VPS — لا تتوفر بيانات مباشرة.</p>
+            <Notice>لا توجد خدمة تشغيل حقيقية (systemd) لهذه الاستراتيجية على الـ VPS — لا تتوفر بيانات مباشرة.</Notice>
           ) : status === "unavailable" ? (
-            <p className="text-xs text-loss">تعذر الوصول إلى ملف الحالة العام لهذا البوت الآن{e.error ? ` (${e.error})` : ""}. لا تُعرض بيانات ملفّقة.</p>
+            <Notice tone="loss">تعذر الوصول إلى ملف الحالة العام لهذا البوت الآن{e.error ? ` (${e.error})` : ""}. لا تُعرض بيانات ملفّقة.</Notice>
           ) : (
             <>
-              <div className="grid md:grid-cols-4 gap-2">
+              <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
                 <Mini label="صفقات مغلقة" value={stats.closed ?? "—"} />
-                <Mini label="فوز/خسارة" value={`${stats.wins ?? "—"}/${stats.losses ?? "—"}`} />
-                <Mini label="PnL محقق" value={fmtNum(stats.realized)} />
-                <Mini label="PnL غير محقق" value={fmtNum(stats.unrealized)} />
+                <Mini label="فوز / خسارة" value={`${stats.wins ?? "—"} / ${stats.losses ?? "—"}`} />
+                <Mini label="PnL محقق" value={fmtNum(stats.realized)} tone={pnlColor(Number(stats.realized) || 0)} />
+                <Mini label="PnL غير محقق" value={fmtNum(stats.unrealized)} tone={pnlColor(Number(stats.unrealized) || 0)} />
               </div>
-              <div>
-                <div className="text-[11px] text-muted mb-1">منحنى الأرباح التراكمي (من سجل الصفقات)</div>
+              <div className="rounded-[10px] bg-surface2 p-3">
+                <div className="mb-1 text-[12px] text-muted">منحنى الأرباح التراكمي (من سجل الصفقات)</div>
                 <EquitySparkline points={equity} />
               </div>
               <div>
-                <div className="text-[11px] text-muted mb-1">المراكز المفتوحة ({positions.length})</div>
+                <h3 className="mb-2 text-[14px] font-bold">المراكز المفتوحة <span className="font-mono text-faint">({positions.length})</span></h3>
                 <SortableTable columns={POSITION_COLUMNS} rows={positions} filterKey="symbol" />
               </div>
               <div>
-                <div className="text-[11px] text-muted mb-1">سجل الصفقات ({history.length})</div>
+                <h3 className="mb-2 text-[14px] font-bold">سجل الصفقات <span className="font-mono text-faint">({history.length})</span></h3>
                 <SortableTable columns={HISTORY_COLUMNS} rows={history} filterKey="symbol" />
               </div>
             </>
           )}
         </div>
       )}
-    </div>
+    </section>
   )
 }
 
@@ -378,13 +397,11 @@ export default function AdminPage() {
           status={<>
             <GlobalHealthDot severity={globalSeverity} />
             <Pill tone="profit"><span className="h-2 w-2 rounded-full bg-profit" />آخر تحديث <b className="font-mono tabular">{lastRefreshed ? lastRefreshed.toLocaleTimeString("en-GB") : "—"}</b></Pill>
-            <label className="flex cursor-pointer items-center gap-2 rounded-full border border-line bg-surface px-3 py-1 text-[12px] text-muted">
-              <input type="checkbox" checked={autoRefresh} onChange={e => setAutoRefresh(e.target.checked)} className="accent-corona" /> تحديث تلقائي
-            </label>
+            <span className="flex items-center gap-2 rounded-full border border-line bg-surface px-3 py-1 text-[12px] text-muted"><Toggle on={autoRefresh} onChange={setAutoRefresh} label="تحديث تلقائي" /> تحديث تلقائي</span>
             <button onClick={() => setPaletteOpen(true)} className="rounded-full border border-line bg-surface px-3 py-1 text-[12px] text-muted hover:border-corona/50">بحث سريع <span className="mx-1 font-mono" dir="ltr">Ctrl+K</span></button>
-            <button onClick={() => void load()} disabled={busy} className="rounded-xl bg-corona px-4 py-2 text-sm font-semibold text-void disabled:opacity-50">حدّث دلوقتي</button>
+            <button onClick={() => void load()} disabled={busy} className={btn.primary}>حدّث دلوقتي</button>
           </>} />
-        {error && <div className="mb-4 rounded-xl border border-loss/40 bg-loss/10 p-3 text-sm text-loss">{error}</div>}
+        {error && <Notice tone="loss">{error}</Notice>}
         <nav className="relative rounded-xl border border-line bg-surface p-1" aria-label="أقسام الإدارة">
           <div className="flex gap-1 overflow-x-auto">
             {PRIMARY_TABS.map(id => sections.find(s => s[0] === id)!).map(([id, label, Icon]) => (
@@ -410,35 +427,28 @@ export default function AdminPage() {
             </div>
           )}
         </nav>
-        <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted">
+        <div className="flex flex-wrap items-center justify-between gap-2 text-[12px] text-faint">
           <span>{loading ? "جاري تحديث بيانات المركز…" : lastRefreshed ? `آخر مزامنة كاملة: ${lastRefreshed.toLocaleTimeString("ar-EG")}` : "بانتظار أول مزامنة"}</span>
-          {currentSectionErrors.length > 0 && <button onClick={() => void load()} className="text-loss hover:text-red-200">إعادة المحاولة</button>}
+          {currentSectionErrors.length > 0 && <button onClick={() => void load()} className="font-semibold text-corona hover:text-corona-soft">إعادة المحاولة</button>}
         </div>
-        {currentSectionErrors.length > 0 && <div className="rounded-xl border border-amber-400/30 bg-amber-400/10 p-3 text-xs text-amber-200">هذا القسم لم يستقبل تحديثًا جديدًا: {currentSectionErrors.join(" · ")}. البيانات السابقة، إن وُجدت، ما زالت معروضة.</div>}
+        {currentSectionErrors.length > 0 && <Notice tone="corona">هذا القسم لم يستقبل تحديثًا جديدًا: {currentSectionErrors.join(" · ")}. البيانات السابقة، إن وُجدت، ما زالت معروضة.</Notice>}
 
         {section === "overview" && (
           <AdminOverview finance={data.finance?.finance} killTripped={!!o.kill_switch?.tripped} operationalAlerts={operationalAlerts} onOpen={selectSection} />
         )}
 
         {section === "users" && (
-          <div className="space-y-3">
-            <Panel title="المستخدمون — هوية Supabase + الباقة + إعدادات البوت المحلية">
-              <p className="text-xs text-muted mb-1">
-                الهوية (البريد، تاريخ التسجيل، الحظر) من Supabase Auth Admin API، والباقة من جدول profiles، وإعدادات البوت (رأس المال/الاستراتيجية) من قاعدة البيانات المحلية لهذه اللوحة. لا علاقة بهذه القائمة ببوتات VPS السبعة (خدمات مشتركة وليست لكل مستخدم).
-              </p>
-              {data.users && !data.users.available && (
-                <div className="rounded-xl border border-loss/30 bg-loss/10 p-3 text-xs text-red-200 mt-2">
-                  تعذر الوصول إلى Supabase الآن{data.users.error ? ` (${data.users.error})` : ""}. لا تُعرض بيانات ملفّقة — أعد المحاولة بعد قليل.
-                </div>
-              )}
-            </Panel>
-            <div className="grid sm:grid-cols-4 gap-3">
-              {Object.entries((data.users?.plan_counts || {}) as Record<string, number>).map(([tier, count]) => (
-                <Card key={tier} title={`باقة ${tier}`} value={String(count)} />
+          <div className="space-y-5">
+            <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
+              <Card title="إجمالي المستخدمين" value={String(data.users?.total ?? "—")} hint="من Supabase Auth" />
+              {Object.entries((data.users?.plan_counts || {}) as Record<string, number>).slice(0, 3).map(([tier, count]) => (
+                <Card key={tier} title={`باقة ${tier}`} value={String(count)} hint="من جدول profiles" />
               ))}
-              {!Object.keys(data.users?.plan_counts || {}).length && <Card title="إجمالي المستخدمين" value={String(data.users?.total ?? "—")} />}
             </div>
-            <Panel title={`قائمة المستخدمين (${data.users?.total ?? 0})`}>
+            <Panel title="المستخدمون" sub="الهوية والحظر من Supabase · الباقة من profiles · راس المال والاستراتيجية من إعدادات البوت المحلية (مش بوتات VPS)">
+              {data.users && !data.users.available && (
+                <Notice tone="loss" className="mb-4">تعذر الوصول إلى Supabase الآن{data.users.error ? ` (${data.users.error})` : ""}. لا تُعرض بيانات ملفّقة — أعد المحاولة بعد قليل.</Notice>
+              )}
               <UsersTable users={data.users?.users || []} busy={busy}
                 onToggleBan={(id, nextBanned) => confirmAction(
                   nextBanned ? "تأكيد حظر هذا المستخدم من تسجيل الدخول؟" : "تأكيد إلغاء حظر هذا المستخدم؟",
@@ -451,39 +461,34 @@ export default function AdminPage() {
         )}
 
         {section === "finance" && (
-          <div className="space-y-3">
-            <Panel title="المالية — MRR وإيراد كل باقة">
-              <p className="text-xs text-muted mb-1">
-                محسوبة فقط من عدد المستخدمين في كل باقة (plan_counts) × سعر الباقة من lib/strategies.ts TIERS —
-                لا يوجد اتصال حقيقي بـ Stripe هنا.
-              </p>
-              {data.finance && !data.finance.available && (
-                <div className="rounded-xl border border-loss/30 bg-loss/10 p-3 text-xs text-red-200 mt-2">
-                  تعذر الوصول إلى Supabase الآن{data.finance.error ? ` (${data.finance.error})` : ""}. لا تُعرض أرقام ملفّقة.
-                </div>
-              )}
-            </Panel>
-            <div className="grid sm:grid-cols-4 gap-3">
-              <Card title="MRR (دولار/شهر)" value={String(data.finance?.finance?.mrr_usd ?? "—")} tone="profit" />
-              <Card title="مستخدمون مدفوعون" value={String(data.finance?.finance?.paying_users ?? "—")} />
-              <Card title="مستخدمون مجانيون" value={String(data.finance?.finance?.free_users ?? "—")} />
-              <Card title="إجمالي المستخدمين" value={String(data.finance?.finance?.total_users ?? "—")} />
+          <div className="space-y-5">
+            <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
+              <Card title="الإيراد الشهري (MRR)" value={data.finance?.finance?.mrr_usd != null ? `$${data.finance.finance.mrr_usd}` : "—"} tone="profit" hint="دولار / شهر" />
+              <Card title="مستخدمون مدفوعون" value={String(data.finance?.finance?.paying_users ?? "—")} hint="باقة مدفوعة" />
+              <Card title="مستخدمون مجانيون" value={String(data.finance?.finance?.free_users ?? "—")} hint="الباقة المجانية" />
+              <Card title="إجمالي المستخدمين" value={String(data.finance?.finance?.total_users ?? "—")} hint="كل الحسابات" />
             </div>
-            <Panel title="الإيراد حسب الباقة">
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                {TIERS.map(t => {
-                  const row = data.finance?.finance?.per_tier?.[t.id]
-                  return (
-                    <div key={t.id} className="rounded-2xl border border-line bg-surface2 p-4">
-                      <div className="flex items-center justify-between gap-2">
-                        <b className="text-sm">{t.name}</b>
-                        <span className="text-[10px] text-muted font-mono" dir="ltr">{t.price}/شهر</span>
-                      </div>
-                      <div className="mt-2 text-xs text-muted">مستخدمون: <b className="text-ink">{row?.users ?? 0}</b></div>
-                      <div className="mt-1 text-xs text-muted">الإيراد: <b className="text-profit font-mono" dir="ltr">${row?.revenue_usd ?? 0}</b></div>
-                    </div>
-                  )
-                })}
+            {data.finance && !data.finance.available && (
+              <Notice tone="loss">تعذر الوصول إلى Supabase الآن{data.finance.error ? ` (${data.finance.error})` : ""}. لا تُعرض أرقام ملفّقة.</Notice>
+            )}
+            <Panel title="الإيراد حسب الباقة" sub="عدد المستخدمين في كل باقة × سعرها من lib/strategies.ts — مفيش اتصال بـ Stripe هنا">
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[480px] text-[13px]">
+                  <thead><tr>{["الباقة", "السعر", "المستخدمون", "الإيراد الشهري"].map(h => <th key={h} className={TH}>{h}</th>)}</tr></thead>
+                  <tbody>
+                    {TIERS.map(t => {
+                      const row = data.finance?.finance?.per_tier?.[t.id]
+                      return (
+                        <tr key={t.id} className="border-t border-line">
+                          <td className={`${TD} text-[14px] font-semibold`}>{t.name}</td>
+                          <td className={`${TD} font-mono tabular text-muted`} dir="ltr" style={{ textAlign: "right" }}>{t.price}/شهر</td>
+                          <td className={`${TD} font-mono tabular`}>{row?.users ?? 0}</td>
+                          <td className={`${TD} font-mono font-semibold tabular text-profit`} dir="ltr" style={{ textAlign: "right" }}>${row?.revenue_usd ?? 0}</td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
               </div>
             </Panel>
           </div>
@@ -492,90 +497,95 @@ export default function AdminPage() {
         {section === "real" && <LiveStrategies />}
 
         {section === "live" && (
-          <div className="space-y-3">
-            <Panel title="بوتات VPS الحية — ٧ خدمات systemd مستقلة + ٢ بدون خدمة">
-              <p className="text-xs text-muted mb-1">
-                هذه بيانات حقيقية (paper mode) تُقرأ مباشرة من ملفات JSON العامة التي ينشرها كل بوت على{" "}
-                <code className="text-[11px]">{liveBotsPortfolio.base_url || "https://bot.da3m.io"}</code>.
-              </p>
-              <p className="text-xs text-amber-300/90">
-                {liveBotsPortfolio.lifecycle_note || "لا يوجد تحكم في تشغيل/إيقاف/إيقاف مؤقت لهذه الخدمات من هذه اللوحة — يتم إدارتها مباشرة على الـ VPS عبر systemctl."}
-              </p>
-            </Panel>
-            <div className="grid md:grid-cols-2 gap-3">
+          <div className="space-y-5">
+            <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
+              <Card title="بوتات VPS شغالة" value={`${ALL_STRATEGY_IDS.filter(id => liveStrategies[id]?.status === "running").length} / ${REAL_BOT_IDS.length}`} hint="خدمات systemd" />
+              <Card title="صفقات مفتوحة" value={String(ALL_STRATEGY_IDS.reduce((a, id) => a + (liveStrategies[id]?.positions?.length || 0), 0))} hint="كل البوتات" />
+              <Card title="صفقات مغلقة" value={String(ALL_STRATEGY_IDS.reduce((a, id) => a + (Number(liveStrategies[id]?.stats?.closed) || 0), 0))} hint="من سجل كل بوت" />
+              {(() => { const pnl = ALL_STRATEGY_IDS.reduce((a, id) => a + (Number(liveStrategies[id]?.stats?.realized) || 0) + (Number(liveStrategies[id]?.stats?.unrealized) || 0), 0); return <Card title="صافي PnL" value={fmtNum(pnl)} tone={pnl > 0 ? "profit" : pnl < 0 ? "loss" : "neutral"} hint="محقق + غير محقق" /> })()}
+            </div>
+            <Notice>
+              بيانات paper حقيقية من ملفات JSON العامة اللي بينشرها كل بوت على <code className="font-mono text-ink" dir="ltr">{liveBotsPortfolio.base_url || "https://bot.da3m.io"}</code>.{" "}
+              <span className="text-corona">{liveBotsPortfolio.lifecycle_note || "التشغيل والإيقاف من الـ VPS مباشرة (systemctl) — مش من اللوحة دي."}</span>
+            </Notice>
+            <div className="grid gap-4 md:grid-cols-2">
               {ALL_STRATEGY_IDS.map(id => <LiveBotCard key={id} id={id} entry={liveStrategies[id]} />)}
             </div>
           </div>
         )}
 
         {section === "strategies" && (
-          <div className="space-y-4">
-            <Panel title="مقارنة سريعة بين كل الاستراتيجيات — بيانات VPS الحقيقية">
+          <div className="space-y-5">
+            <Panel title="مقارنة الاستراتيجيات" sub="بيانات بوتات VPS الحقيقية · اضغط على عنوان العمود للترتيب">
               <StrategyComparisonTable strategyIds={ALL_STRATEGY_IDS} liveStrategies={liveStrategies} />
             </Panel>
-            <Panel title="تسع استراتيجيات · Paper only · التحكم هنا للبوت الذي تديره هذه اللوحة فقط">
-            <div className="overflow-auto">
-              <table className="w-full text-xs">
-                <thead><tr className="text-muted"><th className="p-2 text-right">الاستراتيجية</th><th>حالة Dashboard</th><th>حالة VPS الحقيقية</th><th>آخر تحديث VPS</th><th>النمط</th><th>إجراء Dashboard</th></tr></thead>
-                <tbody>
-                  {(data.strategies || []).map((x: Json) => (
-                    <tr key={x.id} className="border-t border-line">
-                      <td className="p-2 font-bold">{STRATEGY_LABELS_AR[x.id] || x.name}</td>
-                      <td>{x.status}</td>
-                      <td><StatusBadge status={x.live?.status} /></td>
-                      <td className="text-muted">{timeAgo(x.live?.updated)}</td>
-                      <td>{x.mode}</td>
-                      <td>
-                        <button disabled={busy} onClick={() => confirmAction(`تأكيد ${x.status === "enabled" ? "إيقاف" : "تشغيل"} بوت Dashboard لاستراتيجية ${STRATEGY_LABELS_AR[x.id] || x.name}؟`, () => action(`/api/admin/strategies/${x.id}/lifecycle`, "POST", { action: x.status === "enabled" ? "stop" : "start", confirm: true }))} className="px-2 py-1 rounded-lg border border-line">{x.status === "enabled" ? "إيقاف" : "تشغيل"}</button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <p className="text-xs text-amber-300/90 mt-3">هذا التحكم (تشغيل/إيقاف) يخص فقط بوت Dashboard التجريبي (bot_loop/SQL) — لا يوجد تحكم في بوتات VPS الحقيقية السبعة من هنا؛ راجع تبويب "البوتات الحية".</p>
-          </Panel>
+            <Panel title="بوت Dashboard" sub="Paper only · التشغيل والإيقاف هنا للبوت اللي اللوحة دي بتديره بس">
+              <div className="overflow-auto">
+                <table className="w-full min-w-[640px] text-[13px]">
+                  <thead><tr>{["الاستراتيجية", "حالة Dashboard", "حالة VPS", "آخر تحديث VPS", "النمط", ""].map((h, i) => <th key={i} className={TH}>{h}</th>)}</tr></thead>
+                  <tbody>
+                    {(data.strategies || []).map((x: Json) => (
+                      <tr key={x.id} className="border-t border-line">
+                        <td className={`${TD} text-[14px] font-semibold`}>{STRATEGY_LABELS_AR[x.id] || x.name}</td>
+                        <td className={TD}><Pill tone={x.status === "enabled" ? "profit" : "neutral"}>{x.status === "enabled" ? "شغال" : x.status || "—"}</Pill></td>
+                        <td className={TD}><StatusBadge status={x.live?.status} /></td>
+                        <td className={`${TD} text-muted`}>{timeAgo(x.live?.updated)}</td>
+                        <td className={`${TD} font-mono text-[12px] text-muted`}>{x.mode}</td>
+                        <td className={`${TD} text-left`}>
+                          <button disabled={busy} onClick={() => confirmAction(`تأكيد ${x.status === "enabled" ? "إيقاف" : "تشغيل"} بوت Dashboard لاستراتيجية ${STRATEGY_LABELS_AR[x.id] || x.name}؟`, () => action(`/api/admin/strategies/${x.id}/lifecycle`, "POST", { action: x.status === "enabled" ? "stop" : "start", confirm: true }))} className={BTN_SM}>{x.status === "enabled" ? "إيقاف" : "تشغيل"}</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {!(data.strategies || []).length && <Empty>لا توجد استراتيجيات متاحة.</Empty>}
+              <Notice tone="corona" className="mt-4">التحكم ده يخص بوت Dashboard التجريبي (bot_loop/SQL) بس — بوتات VPS السبعة مش بتتشغل أو تتوقف من هنا؛ شوف تبويب "البوتات الحية".</Notice>
+            </Panel>
           </div>
         )}
 
         {section === "paper" && (
-          <div className="space-y-3">
-            <Panel title="Dashboard bot — المحفظة الورقية التي تديرها هذه اللوحة (SQL Trade / bot_loop)">
-              <div className="flex gap-2 mb-3">
-                <button disabled={busy} onClick={() => action("/api/bot/start", "POST", { paper: true })} className="px-3 py-2 rounded-xl bg-corona text-void text-xs font-bold">تشغيل البوت الورقي</button>
-                <button disabled={busy} onClick={() => action("/api/bot/stop", "POST", {})} className="px-3 py-2 rounded-xl border border-line text-xs">إيقاف</button>
-              </div>
-              <div className="mb-2 text-[11px] text-muted">المراكز المفتوحة ({(dashboardBot.positions || []).length})</div>
+          <div className="space-y-5">
+            <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
+              <Card title="مراكز مفتوحة" value={String((dashboardBot.positions || []).length)} hint="المحفظة الورقية" />
+              <Card title="صفقات مغلقة" value={String((dashboardBot.history || []).length)} hint="سجل الصفقات" />
+              {(() => { const pnl = (dashboardBot.history || []).reduce((a: number, h: Json) => a + (Number(h.pnl) || 0), 0); return <Card title="PnL محقق" value={fmtNum(pnl)} tone={pnl > 0 ? "profit" : pnl < 0 ? "loss" : "neutral"} hint="من سجل الصفقات" /> })()}
+              {(() => { const pnl = (dashboardBot.positions || []).reduce((a: number, h: Json) => a + (Number(h.pnl) || 0), 0); return <Card title="PnL غير محقق" value={fmtNum(pnl)} tone={pnl > 0 ? "profit" : pnl < 0 ? "loss" : "neutral"} hint="المراكز المفتوحة" /> })()}
+            </div>
+            <Panel title="المحفظة الورقية — بوت Dashboard" sub="SQL Trade / bot_loop · منفصلة تمامًا عن بوتات VPS السبعة"
+              action={<>
+                <button disabled={busy} onClick={() => action("/api/bot/start", "POST", { paper: true })} className={btn.primary}>تشغيل البوت الورقي</button>
+                <button disabled={busy} onClick={() => action("/api/bot/stop", "POST", {})} className={btn.secondary}>إيقاف</button>
+              </>}>
+              <h3 className="mb-2 text-[14px] font-bold">المراكز المفتوحة <span className="font-mono text-faint">({(dashboardBot.positions || []).length})</span></h3>
               <SortableTable columns={POSITION_COLUMNS} rows={dashboardBot.positions || []} filterKey="symbol" />
-              <div className="mb-2 mt-4 text-[11px] text-muted">سجل الصفقات ({(dashboardBot.history || []).length})</div>
+              <h3 className="mb-2 mt-6 text-[14px] font-bold">سجل الصفقات <span className="font-mono text-faint">({(dashboardBot.history || []).length})</span></h3>
               <SortableTable columns={HISTORY_COLUMNS} rows={dashboardBot.history || []} filterKey="symbol" />
-            </Panel>
-            <Panel title="تنبيه">
-              <p className="text-xs text-muted">هذا القسم يخص فقط بوت Dashboard التجريبي، وهو منفصل تمامًا عن بوتات VPS الحقيقية السبعة (systemd) المعروضة في تبويب "البوتات الحية (VPS)".</p>
             </Panel>
           </div>
         )}
 
         {section === "risk" && (
-          <div className="space-y-4">
-            <div className="grid gap-3 sm:grid-cols-3">
-              <Card title="Kill switch" value={risk.kill_switch?.tripped ? "مفعل" : "غير مفعل"} tone={risk.kill_switch?.tripped ? "loss" : "profit"} />
-              <Card title="الإدخالات الجديدة" value={o.entry_paused?.paused ? "متوقفة" : "مسموحة"} tone={o.entry_paused?.paused ? "loss" : "neutral"} />
-              <Card title="حالة إدارة المخاطر" value={risk.status || risk.state || "غير متاحة"} />
+          <div className="space-y-5">
+            <div className="grid grid-cols-2 gap-4 xl:grid-cols-3">
+              <Card title="قفل الطوارئ (Kill switch)" value={risk.kill_switch?.tripped ? "شغال" : "مش شغال"} tone={risk.kill_switch?.tripped ? "loss" : "profit"} hint="بيمنع أي دخول جديد" />
+              <Card title="الدخول الجديد" value={o.entry_paused?.paused ? "متوقف" : "مسموح"} tone={o.entry_paused?.paused ? "loss" : "profit"} hint="المراكز المفتوحة مش بتتقفل" />
+              <Card title="إدارة المخاطر" value={risk.status || risk.state || "غير متاحة"} hint="آخر حالة من الـ API" />
             </div>
-            <div className="grid gap-4 lg:grid-cols-2">
-              <Panel title="حدود المخاطر الحالية">
+            <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_372px]">
+              <Panel title="حدود المخاطر الحالية" sub="كل تغيير محتاج تأكيد وبيتسجل في سجل التدقيق"
+                action={<>
+                  <button disabled={busy} onClick={() => confirmAction("تأكيد تغيير إيقاف الإدخالات؟", () => action("/api/admin/controls/entry-pause", "POST", { paused: !o.entry_paused?.paused, reason: "operator action", confirm: true }))} className={btn.secondary}>{o.entry_paused?.paused ? "استئناف الدخول" : "إيقاف الدخول"}</button>
+                  <button disabled={busy} onClick={() => confirmAction("تأكيد تغيير Kill switch؟", () => action("/api/admin/risk/kill-switch", "POST", { action: risk.kill_switch?.tripped ? "reset" : "trip", reason: "operator action", confirm: true }))} className={BTN_DANGER}>{risk.kill_switch?.tripped ? "إعادة ضبط قفل الطوارئ" : "تفعيل قفل الطوارئ"}</button>
+                </>}>
                 <KeyValueGrid value={risk.limits || {}} empty="لا توجد حدود متاحة" />
-                <div className="mt-4 flex flex-wrap gap-2">
-                  <button disabled={busy} onClick={() => confirmAction("تأكيد تغيير Kill switch؟", () => action("/api/admin/risk/kill-switch", "POST", { action: risk.kill_switch?.tripped ? "reset" : "trip", reason: "operator action", confirm: true }))} className="rounded-xl border border-loss/50 bg-loss/10 px-3 py-2 text-xs text-loss disabled:opacity-50">{risk.kill_switch?.tripped ? "إعادة ضبط Kill switch" : "تفعيل Kill switch"}</button>
-                  <button disabled={busy} onClick={() => confirmAction("تأكيد تغيير إيقاف الإدخالات؟", () => action("/api/admin/controls/entry-pause", "POST", { paused: !o.entry_paused?.paused, reason: "operator action", confirm: true }))} className="rounded-xl border border-line px-3 py-2 text-xs disabled:opacity-50">{o.entry_paused?.paused ? "استئناف الإدخالات" : "إيقاف الإدخالات"}</button>
-                </div>
               </Panel>
               <Panel title="معنى إجراءات الأمان">
-                <div className="space-y-3 text-xs text-muted leading-6">
-                  <p><b className="text-ink">Kill switch:</b> يمنع المسارات الجديدة ويحتاج تأكيدًا وسجل تدقيق.</p>
-                  <p><b className="text-ink">إيقاف الإدخالات:</b> يوقف الصفقات الجديدة ولا يغلق المراكز تلقائيًا.</p>
-                  <p><b className="text-ink">بوتات VPS:</b> لا تتأثر بهذه الأزرار؛ ما زالت تُقرأ read-only فقط.</p>
+                <div className="divide-y divide-line text-[13px] leading-6">
+                  <p className="pb-3"><b className="text-ink">قفل الطوارئ:</b> <span className="text-muted">بيمنع المسارات الجديدة ومحتاج تأكيد وسجل تدقيق.</span></p>
+                  <p className="py-3"><b className="text-ink">إيقاف الدخول:</b> <span className="text-muted">بيوقف الصفقات الجديدة ومش بيقفل المراكز لوحده.</span></p>
+                  <p className="pt-3"><b className="text-ink">بوتات VPS:</b> <span className="text-muted">مش بتتأثر بالأزرار دي؛ بتتقري read-only بس.</span></p>
                 </div>
               </Panel>
             </div>
@@ -583,22 +593,21 @@ export default function AdminPage() {
         )}
 
         {section === "readiness" && (
-          <div className="space-y-4">
-            <div className="grid gap-3 sm:grid-cols-3">
-              <Card title="Paper" value={data.readiness?.paper_ready ? "جاهز" : "مقفل"} tone={data.readiness?.paper_ready ? "profit" : "loss"} />
-              <Card title="Testnet" value={data.readiness?.testnet_ready ? "جاهز" : "مقفل"} tone={data.readiness?.testnet_ready ? "profit" : "loss"} />
-              <Card title="Live" value="مقفل افتراضيًا" tone="loss" />
+          <div className="space-y-5">
+            <div className="grid grid-cols-2 gap-4 xl:grid-cols-3">
+              <Card title="Paper" value={data.readiness?.paper_ready ? "جاهز" : "مقفل"} tone={data.readiness?.paper_ready ? "profit" : "loss"} hint="تداول ورقي" />
+              <Card title="Testnet" value={data.readiness?.testnet_ready ? "جاهز" : "مقفل"} tone={data.readiness?.testnet_ready ? "profit" : "loss"} hint="Binance testnet" />
+              <Card title="Live" value="مقفل افتراضيًا" tone="loss" hint="مفيش زر تفعيل من الواجهة" />
             </div>
-            <Panel title="مصفوفة الجاهزية لكل استراتيجية">
-              <div className="mb-4 rounded-xl border border-amber-400/30 bg-amber-400/10 p-3 text-xs text-amber-200">البيئة الحالية: <b>{data.readiness?.environment || "غير متاحة"}</b> · لا يوجد زر لتفعيل التداول الحقيقي من الواجهة.</div>
+            <Panel title="مصفوفة الجاهزية لكل استراتيجية" sub={`البيئة الحالية: ${data.readiness?.environment || "غير متاحة"}`}>
               {Object.keys(data.readiness?.strategies || {}).length ? <ReadinessMatrix strategies={data.readiness.strategies} /> : <KeyValueGrid value={data.readiness?.checks || {}} empty="لا توجد أدلة جاهزية متاحة" />}
             </Panel>
           </div>
         )}
 
         {section === "health" && (
-          <div className="grid gap-4 lg:grid-cols-2">
-            <Panel title="حالة الخدمات">
+          <div className="grid items-start gap-5 xl:grid-cols-2">
+            <Panel title="حالة الخدمات" sub="آخر فحص من endpoint صحة النظام المصادق">
               <HealthGrid components={data.health?.components || data.health || {}} />
             </Panel>
             <Panel title="حالة التفعيل">
@@ -608,43 +617,46 @@ export default function AdminPage() {
         )}
 
         {section === "recovery" && (
-          <div className="space-y-4">
-            <div className="grid gap-3 sm:grid-cols-3">
-              <Card title="Recovery مطلوب" value={String(Object.keys(recovery.recovery_required || {}).length)} tone={Object.keys(recovery.recovery_required || {}).length ? "loss" : "profit"} />
-              <Card title="Reconciliation" value={recovery.reconciliation?.state || "غير متاح"} tone={recovery.reconciliation?.state === "ok" ? "profit" : "loss"} />
-              <Card title="Risk reservations" value={String(Object.keys(recovery.risk_reservations || {}).length)} />
+          <div className="space-y-5">
+            <div className="grid grid-cols-2 gap-4 xl:grid-cols-3">
+              <Card title="Recovery مطلوب" value={String(Object.keys(recovery.recovery_required || {}).length)} tone={Object.keys(recovery.recovery_required || {}).length ? "loss" : "profit"} hint="حالات معلقة" />
+              <Card title="Reconciliation" value={recovery.reconciliation?.state || "غير متاح"} tone={recovery.reconciliation?.state === "ok" ? "profit" : "loss"} hint="مطابقة الحساب" />
+              <Card title="Risk reservations" value={String(Object.keys(recovery.risk_reservations || {}).length)} hint="حجوزات مخاطرة" />
             </div>
-            <Panel title="حالات تحتاج مراجعة">
-              {Object.entries(recovery.recovery_required || {}).map(([symbol, item]: [string, any]) => <div key={symbol} className="rounded-xl border border-loss/30 bg-loss/10 p-3 text-xs text-red-200"><b>{symbol}</b><span className="mx-2">·</span>{item?.reason || "مراجعة مطلوبة"}</div>)}
-              {!Object.keys(recovery.recovery_required || {}).length && <div className="rounded-xl border border-profit/20 bg-profit/5 p-4 text-xs text-profit">لا توجد حالات Recovery معلقة.</div>}
+            <Panel title="حالات محتاجة مراجعة">
+              {Object.keys(recovery.recovery_required || {}).length ? (
+                <div className="divide-y divide-line">
+                  {Object.entries(recovery.recovery_required || {}).map(([symbol, item]: [string, any]) => (
+                    <div key={symbol} className="flex items-start gap-2 py-2.5 text-[13px]"><span className="mt-1.5"><Dot tone="loss" /></span><b className="font-mono" dir="ltr">{symbol}</b><span className="text-muted">{item?.reason || "مراجعة مطلوبة"}</span></div>
+                  ))}
+                </div>
+              ) : <Notice tone="profit">لا توجد حالات Recovery معلقة.</Notice>}
             </Panel>
             <Panel title="تفاصيل Reconciliation وRisk reservations"><KeyValueGrid value={{ reconciliation: recovery.reconciliation || {}, risk_reservations: recovery.risk_reservations || {} }} empty="لا توجد بيانات" /></Panel>
           </div>
         )}
 
         {section === "timeline" && (
-          <Panel title="الخط الزمني الموحّد — تدقيق + تنبيهات + Recovery">
+          <Panel title="الخط الزمني الموحّد" sub="سجل التدقيق + التنبيهات + Recovery في مكان واحد">
             <UnifiedTimeline events={timelineEvents} />
           </Panel>
         )}
 
         {section === "audit" && (
-          <Panel title="سجل التدقيق الإداري">
-            <div className="mb-4 rounded-xl border border-line bg-surface2 p-3 text-xs text-muted">كل إجراء حساس يجب أن يظهر هنا مع المنفذ والنتيجة. السجل للقراءة فقط من هذه الصفحة.</div>
+          <Panel title="سجل التدقيق الإداري" sub="كل إجراء حساس بيظهر هنا مع المنفذ والنتيجة · للقراءة بس">
             <AuditList items={data.audit?.items || []} />
           </Panel>
         )}
 
         {section === "settings" && (
-          <div className="grid gap-4 lg:grid-cols-2">
+          <div className="grid items-start gap-5 xl:grid-cols-2">
             <Panel title="الباقات المنشورة">
-              <div className="grid gap-2 sm:grid-cols-2">{Object.entries(TIERS).map(([key, tier]: [string, any]) => <div key={key} className="rounded-xl border border-line bg-surface2 p-3"><div className="flex items-center justify-between"><b className="text-sm">{key}</b><span className="font-mono text-corona" dir="ltr">{tier?.price ?? "—"}</span></div><div className="mt-1 text-xs text-muted">{tier?.description || tier?.name || "إعداد منشور"}</div></div>)}</div>
+              <div className="grid gap-3 sm:grid-cols-2">{Object.entries(TIERS).map(([key, tier]: [string, any]) => <div key={key} className="rounded-[12px] bg-surface2 p-4"><div className="flex items-center justify-between gap-2"><b className="text-[14px]">{tier?.name || key}</b><span className="font-mono text-[13px] text-corona" dir="ltr">{tier?.price ?? "—"}</span></div><div className="mt-1 text-[12px] text-muted">{(tier?.features || []).join(" · ") || "إعداد منشور"}</div></div>)}</div>
             </Panel>
-            <Panel title="التكاملات والأمان">
-              <p className="text-xs text-muted leading-6">الأسرار لا تُعرض في الواجهة. حالة المفاتيح تُدار عبر API مصادق، وأي تغيير حساس يُسجل في سجل التدقيق.</p>
-              <div className="mt-4 flex flex-wrap gap-2">
-                <button onClick={() => action("/api/telegram/test", "POST", {})} className="px-3 py-2 rounded-xl bg-[#229ED9] text-white text-xs">اختبار تليجرام</button>
-                <button onClick={async () => { try { const r = await fetch(API + "/api/telegram/status", { headers: await authHeaders() }); const j = await r.json(); setError(j.configured ? "تليجرام مربوط" : "تليجرام غير مربوط") } catch (e: any) { setError(e.message) } }} className="px-3 py-2 rounded-xl border border-line text-xs">حالة تليجرام</button>
+            <Panel title="التكاملات والأمان" sub="الأسرار مش بتظهر في الواجهة · أي تغيير حساس بيتسجل في سجل التدقيق">
+              <div className="flex flex-wrap gap-2">
+                <button onClick={() => action("/api/telegram/test", "POST", {})} className={btn.primary}>ابعت رسالة تجربة على تليجرام</button>
+                <button onClick={async () => { try { const r = await fetch(API + "/api/telegram/status", { headers: await authHeaders() }); const j = await r.json(); setError(j.configured ? "تليجرام مربوط" : "تليجرام غير مربوط") } catch (e: any) { setError(e.message) } }} className={btn.secondary}>حالة تليجرام</button>
               </div>
             </Panel>
           </div>
@@ -655,23 +667,29 @@ export default function AdminPage() {
   )
 }
 
-function Card({ title, value, tone = "neutral" }: { title: string; value: string; tone?: "profit" | "loss" | "neutral" }) {
+function Card({ title, value, tone = "neutral", hint }: { title: string; value: string; tone?: "profit" | "loss" | "neutral"; hint?: string }) {
   const color = tone === "profit" ? "text-profit" : tone === "loss" ? "text-loss" : "text-ink"
-  return <div className="min-w-0 rounded-2xl border border-line bg-surface px-5 py-[18px]"><div className="text-[13px] text-muted">{title}</div><div className={`mt-1.5 font-mono text-[22px] font-bold leading-tight tabular ${color}`}>{value}</div></div>
+  return (
+    <div className="min-w-0 rounded-2xl border border-line bg-surface px-5 py-[18px]">
+      <div className="truncate text-[13px] text-muted">{title}</div>
+      <div className={`mt-1.5 truncate font-mono text-[22px] font-bold leading-tight tabular ${color}`} dir="ltr" style={{ textAlign: "right" }}>{value}</div>
+      {hint && <div className="mt-1.5 truncate text-[12px] text-faint">{hint}</div>}
+    </div>
+  )
 }
 function KeyValueGrid({ value, empty }: { value: Json; empty: string }) {
   const entries = Object.entries(value || {})
-  if (!entries.length) return <div className="rounded-xl border border-dashed border-line p-4 text-xs text-muted">{empty}</div>
-  return <div className="grid gap-2 sm:grid-cols-2">{entries.map(([key, val]) => <div key={key} className="rounded-xl border border-line bg-surface2 p-3"><div className="text-[10px] text-muted">{key.replaceAll("_", " ")}</div><div className="mt-1 font-mono text-sm font-bold tabular" dir="ltr">{typeof val === "object" ? JSON.stringify(val) : String(val ?? "—")}</div></div>)}</div>
+  if (!entries.length) return <Empty>{empty}</Empty>
+  return <div className="grid gap-2 sm:grid-cols-2">{entries.map(([key, val]) => <div key={key} className="min-w-0 rounded-[10px] bg-surface2 px-3 py-2.5"><div className="truncate text-[11px] text-muted">{key.replaceAll("_", " ")}</div><div className="mt-0.5 break-all font-mono text-[13px] font-semibold tabular" dir="ltr" style={{ textAlign: "right" }}>{typeof val === "object" ? JSON.stringify(val) : String(val ?? "—")}</div></div>)}</div>
 }
 function CheckPill({ label, value }: { label: string; value: any }) {
   const ok = value === true
-  return <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-bold ${ok ? "border-profit/30 bg-profit/10 text-profit" : "border-loss/30 bg-loss/10 text-loss"}`}><span>{ok ? "✓" : "×"}</span>{label}</span>
+  return <Pill tone={ok ? "profit" : "loss"}>{ok ? "✓" : "×"} {label}</Pill>
 }
 /** A small always-visible dot in the header summarizing worst-case operational state across the whole center. */
 function GlobalHealthDot({ severity }: { severity: "ok" | "warning" | "critical" }) {
-  const meta = { ok: ["bg-profit", "سليم"], warning: ["bg-amber-400", "تحذير"], critical: ["bg-loss", "حرج"] }[severity]
-  return <span className="flex items-center gap-1.5 rounded-full border border-line bg-surface px-3 py-1 text-[12px] text-muted"><span className={`inline-block h-2 w-2 rounded-full ${meta[0]} ${severity !== "ok" ? "animate-pulse" : ""}`} />{meta[1]}</span>
+  const [tone, text] = ({ ok: ["profit", "سليم"], warning: ["corona", "تحذير"], critical: ["loss", "حرج"] } as const)[severity]
+  return <Pill tone={tone}><Dot tone={tone} pulse={severity !== "ok"} />{text}</Pill>
 }
 type CommandItem = { id: string; label: string; hint?: string; onSelect: () => void }
 /** Ctrl/Cmd+K palette: jump to any tab or strategy without hunting through nav. Pure client-side, no network calls. */
@@ -682,18 +700,18 @@ function CommandPalette({ open, onClose, items }: { open: boolean; onClose: () =
   if (!open) return null
   const visible = items.filter(item => !query || item.label.toLowerCase().includes(query.toLowerCase()) || item.hint?.toLowerCase().includes(query.toLowerCase()))
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 p-4 pt-24" onClick={onClose}>
+    <div dir="rtl" className="fixed inset-0 z-50 flex items-start justify-center bg-void/80 p-4 pt-24 backdrop-blur-sm" onClick={onClose}>
       <div className="w-full max-w-lg rounded-2xl border border-line bg-surface p-3 shadow-2xl" onClick={e => e.stopPropagation()}>
         <input ref={inputRef} value={query} onChange={e => setQuery(e.target.value)} placeholder="بحث سريع · تبويب أو استراتيجية... (Esc للإغلاق)"
           onKeyDown={e => { if (e.key === "Escape") onClose(); if (e.key === "Enter" && visible[0]) { visible[0].onSelect(); onClose() } }}
-          className="w-full rounded-xl border border-line bg-surface2 px-3 py-2 text-sm outline-none focus:border-corona/50" />
-        <div className="mt-2 max-h-80 overflow-auto space-y-1">
+          className={field} />
+        <div className="mt-2 max-h-80 space-y-0.5 overflow-auto">
           {visible.map(item => (
-            <button key={item.id} onClick={() => { item.onSelect(); onClose() }} className="w-full flex items-center justify-between gap-2 rounded-xl px-3 py-2.5 text-right text-xs hover:bg-surface2">
-              <span className="font-bold">{item.label}</span>{item.hint && <span className="text-muted">{item.hint}</span>}
+            <button key={item.id} onClick={() => { item.onSelect(); onClose() }} className="flex w-full items-center justify-between gap-2 rounded-[10px] px-3 py-2.5 text-right text-[13px] hover:bg-surface2">
+              <span className="font-semibold">{item.label}</span>{item.hint && <span className="text-[12px] text-faint">{item.hint}</span>}
             </button>
           ))}
-          {!visible.length && <div className="p-4 text-center text-xs text-muted">لا توجد نتائج.</div>}
+          {!visible.length && <div className="p-4 text-center text-[13px] text-faint">لا توجد نتائج.</div>}
         </div>
       </div>
     </div>
@@ -710,12 +728,19 @@ function StrategyComparisonTable({ strategyIds, liveStrategies }: { strategyIds:
   }).sort((a, b) => (b[sortKey] || 0) - (a[sortKey] || 0))
   return (
     <div className="overflow-auto">
-      <table className="w-full text-xs">
-        <thead><tr className="text-muted"><th className="p-2 text-right">الاستراتيجية</th><th>الحالة</th>
-          {(["open", "closed", "pnl"] as const).map(k => <th key={k} onClick={() => setSortKey(k)} className="cursor-pointer select-none">{k === "open" ? "مفتوحة" : k === "closed" ? "مغلقة" : "PnL"}{sortKey === k ? " ▼" : ""}</th>)}
-          <th>نسبة الفوز</th></tr></thead>
+      <table className="w-full min-w-[600px] text-[13px]">
+        <thead><tr><th className={TH}>الاستراتيجية</th><th className={TH}>الحالة</th>
+          {(["open", "closed", "pnl"] as const).map(k => <th key={k} onClick={() => setSortKey(k)} className={`${TH} cursor-pointer select-none hover:text-muted ${sortKey === k ? "text-corona" : ""}`}>{k === "open" ? "مفتوحة" : k === "closed" ? "مغلقة" : "PnL"}{sortKey === k ? " ▼" : ""}</th>)}
+          <th className={TH}>نسبة الفوز</th></tr></thead>
         <tbody>
-          {rows.map(r => <tr key={r.id} className="border-t border-line"><td className="p-2 font-bold">{STRATEGY_LABELS_AR[r.id] || r.id}</td><td><StatusBadge status={r.status} /></td><td>{r.open}</td><td>{r.closed}</td><td className={pnlColor(r.pnl)}>{fmtNum(r.pnl)}</td><td>{r.winRate != null ? `${r.winRate}%` : "—"}</td></tr>)}
+          {rows.map(r => <tr key={r.id} className="border-t border-line">
+            <td className={`${TD} text-[14px] font-semibold`}>{STRATEGY_LABELS_AR[r.id] || r.id}</td>
+            <td className={TD}><StatusBadge status={r.status} /></td>
+            <td className={`${TD} font-mono tabular`}>{r.open}</td>
+            <td className={`${TD} font-mono tabular`}>{r.closed}</td>
+            <td className={`${TD} font-mono font-semibold tabular ${pnlColor(r.pnl)}`} dir="ltr" style={{ textAlign: "right" }}>{fmtNum(r.pnl)}</td>
+            <td className={TD}>{r.winRate != null ? <div className="flex items-center gap-2"><div className="h-1.5 w-16 overflow-hidden rounded-full bg-surface2"><div className={`h-full rounded-full ${r.winRate >= 50 ? "bg-profit" : "bg-loss"}`} style={{ width: `${r.winRate}%` }} /></div><span className="font-mono tabular">{r.winRate}%</span></div> : <span className="text-faint">—</span>}</td>
+          </tr>)}
         </tbody>
       </table>
     </div>
@@ -725,19 +750,61 @@ function AlertCenter({ alerts }: { alerts: any[] }) {
   const [filter, setFilter] = useState<"all" | "critical" | "warning">("all")
   const normalized = alerts.filter(Boolean).map(item => typeof item === "string" ? { message: item, severity: "warning" } : item)
   const visible = normalized.filter(item => filter === "all" || (item.severity === filter || (filter === "critical" && item.severity === "error")))
-  if (!normalized.length) return <div className="rounded-2xl border border-profit/20 bg-profit/5 p-4 text-xs text-profit">لا توجد تنبيهات تشغيلية حالية.</div>
-  return <div className="space-y-3"><div className="flex flex-wrap items-center gap-2"><span className="text-[11px] text-muted">{normalized.length} تنبيه</span>{(["all", "critical", "warning"] as const).map(item => <button key={item} onClick={() => setFilter(item)} className={`rounded-full px-2.5 py-1 text-[10px] font-bold ${filter === item ? "bg-corona text-void" : "border border-line text-muted"}`}>{item === "all" ? "الكل" : item === "critical" ? "حرج" : "تحذير"}</button>)}</div>{visible.slice(0, 8).map((item, i) => <div key={i} className={`rounded-xl border p-3 text-xs ${item.severity === "error" || item.severity === "critical" ? "border-loss/30 bg-loss/10 text-red-200" : "border-amber-400/30 bg-amber-400/10 text-amber-200"}`}><b>{item.title || (item.severity === "error" ? "خطأ تشغيلي" : "تنبيه")}</b><span className="mx-2">·</span>{item.message || item.reason || JSON.stringify(item)}</div>)}{!visible.length && <div className="rounded-xl border border-dashed border-line p-4 text-center text-xs text-muted">لا توجد تنبيهات بهذا التصنيف.</div>}</div>
+  if (!normalized.length) return <Notice tone="profit">لا توجد تنبيهات تشغيلية حالية.</Notice>
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2"><span className="text-[12px] text-faint">{normalized.length} تنبيه</span>{(["all", "critical", "warning"] as const).map(item => <Chip key={item} active={filter === item} onClick={() => setFilter(item)}>{item === "all" ? "الكل" : item === "critical" ? "حرج" : "تحذير"}</Chip>)}</div>
+      <div className="divide-y divide-line">
+        {visible.slice(0, 8).map((item, i) => { const bad = item.severity === "error" || item.severity === "critical"; return (
+          <div key={i} className="flex items-start gap-2 py-2.5 text-[13px]"><span className="mt-1.5"><Dot tone={bad ? "loss" : "corona"} /></span><span><b>{item.title || (item.severity === "error" ? "خطأ تشغيلي" : "تنبيه")}</b> <span className="text-muted">· {item.message || item.reason || JSON.stringify(item)}</span></span></div>
+        ) })}
+      </div>
+      {!visible.length && <Empty>لا توجد تنبيهات بهذا التصنيف.</Empty>}
+    </div>
+  )
 }
 function ReadinessMatrix({ strategies }: { strategies: Json }) {
   const [filter, setFilter] = useState<"all" | "ready" | "blocked">("all")
   const entries = Object.entries(strategies || {})
   const visible = entries.filter(([, item]: [string, any]) => filter === "all" || (filter === "ready" ? item.live_ready === true : item.live_ready !== true))
-  return <div className="space-y-3"><div className="flex flex-wrap items-center gap-2"><span className="text-[11px] text-muted">{entries.length} استراتيجية</span>{(["all", "ready", "blocked"] as const).map(item => <button key={item} onClick={() => setFilter(item)} className={`rounded-full px-2.5 py-1 text-[10px] font-bold ${filter === item ? "bg-corona text-void" : "border border-line text-muted"}`}>{item === "all" ? "الكل" : item === "ready" ? "جاهزة" : "مقفلة"}</button>)}</div>{visible.map(([id, item]: [string, any]) => <div key={id} className="rounded-2xl border border-line bg-surface2 p-4"><div className="flex flex-wrap items-center justify-between gap-2"><b>{STRATEGY_LABELS_AR[id] || id}</b><span className={`rounded-full px-2 py-1 text-[10px] font-bold ${item.live_ready ? "bg-profit/10 text-profit" : "bg-loss/10 text-loss"}`}>{item.live_ready ? "Live-ready" : "مقفل"}</span></div><div className="mt-3 flex flex-wrap gap-2"><CheckPill label="Adapter" value={item.adapter_implemented} /><CheckPill label="Recovery" value={item.recovery_tests} /><CheckPill label="Security" value={item.security_approved} /><CheckPill label="Testnet" value={item.testnet_validated} /></div>{Array.isArray(item.reasons) && item.reasons.length > 0 && <div className="mt-3 text-xs text-muted">السبب: {item.reasons.join(" · ")}</div>}</div>)}{!visible.length && <div className="rounded-xl border border-dashed border-line p-6 text-center text-xs text-muted">لا توجد نتائج بهذا التصنيف.</div>}</div>
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2"><span className="text-[12px] text-faint">{entries.length} استراتيجية</span>{(["all", "ready", "blocked"] as const).map(item => <Chip key={item} active={filter === item} onClick={() => setFilter(item)}>{item === "all" ? "الكل" : item === "ready" ? "جاهزة" : "مقفلة"}</Chip>)}</div>
+      <div className="grid gap-3 lg:grid-cols-2">
+        {visible.map(([id, item]: [string, any]) => (
+          <div key={id} className="rounded-[12px] bg-surface2 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2"><b className="text-[14px]">{STRATEGY_LABELS_AR[id] || id}</b><Pill tone={item.live_ready ? "profit" : "loss"}>{item.live_ready ? "جاهزة للحقيقي" : "مقفلة"}</Pill></div>
+            <div className="mt-3 flex flex-wrap gap-1.5"><CheckPill label="Adapter" value={item.adapter_implemented} /><CheckPill label="Recovery" value={item.recovery_tests} /><CheckPill label="Security" value={item.security_approved} /><CheckPill label="Testnet" value={item.testnet_validated} /></div>
+            {Array.isArray(item.reasons) && item.reasons.length > 0 && <div className="mt-3 text-[12px] text-muted">السبب: {item.reasons.join(" · ")}</div>}
+          </div>
+        ))}
+      </div>
+      {!visible.length && <Empty>لا توجد نتائج بهذا التصنيف.</Empty>}
+    </div>
+  )
 }
 function AuditList({ items }: { items: Json[] }) {
   const [query, setQuery] = useState("")
   const visible = items.filter(item => !query || JSON.stringify(item).toLowerCase().includes(query.toLowerCase()))
-  return <div className="space-y-3"><input value={query} onChange={e => setQuery(e.target.value)} placeholder="ابحث في سجل التدقيق..." className="w-full max-w-sm rounded-xl border border-line bg-surface2 px-3 py-2 text-xs outline-none focus:border-corona/50" />{visible.map((x: Json) => <div key={x.id} className="rounded-xl border border-line bg-surface2 p-3 text-xs"><div className="flex flex-wrap items-center justify-between gap-2"><b>{x.action}</b><span className="text-muted font-mono" dir="ltr">{x.at}</span></div><div className="mt-1 text-muted">المنفذ: {x.actor || "—"} · النتيجة: {x.result || "—"}</div></div>)}{!visible.length && <div className="rounded-xl border border-dashed border-line p-6 text-center text-xs text-muted">لا توجد نتائج.</div>}</div>
+  return (
+    <div className="space-y-3">
+      <input value={query} onChange={e => setQuery(e.target.value)} placeholder="ابحث في سجل التدقيق..." className={`${field} max-w-sm`} />
+      {visible.length > 0 && <div className="overflow-auto">
+        <table className="w-full min-w-[560px] text-[13px]">
+          <thead><tr>{["الإجراء", "المنفذ", "النتيجة", "الوقت"].map(h => <th key={h} className={TH}>{h}</th>)}</tr></thead>
+          <tbody>{visible.map((x: Json, i) => { const ok = /ok|success|done|نجح/i.test(String(x.result || "")); return (
+            <tr key={x.id ?? i} className="border-t border-line">
+              <td className={`${TD} font-semibold`}>{x.action}</td>
+              <td className={`${TD} text-muted`}>{x.actor || "—"}</td>
+              <td className={TD}>{x.result ? <Pill tone={ok ? "profit" : "neutral"}>{x.result}</Pill> : "—"}</td>
+              <td className={`${TD} whitespace-nowrap font-mono text-[12px] text-faint`} dir="ltr" style={{ textAlign: "right" }}>{x.at}</td>
+            </tr>
+          ) })}</tbody>
+        </table>
+      </div>}
+      {!visible.length && <Empty>لا توجد نتائج.</Empty>}
+    </div>
+  )
 }
 /** Per-user admin edit form for LOCAL bot allocation (capital + strategy in user_settings).
  *  Explicitly distinct from the 7 shared VPS paper bots: saving here never starts/stops a real bot. */
@@ -746,25 +813,21 @@ function UserSettingsEditRow({ user, busy, onSave }: { user: Json; busy: boolean
   const [strategy, setStrategy] = useState(user.strategy || "")
   const strategies = ["trend_daily", "momentum_ls", "listing_short", "ratio_trend"]
   return (
-    <tr className="border-t border-line bg-surface2/40">
-      <td colSpan={8} className="p-3">
-        <div className="rounded-xl border border-dashed border-line p-3 space-y-2">
-          <p className="text-[11px] text-amber-300/90">
-            هذا تعديل لإعدادات رأس المال/الاستراتيجية المخصصة لهذا المستخدم فقط في قاعدة البيانات المحلية —
-            منفصل تمامًا عن بوتات VPS الحقيقية السبعة (خدمات مشتركة)، ولا يشغّل أو يوقف أي بوت حقيقي.
+    <tr className="border-t border-line">
+      <td colSpan={8} className="px-2 py-3">
+        <div className="space-y-3 rounded-[12px] bg-surface2 p-4">
+          <p className="text-[12px] text-corona">
+            ده تعديل لإعدادات راس المال/الاستراتيجية المخصصة للمستخدم ده بس في قاعدة البيانات المحلية —
+            منفصل تمامًا عن بوتات VPS السبعة، ومش بيشغّل أو يوقف أي بوت حقيقي.
           </p>
-          <div className="flex flex-wrap items-end gap-2">
-            <label className="text-[11px] text-muted">
-              رأس المال
-              <input type="number" min={0} value={capital} onChange={e => setCapital(e.target.value)}
-                className="mt-1 block w-28 rounded-lg border border-line bg-void px-2 py-1 text-xs" />
+          <div className="flex flex-wrap items-end gap-3">
+            <label className="w-36"><span className={label}>راس المال</span>
+              <input type="number" min={0} value={capital} onChange={e => setCapital(e.target.value)} dir="ltr" className={`${field} py-2 font-mono`} />
             </label>
-            <label className="text-[11px] text-muted">
-              الاستراتيجية
-              <select value={strategy} onChange={e => setStrategy(e.target.value)}
-                className="mt-1 block rounded-lg border border-line bg-void px-2 py-1 text-xs">
+            <label className="w-48"><span className={label}>الاستراتيجية</span>
+              <select value={strategy} onChange={e => setStrategy(e.target.value)} className={`${field} py-2`}>
                 <option value="">— بدون تغيير —</option>
-                {strategies.map(s => <option key={s} value={s}>{s}</option>)}
+                {strategies.map(s => <option key={s} value={s}>{STRATEGY_LABELS_AR[s] || s}</option>)}
               </select>
             </label>
             <button disabled={busy || (!capital && !strategy)} onClick={() => {
@@ -772,7 +835,7 @@ function UserSettingsEditRow({ user, busy, onSave }: { user: Json; busy: boolean
               if (capital !== "") patch.capital = Number(capital)
               if (strategy) patch.strategy = strategy
               onSave(patch)
-            }} className="px-3 py-1.5 rounded-lg bg-corona text-void text-xs font-bold disabled:opacity-50">حفظ</button>
+            }} className={`${btn.primary} py-2`}>حفظ</button>
           </div>
         </div>
       </td>
@@ -787,40 +850,34 @@ function UsersTable({ users, busy, onToggleBan, onUpdateSettings }: { users: Jso
   const [expanded, setExpanded] = useState<string | null>(null)
   const tiers = useMemo(() => Array.from(new Set(users.map(u => u.tier || "free"))), [users])
   const visible = users.filter(u =>
-    (tierFilter === "all" || u.tier === tierFilter) &&
+    (tierFilter === "all" || (u.tier || "free") === tierFilter) &&
     (!query || JSON.stringify(u).toLowerCase().includes(query.toLowerCase())))
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
-        <input value={query} onChange={e => setQuery(e.target.value)} placeholder="ابحث بالبريد أو المعرف..."
-          className="rounded-xl border border-line bg-surface2 px-3 py-2 text-xs outline-none focus:border-corona/50 max-w-[240px]" />
-        <button onClick={() => setTierFilter("all")} className={`rounded-full px-2.5 py-1 text-[10px] font-bold ${tierFilter === "all" ? "bg-corona text-void" : "border border-line text-muted"}`}>الكل</button>
-        {tiers.map(t => <button key={t} onClick={() => setTierFilter(t)} className={`rounded-full px-2.5 py-1 text-[10px] font-bold ${tierFilter === t ? "bg-corona text-void" : "border border-line text-muted"}`}>{t}</button>)}
+        <input value={query} onChange={e => setQuery(e.target.value)} placeholder="ابحث بالبريد أو المعرف..." className={`${field} max-w-[260px] py-2`} />
+        <Chip active={tierFilter === "all"} onClick={() => setTierFilter("all")}>الكل</Chip>
+        {tiers.map(t => <Chip key={t} active={tierFilter === t} onClick={() => setTierFilter(t)}>{t}</Chip>)}
       </div>
       <div className="overflow-auto">
-        <table className="w-full text-[11px]">
-          <thead><tr className="text-muted">
-            <th className="p-1.5 text-right">البريد</th><th>الباقة</th><th>تاريخ التسجيل</th><th>آخر دخول</th>
-            <th>رأس المال</th><th>استراتيجية البوت</th><th>الحالة</th><th>إجراء</th>
-          </tr></thead>
+        <table className="w-full min-w-[860px] text-[13px]">
+          <thead><tr>{["البريد", "الباقة", "التسجيل", "آخر دخول", "راس المال", "استراتيجية البوت", "الحالة", ""].map((h, i) => <th key={i} className={TH}>{h}</th>)}</tr></thead>
           <tbody>
             {visible.map(u => (
               <Fragment key={u.id}>
                 <tr className="border-t border-line">
-                  <td className="p-1.5 whitespace-nowrap">{u.email || "—"}</td>
-                  <td><span className="rounded-full border border-line px-2 py-0.5 text-[10px]">{u.tier || "free"}</span></td>
-                  <td className="text-muted whitespace-nowrap">{timeAgo(u.created_at)}</td>
-                  <td className="text-muted whitespace-nowrap">{u.last_sign_in_at ? timeAgo(u.last_sign_in_at) : "—"}</td>
-                  <td>{u.capital != null ? fmtNum(u.capital) : "—"}</td>
-                  <td>{u.strategy || "—"}</td>
-                  <td>{u.banned
-                    ? <span className="rounded-full border border-loss/30 bg-loss/10 px-2 py-0.5 text-[10px] font-bold text-loss">محظور</span>
-                    : <span className="rounded-full border border-profit/30 bg-profit/10 px-2 py-0.5 text-[10px] font-bold text-profit">نشط</span>}</td>
-                  <td className="flex gap-1">
-                    <button disabled={busy} onClick={() => onToggleBan(u.id, !u.banned)}
-                      className="px-2 py-1 rounded-lg border border-line disabled:opacity-50">{u.banned ? "إلغاء الحظر" : "حظر"}</button>
-                    <button disabled={busy} onClick={() => setExpanded(expanded === u.id ? null : u.id)}
-                      className="px-2 py-1 rounded-lg border border-line disabled:opacity-50">{expanded === u.id ? "إغلاق" : "تعديل البوت"}</button>
+                  <td className={`${TD} whitespace-nowrap font-semibold`} dir="ltr" style={{ textAlign: "right" }}>{u.email || "—"}</td>
+                  <td className={TD}><Pill tone={(u.tier || "free") === "free" ? "neutral" : "corona"}>{u.tier || "free"}</Pill></td>
+                  <td className={`${TD} whitespace-nowrap text-muted`}>{timeAgo(u.created_at)}</td>
+                  <td className={`${TD} whitespace-nowrap text-muted`}>{u.last_sign_in_at ? timeAgo(u.last_sign_in_at) : "—"}</td>
+                  <td className={`${TD} font-mono tabular`}>{u.capital != null ? fmtNum(u.capital) : "—"}</td>
+                  <td className={`${TD} text-muted`}>{u.strategy ? STRATEGY_LABELS_AR[u.strategy] || u.strategy : "—"}</td>
+                  <td className={TD}>{u.banned ? <Pill tone="loss">محظور</Pill> : <Pill tone="profit">نشط</Pill>}</td>
+                  <td className={TD}>
+                    <div className="flex justify-end gap-1.5">
+                      <button disabled={busy} onClick={() => setExpanded(expanded === u.id ? null : u.id)} className={BTN_SM}>{expanded === u.id ? "إغلاق" : "تعديل البوت"}</button>
+                      <button disabled={busy} onClick={() => onToggleBan(u.id, !u.banned)} className={u.banned ? BTN_SM : `${BTN_SM} text-loss hover:border-loss/40`}>{u.banned ? "إلغاء الحظر" : "حظر"}</button>
+                    </div>
                   </td>
                 </tr>
                 {expanded === u.id && (
@@ -832,7 +889,7 @@ function UsersTable({ users, busy, onToggleBan, onUpdateSettings }: { users: Jso
           </tbody>
         </table>
       </div>
-      {!visible.length && <div className="rounded-xl border border-dashed border-line p-6 text-center text-xs text-muted">لا توجد نتائج.</div>}
+      {!visible.length && <Empty>لا توجد نتائج.</Empty>}
     </div>
   )
 }
@@ -844,27 +901,37 @@ function UnifiedTimeline({ events }: { events: TimelineEvent[] }) {
   const undated = events.filter(e => !e.at)
   const sorted = [...dated, ...undated]
   const visible = sorted.filter(e => kind === "all" || e.kind === kind)
-  const kindMeta: Record<string, [string, string]> = { audit: ["سجل تدقيق", "border-line bg-surface2 text-ink"], alert: ["تنبيه", "border-amber-400/30 bg-amber-400/10 text-amber-200"], recovery: ["Recovery", "border-loss/30 bg-loss/10 text-red-200"] }
+  const kindMeta: Record<string, [string, Tone]> = { audit: ["سجل تدقيق", "signal"], alert: ["تنبيه", "corona"], recovery: ["Recovery", "loss"] }
   return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-2"><span className="text-[11px] text-muted">{visible.length} حدث</span>
-        {(["all", "audit", "alert", "recovery"] as const).map(k => <button key={k} onClick={() => setKind(k)} className={`rounded-full px-2.5 py-1 text-[10px] font-bold ${kind === k ? "bg-corona text-void" : "border border-line text-muted"}`}>{k === "all" ? "الكل" : kindMeta[k][0]}</button>)}
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2"><span className="text-[12px] text-faint">{visible.length} حدث</span>
+        {(["all", "audit", "alert", "recovery"] as const).map(k => <Chip key={k} active={kind === k} onClick={() => setKind(k)}>{k === "all" ? "الكل" : kindMeta[k][0]}</Chip>)}
       </div>
-      <div className="space-y-2">
-        {visible.slice(0, 50).map((e, i) => <div key={i} className={`rounded-xl border p-3 text-xs ${kindMeta[e.kind][1]}`}>
-          <div className="flex flex-wrap items-center justify-between gap-2"><b>{e.title}</b>{e.at && <span className="font-mono text-muted" dir="ltr">{e.at}</span>}</div>
-          <div className="mt-1 text-muted">{e.detail}</div>
-        </div>)}
-        {!visible.length && <div className="rounded-xl border border-dashed border-line p-6 text-center text-xs text-muted">لا توجد أحداث لهذا التصنيف.</div>}
-      </div>
+      <ol className="relative space-y-1 border-r border-line pr-5">
+        {visible.slice(0, 50).map((e, i) => <li key={i} className="relative py-2">
+          <span className="absolute -right-[25px] top-[15px]"><Dot tone={kindMeta[e.kind][1]} /></span>
+          <div className="flex flex-wrap items-center justify-between gap-2 text-[13px]"><span className="flex items-center gap-2"><b>{e.title}</b><Pill tone={kindMeta[e.kind][1]}>{kindMeta[e.kind][0]}</Pill></span>{e.at && <span className="font-mono text-[12px] text-faint" dir="ltr">{e.at}</span>}</div>
+          <div className="mt-0.5 text-[12px] text-muted">{e.detail}</div>
+        </li>)}
+      </ol>
+      {!visible.length && <Empty>لا توجد أحداث لهذا التصنيف.</Empty>}
     </div>
   )
 }
 function HealthGrid({ components }: { components: Json }) {
   const entries = Object.entries(components || {})
-  if (!entries.length) return <div className="rounded-xl border border-dashed border-line p-6 text-center text-xs text-muted">لا توجد بيانات صحة متاحة.</div>
-  return <div className="grid gap-3 sm:grid-cols-2">{entries.map(([name, value]) => { const healthy = ["healthy", "available", "locked", "ok", "running"].includes(String(value)); return <div key={name} className="rounded-2xl border border-line bg-surface2 p-4"><div className="flex items-center justify-between gap-2"><b className="text-sm">{name.replaceAll("_", " ")}</b><span className={`rounded-full px-2 py-1 text-[10px] font-bold ${healthy ? "bg-profit/10 text-profit" : "bg-loss/10 text-loss"}`}>{String(value)}</span></div><div className="mt-2 text-[11px] text-muted">آخر فحص من endpoint صحة النظام المصادق.</div></div>})}</div>
+  if (!entries.length) return <Empty>لا توجد بيانات صحة متاحة.</Empty>
+  return (
+    <div className="divide-y divide-line">
+      {entries.map(([name, raw]) => { const value = raw && typeof raw === "object" ? (raw as any).status ?? (raw as any).state ?? "—" : raw; const healthy = ["healthy", "available", "locked", "ok", "running"].includes(String(value)); return (
+        <div key={name} className="flex items-center justify-between gap-3 py-2.5 text-[13px]">
+          <span className="flex items-center gap-2"><Dot tone={healthy ? "profit" : "loss"} /><b className="font-semibold">{name.replaceAll("_", " ")}</b></span>
+          <Pill tone={healthy ? "profit" : "loss"}>{String(value)}</Pill>
+        </div>
+      ) })}
+    </div>
+  )
 }
-function Panel({ title, children }: { title: string; children: any }) {
-  return <section className="min-w-0 rounded-2xl border border-line bg-surface p-5"><h2 className="mb-4 text-[17px] font-bold leading-snug">{title}</h2>{children}</section>
+function Panel({ title, sub, action, children }: { title: string; sub?: string; action?: React.ReactNode; children: any }) {
+  return <section className="min-w-0 rounded-2xl border border-line bg-surface p-5"><CardHeader title={title} sub={sub} action={action} />{children}</section>
 }
