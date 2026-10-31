@@ -5,6 +5,7 @@ every coin that was ever in the top 10 by 30-day volume (research/universe_study
   python research/hourly_data.py      # resumable; candles from Bybit (fast) with Binance for the rest
 Saves research/.cache/hourly/<SYMBOL>.pkl (ts, open, high, low, close, qvol) and research/.cache/funding8h/<SYMBOL>.pkl.
 """
+import os
 import sys, json, pickle, time, urllib.request, threading
 from pathlib import Path
 import pandas as pd
@@ -12,7 +13,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from universe_study import ranks
 
-CACHE = Path(__file__).resolve().parent / ".cache"
+CACHE = Path(os.getenv("RAQM_RESEARCH_CACHE") or Path(__file__).resolve().parent / ".cache")   # shared store: research/README.md
 H, F = CACHE / "hourly", CACHE / "funding8h"
 API = "https://fapi.binance.com/fapi/v1"
 

@@ -8,6 +8,7 @@ All Binance USDT-M perpetuals, delisted ones included (no survivorship bias in t
 Funding: the daily median of the 8 coins' real funding (per-coin funding history isn't fetched).
 $20 margin x2 per trade, fees 0.04% per side. In-sample before 2024-01-01, out-of-sample after.
 """
+import os
 import sys, pickle
 from pathlib import Path
 import numpy as np, pandas as pd
@@ -16,7 +17,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import strategies_trend as st
 
-CACHE = Path(__file__).resolve().parent / ".cache"
+CACHE = Path(os.getenv("RAQM_RESEARCH_CACHE") or Path(__file__).resolve().parent / ".cache")   # shared store: research/README.md
 EIGHT = ["BTC", "ETH", "SOL", "XRP", "BNB", "DOGE", "ADA", "LINK"]
 SIZES = [5, 10, 15, 20, 30]
 MIN_HISTORY, VOL_WINDOW, LEV, CUT = 150, 30, 2, pd.Timestamp("2024-01-01")

@@ -12,6 +12,7 @@ Daily trend (trend_daily) runs on daily candles, so it is measured on its own se
 candles + funding since 2019/2020 (research/trend_data.py), $20 margin x2 — README.md "Daily trend following".
 "Out-of-sample" = the last 40% of each series; engine settings were chosen without looking at it (README.md).
 """
+import os
 import sys, json, pickle, time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,7 +24,7 @@ import backtest as bt
 import strategies_wave as wf
 import strategies_trend as stt
 
-CACHE = Path(__file__).resolve().parent / ".cache"
+CACHE = Path(os.getenv("RAQM_RESEARCH_CACHE") or Path(__file__).resolve().parent / ".cache")   # shared store: research/README.md
 SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT"]
 TIMEFRAMES = {"1h": 3600_000, "4h": 4 * 3600_000}
 CANDLES = 2000

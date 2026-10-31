@@ -5,10 +5,11 @@ strongly negative funding, which the 8-coin median would hide.
 
   python research/universe_funding.py    # ~10 minutes: only what short_study.py trades (Binance allows 500 funding requests / 5 min)
 """
+import os
 import json, pickle, time, urllib.request
 from pathlib import Path
 
-CACHE = Path(__file__).resolve().parent / ".cache"
+CACHE = Path(os.getenv("RAQM_RESEARCH_CACHE") or Path(__file__).resolve().parent / ".cache")   # shared store: research/README.md
 API = "https://fapi.binance.com/fapi/v1/fundingRate"
 
 

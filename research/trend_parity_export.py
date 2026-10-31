@@ -4,6 +4,7 @@ at leverage 1, 2 and 5, with and without funding.
 
   python research/trend_data.py && python research/trend_parity_export.py && node research/trend_parity.ts
 """
+import os
 import sys, json, pickle
 from pathlib import Path
 
@@ -11,7 +12,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import strategies_trend as st
 
-CACHE = Path(__file__).resolve().parent / ".cache"
+CACHE = Path(os.getenv("RAQM_RESEARCH_CACHE") or Path(__file__).resolve().parent / ".cache")   # shared store: research/README.md
 for f in sorted(CACHE.glob("trend_*.pkl")):
     if f.stem == "trend_results": continue
     df = pickle.loads(f.read_bytes())

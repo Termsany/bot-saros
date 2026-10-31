@@ -7,6 +7,7 @@ USDT-M perpetual since 2019 (delisted included), fees and real funding included.
 
   python research/baseline_stats.py        -> docs/demo-baseline.md and lib/demo-baseline.json
 """
+import os
 import sys, json, pickle
 from pathlib import Path
 import numpy as np, pandas as pd
@@ -19,7 +20,7 @@ import ratio_fairness as rf
 import traders_study as ts
 from universe_study import ranks
 
-CACHE = Path(__file__).resolve().parent / ".cache"
+CACHE = Path(os.getenv("RAQM_RESEARCH_CACHE") or Path(__file__).resolve().parent / ".cache")   # shared store: research/README.md
 MARGIN = ts.AMOUNT                      # every simulator trades $20 margin x2; results are given per $ of margin
 OOS = pd.Timestamp("2024-01-01")
 LABELS = {"trend_daily": "الترند اليومي", "listing_short": "شورت العملات الجديدة", "momentum_ls": "مومنتم (سلة)",

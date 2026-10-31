@@ -4,6 +4,7 @@ plus a check that the live bot's signal (last closed candle) matches every backt
 
   python research/wave_parity_export.py && node research/wave_parity.ts
 """
+import os
 import sys, json, pickle
 from pathlib import Path
 
@@ -11,7 +12,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import strategies_wave as wf
 
-CACHE = Path(__file__).resolve().parent / ".cache"
+CACHE = Path(os.getenv("RAQM_RESEARCH_CACHE") or Path(__file__).resolve().parent / ".cache")   # shared store: research/README.md
 bad = n = 0
 for f in sorted(CACHE.glob("data_*USDT_*.pkl")):
     tf = f.stem.rsplit("_", 1)[1]

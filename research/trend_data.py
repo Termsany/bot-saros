@@ -2,11 +2,12 @@
 Daily candles + funding rates for the trend study (research/trend_study.py), from Binance USDT-M futures.
 Cached in research/.cache/trend_<COIN>.pkl. Run once: python research/trend_data.py
 """
+import os
 import json, pickle, time, urllib.request
 from pathlib import Path
 import pandas as pd
 
-CACHE = Path(__file__).resolve().parent / ".cache"
+CACHE = Path(os.getenv("RAQM_RESEARCH_CACHE") or Path(__file__).resolve().parent / ".cache")   # shared store: research/README.md
 COINS = ["BTC", "ETH", "SOL", "XRP", "BNB", "DOGE", "ADA", "LINK"]
 API = "https://fapi.binance.com/fapi/v1"
 

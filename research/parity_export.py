@@ -7,13 +7,14 @@ Export cached candles + the bot's Python signals and reference trades for the br
 Reference trades use backtest.run_backtest with the CONFIG in backtest.py, for every strategy alone,
 a 3-strategy mix and all 15 together.
 """
+import os
 import sys, json, math, pickle
 from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import backtest as bt
 
-CACHE = Path(__file__).resolve().parent / ".cache"
+CACHE = Path(os.getenv("RAQM_RESEARCH_CACHE") or Path(__file__).resolve().parent / ".cache")   # shared store: research/README.md
 NAMES = ["ichimoku", "dow", "gann", "elliott", "classical", "sr", "rsi_macd", "smc", "vwap", "supertrend",
          "bollinger", "harmonic", "ict", "heikin", "ai"]
 ENGINE_SETS = ["BTCUSDT_1h", "XRPUSDT_4h"]

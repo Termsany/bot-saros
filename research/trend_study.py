@@ -16,11 +16,12 @@ Rules (per coin, no look-ahead): the signal uses closes up to day t and sets the
 - the position is only resized when the target moves more than 25% (fewer fees)
 - costs: 0.04% of every change in notional, and the real funding paid/received each day
 """
+import os
 import pickle, itertools
 from pathlib import Path
 import numpy as np, pandas as pd
 
-CACHE = Path(__file__).resolve().parent / ".cache"
+CACHE = Path(os.getenv("RAQM_RESEARCH_CACHE") or Path(__file__).resolve().parent / ".cache")   # shared store: research/README.md
 COINS = ["BTC", "ETH", "SOL", "XRP", "BNB", "DOGE", "ADA", "LINK"]
 NOTIONAL, FEE, BAND, SPLIT = 100.0, 0.0004, 0.25, 0.6
 LOOKBACKS = [20, 60, 120, "ens"]

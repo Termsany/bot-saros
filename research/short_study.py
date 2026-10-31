@@ -13,6 +13,7 @@ Variants are ranked by Sharpe of daily realised PnL before 2024-01-01; 2024 onwa
 
   python research/universe_data.py && python research/universe_funding.py && python research/short_study.py
 """
+import os
 import sys, pickle, itertools, math
 from pathlib import Path
 import numpy as np, pandas as pd
@@ -22,7 +23,7 @@ sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(Path(__file__).resolve().p
 import strategies_trend as st
 from universe_study import ranks
 
-CACHE = Path(__file__).resolve().parent / ".cache"
+CACHE = Path(os.getenv("RAQM_RESEARCH_CACHE") or Path(__file__).resolve().parent / ".cache")   # shared store: research/README.md
 AMOUNT, LEV, FEE, CUT = 20, 2, 0.0004, pd.Timestamp("2024-01-01")
 STOP_SHARE = st.STOP_SHARE
 
