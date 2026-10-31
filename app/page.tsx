@@ -3,6 +3,7 @@ import { HeroPreview } from "@/components/HeroPreview"
 import { BRAND } from "@/lib/brand"
 import { BOT_PAGE, COMBINED, STATS_META, STRATEGIES, minCapitalNote, pfTone, sharpeTone, unlockTier } from "@/lib/strategies"
 import { Logo } from "@/components/Logo"
+import { FooterAuthLink, LandingNavAuth } from "@/components/AccountMenu"
 import { ArrowUpRight, CandlestickChart, Check, Layers, LineChart, ShieldCheck, Zap } from "lucide-react"
 
 
@@ -31,8 +32,7 @@ export default function Page(){
             <a href="#strategies" className="hidden px-3 text-sm text-muted hover:text-ink md:block">الاستراتيجيات</a>
             <a href="#pricing" className="hidden px-3 text-sm text-muted hover:text-ink md:block">الباقات</a>
             <a href="/backtest" className="hidden px-3 text-sm text-muted hover:text-ink md:block">Backtest</a>
-            <a href="/auth" className="hidden px-3 text-sm text-muted hover:text-ink sm:block">دخول</a>
-            <a href="/dashboard" className="rounded-xl bg-corona px-4 py-2 text-sm font-bold text-void transition hover:bg-corona-soft">افتح المنصة</a>
+            <LandingNavAuth/>
           </nav>
         </div>
       </header>
@@ -194,7 +194,7 @@ export default function Page(){
             <div className="flex gap-5 text-sm text-muted">
               <a href="/backtest" className="hover:text-ink">Backtest</a>
               <a href="#pricing" className="hover:text-ink">الباقات</a>
-              <a href="/auth" className="hover:text-ink">دخول</a>
+              <FooterAuthLink/>
             </div>
           </div>
           <p className="mt-6 text-xs leading-6 text-faint">تنبيه: تداول العملات الرقمية عالي المخاطرة، والأداء السابق في الـ Backtest مش ضمان لنتايج مستقبلية. المحتوى ده مش نصيحة استثمارية.</p>

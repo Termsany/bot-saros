@@ -3,9 +3,10 @@ import { useEffect, useState } from "react"
 import { BRAND } from "@/lib/brand"
 import { Logo } from "@/components/Logo"
 import { Pill } from "@/components/ui"
+import { AccountMenu, signOut } from "@/components/AccountMenu"
 import { apiIsAdmin } from "@/lib/api"
 import { getMyTier, getUser } from "@/lib/supabase"
-import { Activity, Bot, CandlestickChart, House, KeyRound, LayoutDashboard, ShieldCheck, Sparkles } from "lucide-react"
+import { Activity, Bot, CandlestickChart, House, KeyRound, LayoutDashboard, LogOut, ShieldCheck, Sparkles } from "lucide-react"
 
 type NavItem = { href: string, label: string, icon: typeof House, adminOnly?: boolean }
 const GROUPS: { label: string, items: NavItem[] }[] = [
@@ -87,13 +88,19 @@ export function AppShell({ active, tier: tierProp, engine, nextIn, children }: {
             )}
           </div>
           <NavLink item={{ href: "/", label: "الرئيسية", icon: House }} on={active === "/"}/>
+          <button onClick={signOut} className="flex w-full items-center gap-2.5 rounded-[10px] px-3 py-2.5 text-[15px] font-semibold text-muted transition hover:bg-loss/10 hover:text-loss">
+            <LogOut size={20} strokeWidth={1.8}/><span>تسجيل الخروج</span>
+          </button>
         </div>
       </aside>
 
       <div className="min-w-0 flex-1 space-y-6 px-4 py-5 lg:px-8 lg:py-7">
         <div className="flex items-center justify-between gap-3 lg:hidden">
           <a href="/"><Logo size="sm"/></a>
-          <Pill tone="corona"><span className="font-mono uppercase">{tier}</span></Pill>
+          <div className="flex items-center gap-2">
+            <Pill tone="corona"><span className="font-mono uppercase">{tier}</span></Pill>
+            {email && <AccountMenu email={email} tier={tier} isAdmin={isAdmin} compact/>}
+          </div>
         </div>
         <nav className="-mx-4 flex gap-1.5 overflow-x-auto px-4 pb-1 lg:hidden">
           {all.map(i => (
