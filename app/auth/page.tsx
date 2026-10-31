@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { BRAND } from "@/lib/brand"
+import { LIVE_BOTS } from "@/lib/strategies"
 import { Logo } from "@/components/Logo"
 import { supabase, isSupabaseConfigured } from "@/lib/supabase"
 
@@ -102,31 +102,62 @@ export default function AuthPage() {
     }
   }
 
-  const title = mode === "login" ? "تسجيل دخول" : mode === "signup" ? "إنشاء حساب" : mode === "recovery" ? "تعيين كلمة مرور جديدة" : "استعادة كلمة المرور"
-  const action = mode === "login" ? "دخول" : mode === "signup" ? "إنشاء" : mode === "recovery" ? "تحديث كلمة المرور" : "إرسال الرابط"
+  const title = mode === "login" ? "أهلاً بيك تاني" : mode === "signup" ? "اعمل حسابك" : mode === "recovery" ? "كلمة سر جديدة" : "استعادة كلمة السر"
+  const sub = mode === "login" ? "ادخل عشان تشوف بوتاتك وصفقاتك" : mode === "signup" ? "ابدأ مجانًا بفلوس وهمية" : mode === "recovery" ? "اختار كلمة سر جديدة لحسابك" : "هنبعتلك رابط على بريدك"
+  const action = mode === "login" ? "دخول" : mode === "signup" ? "اعمل الحساب" : mode === "recovery" ? "حدّث كلمة السر" : "ابعت الرابط"
+  const input = "w-full rounded-xl border border-line bg-void px-3.5 py-2.5 text-sm outline-none transition focus:border-corona/60"
 
   return (
-    <div dir="rtl" className="min-h-screen bg-void text-ink grid place-items-center p-4">
-      <div className="w-full max-w-[360px] rounded-2xl border border-line bg-surface p-6 shadow-xl shadow-black/30">
-        <div className="flex justify-center mb-3"><Logo size="lg" /></div>
-        <h1 className="text-base font-black text-center">{BRAND.nameAr} {BRAND.name} — {title}</h1>
-        <p className="text-xs text-muted mt-1 text-center">دخول آمن إلى حسابك</p>
-        {mode !== "recovery" && <div className="flex gap-2 mt-3">
-          <button onClick={() => changeMode("login")} className={`flex-1 py-1.5 rounded-xl text-xs font-bold ${mode === "login" ? "bg-corona text-void" : "bg-surface2 border border-line"}`}>دخول</button>
-          <button onClick={() => changeMode("signup")} className={`flex-1 py-1.5 rounded-xl text-xs font-bold ${mode === "signup" ? "bg-corona text-void" : "bg-surface2 border border-line"}`}>حساب جديد</button>
-        </div>}
-        {mode !== "recovery" && <input dir="ltr" value={email} onChange={e => setEmail(e.target.value)} type="email" autoComplete="email" placeholder="البريد الإلكتروني" className="w-full mt-3 bg-surface border border-line rounded-xl px-3 py-2 text-sm" />}
-        {mode === "recovery" ? <>
-          <input dir="ltr" value={newPassword} onChange={e => setNewPassword(e.target.value)} type="password" autoComplete="new-password" placeholder="كلمة المرور الجديدة" className="w-full mt-3 bg-surface border border-line rounded-xl px-3 py-2 text-sm" />
-          <input dir="ltr" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} type="password" autoComplete="new-password" placeholder="تأكيد كلمة المرور الجديدة" className="w-full mt-2 bg-surface border border-line rounded-xl px-3 py-2 text-sm" />
-        </> : mode !== "reset" && <input dir="ltr" value={password} onChange={e => setPassword(e.target.value)} type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} placeholder="كلمة المرور" className="w-full mt-2 bg-surface border border-line rounded-xl px-3 py-2 text-sm" />}
-        <button onClick={submit} disabled={loading} className="w-full mt-3 py-2 rounded-xl bg-corona text-void text-sm font-bold disabled:opacity-50">{loading ? "جاري..." : action}</button>
-        {mode === "login" && <button onClick={() => changeMode("reset")} className="w-full mt-2 text-xs text-muted">نسيت كلمة المرور؟</button>}
-        {mode === "reset" && <button onClick={() => changeMode("login")} className="w-full mt-2 text-xs text-muted">العودة لتسجيل الدخول</button>}
-        {mode === "recovery" && <button onClick={() => changeMode("login")} className="w-full mt-2 text-xs text-muted">العودة لتسجيل الدخول</button>}
-        {msg && <div role="status" aria-live="polite" className="mt-2 text-xs text-umbra bg-surface2 border border-line rounded-xl px-3 py-2">{msg}</div>}
-        <a href="/" className="block text-center text-xs text-muted mt-3">العودة للرئيسية</a>
+    <div dir="rtl" className="grid min-h-screen bg-void text-ink lg:grid-cols-2">
+      <div className="flex items-center justify-center p-6">
+        <div className="w-full max-w-[400px] space-y-5">
+          <a href="/" className="inline-flex"><Logo size="sm" /></a>
+          <div>
+            <h1 className="text-[32px] font-extrabold leading-tight">{title}</h1>
+            <p className="mt-1 text-[13px] text-muted">{sub}</p>
+          </div>
+          {mode !== "recovery" && <div className="flex gap-1 rounded-xl border border-line bg-surface p-1">
+            {(["login", "signup"] as const).map(m => (
+              <button key={m} onClick={() => changeMode(m)} className={`flex-1 rounded-[9px] py-2 text-sm transition ${mode === m || (m === "login" && mode === "reset") ? "bg-surface2 font-semibold text-ink" : "text-muted hover:text-ink"}`}>{m === "login" ? "دخول" : "حساب جديد"}</button>
+            ))}
+          </div>}
+          {mode !== "recovery" && <label className="block"><span className="mb-1.5 block text-[12px] font-semibold text-muted">البريد الإلكتروني</span>
+            <input dir="ltr" value={email} onChange={e => setEmail(e.target.value)} type="email" autoComplete="email" placeholder="name@example.com" className={input} /></label>}
+          {mode === "recovery" ? <>
+            <label className="block"><span className="mb-1.5 block text-[12px] font-semibold text-muted">كلمة السر الجديدة</span>
+              <input dir="ltr" value={newPassword} onChange={e => setNewPassword(e.target.value)} type="password" autoComplete="new-password" className={input} /></label>
+            <label className="block"><span className="mb-1.5 block text-[12px] font-semibold text-muted">أكّد كلمة السر</span>
+              <input dir="ltr" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} type="password" autoComplete="new-password" className={input} /></label>
+          </> : mode !== "reset" && <label className="block"><span className="mb-1.5 block text-[12px] font-semibold text-muted">كلمة السر</span>
+            <input dir="ltr" value={password} onChange={e => setPassword(e.target.value)} type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} className={input} /></label>}
+          {mode === "login" && <button onClick={() => changeMode("reset")} className="text-[13px] text-corona">نسيت كلمة السر؟</button>}
+          {(mode === "reset" || mode === "recovery") && <button onClick={() => changeMode("login")} className="text-[13px] text-muted hover:text-ink">← ارجع لتسجيل الدخول</button>}
+          <button onClick={submit} disabled={loading} className="w-full rounded-xl bg-corona py-3 text-sm font-semibold text-void transition hover:bg-corona-soft disabled:opacity-50">{loading ? "لحظة…" : action}</button>
+          {msg && <div role="status" aria-live="polite" className="rounded-xl border border-line bg-surface2 px-3 py-2.5 text-[13px] text-ink">{msg}</div>}
+          <p className="text-center text-[12px] leading-5 text-faint">بالدخول انت موافق على الشروط وسياسة الخصوصية. التداول بالرافعة فيه مخاطرة عالية.</p>
+        </div>
       </div>
+
+      <aside className="hidden flex-col justify-center gap-7 overflow-hidden border-r border-line bg-surface px-16 py-16 lg:flex">
+        <span className="self-start rounded-full border border-corona/40 bg-corona/10 px-3 py-0.5 text-[12px] font-semibold text-corona">Demo شغال 24/7 على Binance</span>
+        <h2 className="text-[56px] font-black leading-[1.12] tracking-tight">تداول بالأرقام،<br/>مش بالإحساس.</h2>
+        <p className="max-w-[520px] text-[15px] leading-7 text-muted">{LIVE_BOTS.length} استراتيجيات اتجربت على كل عقود Binance من 2019، بالرسوم والـ funding الحقيقي. وكل صفقة بتوصلك على تليجرام.</p>
+        <div className="flex gap-10">
+          {[["24/7", "مراقبة"], [String(LIVE_BOTS.length), "استراتيجيات"], ["2019", "داتا من سنة"]].map(([v, l]) => (
+            <div key={l}><div className="font-mono text-[22px] font-bold text-corona">{v}</div><div className="text-[12px] text-muted">{l}</div></div>
+          ))}
+        </div>
+        <div className="max-w-[460px] rounded-[18px] border border-line bg-void p-5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2"><span className="text-[28px] font-extrabold">AIN</span><span className="rounded-full border border-profit/40 bg-profit/10 px-2 py-0.5 text-[11px] font-semibold text-profit">LONG x2</span></div>
+            <span className="text-[11px] text-faint">مثال على تنبيه تليجرام</span>
+          </div>
+          <div className="mt-2 font-mono text-[34px] font-bold text-profit" dir="ltr" style={{ textAlign: "right" }}>+$153.20</div>
+          <div className="mt-2 flex gap-6 text-[12px]">
+            {[["الدخول", "0.14394"], ["الخروج", "0.25483"], ["المدة", "7d"]].map(([l, v]) => <div key={l}><div className="text-faint">{l}</div><div className="font-mono">{v}</div></div>)}
+          </div>
+        </div>
+      </aside>
     </div>
   )
 }

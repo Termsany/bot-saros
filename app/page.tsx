@@ -108,59 +108,45 @@ export default function Page(){
           </div>
           <a href={BOT_PAGE} target="_blank" rel="noopener" className="flex items-center gap-1 text-sm font-semibold text-corona hover:underline">شوفها شغالة دلوقتي <ArrowUpRight size={14}/></a>
         </div>
-        <div className="mt-6 overflow-x-auto rounded-2xl border border-line bg-surface">
-          <table className="w-full min-w-[860px] text-sm">
-            <thead className="bg-surface2/60 text-xs text-muted">
-              <tr>
-                <th className="px-5 py-3 text-right font-semibold">البوت</th>
-                <th className="hidden px-5 py-3 text-right font-semibold lg:table-cell">الفكرة</th>
-                <th className="px-4 py-3 text-center font-semibold">صفقات</th>
-                <th className="px-4 py-3 text-center font-semibold">نسبة الفوز</th>
-                <th className="px-4 py-3 text-center font-semibold">PF</th>
-                <th className="px-4 py-3 text-center font-semibold">صافي الربح</th>
-                <th className="px-4 py-3 text-center font-semibold">أقصى تراجع</th>
-                <th className="px-4 py-3 text-center font-semibold">Sharpe ‎2024+</th>
-                <th className="px-4 py-3 text-center font-semibold">أقل رأس مال</th>
-                <th className="px-4 py-3 text-center font-semibold">متاح من</th>
-              </tr>
-            </thead>
-            <tbody>
-              {STRATEGIES.map((s, i)=>{
-                const t = unlockTier(i)
-                return (
-                  <tr key={s.id} className={`border-t border-line ${s.risk === "high" ? "bg-loss/[0.04]" : "hover:bg-surface2/50"}`}>
-                    <td className="px-5 py-3.5">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="font-bold">{s.nameAr}</span>
-                        <span className="font-display text-xs text-faint">{s.name}</span>
-                        {s.risk === "high" && <span className="rounded-full border border-loss/45 bg-loss/10 px-2 py-0.5 text-[10px] font-bold text-loss">⚠️ HIGH RISK</span>}
-                      </div>
-                      <div className="mt-0.5 text-xs text-muted">{s.sides}<span className="lg:hidden"> · {s.desc}</span></div>
-                    </td>
-                    <td className="hidden max-w-[300px] px-5 py-3.5 text-xs leading-5 text-muted lg:table-cell">{s.method}</td>
-                    <td className="px-4 py-3.5 text-center font-mono text-muted">{s.trades.toLocaleString("en-US")}</td>
-                    <td className="px-4 py-3.5 text-center font-mono text-muted">{s.winRate}%</td>
-                    <td className={`px-4 py-3.5 text-center font-mono font-bold ${pfTone(s.pf)}`}>{s.pf.toFixed(2)}</td>
-                    <td className={`px-4 py-3.5 text-center font-mono font-bold ${s.pnl >= 0 ? "text-profit" : "text-loss"}`} dir="ltr">{s.pnl >= 0 ? "+" : ""}{s.pnl.toFixed(0)}$</td>
-                    <td className="px-4 py-3.5 text-center font-mono text-loss/85" dir="ltr">−{s.maxDD.toFixed(0)}$</td>
-                    <td className={`px-4 py-3.5 text-center font-mono font-bold ${sharpeTone(s.sharpeOut)}`}>{s.sharpeOut.toFixed(2)}</td>
-                    <td className="px-4 py-3.5 text-center font-mono font-bold text-corona" dir="ltr" title={minCapitalNote(s)}>${s.minCapital.toLocaleString("en-US")}</td>
-                    <td className="px-4 py-3.5 text-center"><span className="rounded-full px-2.5 py-0.5 text-[11px] font-bold" style={{color: t.color, background: `${t.color}1A`}}>{t.name}</span></td>
-                  </tr>
-                )
-              })}
-              <tr className="border-t-2 border-line bg-corona/[0.05]">
-                <td className="px-5 py-3.5 font-bold">التلات بوتات الأساسية مع بعض</td>
-                <td className="hidden px-5 py-3.5 text-xs text-muted lg:table-cell">ترند + مومنتم + شورت العملات الجديدة — نادراً ما بيخسروا في نفس الوقت</td>
-                <td className="px-4 py-3.5"/><td className="px-4 py-3.5"/><td className="px-4 py-3.5"/>
-                <td className="px-4 py-3.5 text-center font-mono font-bold text-profit" dir="ltr">+{COMBINED.core.pnl.toFixed(0)}$</td>
-                <td className="px-4 py-3.5 text-center font-mono text-loss/85" dir="ltr">−{COMBINED.core.maxDD.toFixed(0)}$</td>
-                <td className={`px-4 py-3.5 text-center font-mono font-bold ${sharpeTone(COMBINED.core.sharpeOut)}`}>{COMBINED.core.sharpeOut.toFixed(2)}</td>
-                <td className="px-4 py-3.5 text-center font-mono font-bold text-corona" dir="ltr">${STRATEGIES.slice(0, 3).reduce((a, s) => a + s.minCapital, 0).toLocaleString("en-US")}</td>
-                <td className="px-4 py-3.5"/>
-              </tr>
-            </tbody>
-          </table>
+        <div className="mt-6 grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
+          {STRATEGIES.map((s, i)=>{
+            const t = unlockTier(i)
+            return (
+              <div key={s.id} className={`flex flex-col rounded-2xl border bg-surface p-5 ${s.risk === "high" ? "border-loss/40" : "border-line"}`}>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="text-[17px] font-bold leading-snug">{s.nameAr}</div>
+                    <div className="text-[12px] text-faint">{s.name} · {s.sides}</div>
+                  </div>
+                  {s.risk === "high"
+                    ? <span className="shrink-0 rounded-full border border-loss/40 bg-loss/10 px-2.5 py-0.5 text-[12px] font-semibold text-loss">خطورة عالية</span>
+                    : <span className="shrink-0 rounded-full px-2.5 py-0.5 text-[12px] font-semibold" style={{color: t.color, background: `${t.color}1A`}}>{t.name}</span>}
+                </div>
+                <p className="mt-2 flex-1 text-[13px] leading-6 text-muted">{s.desc}</p>
+                <div className="mt-4 grid grid-cols-4 gap-1 border-t border-line pt-3 text-center">
+                  {[["صفقات", s.trades.toLocaleString("en-US"), "text-ink"], ["الفوز", `${s.winRate}%`, "text-ink"], ["PF", s.pf.toFixed(2), pfTone(s.pf)], ["Sharpe 24+", s.sharpeOut.toFixed(2), sharpeTone(s.sharpeOut)]].map(([l, v, c]) => (
+                    <div key={l}><div className={`font-mono text-[15px] font-medium tabular ${c}`}>{v}</div><div className="text-[11px] text-faint">{l}</div></div>
+                  ))}
+                </div>
+                <div className="mt-3 flex items-center justify-between rounded-xl bg-surface2/60 px-3 py-2 text-[12px]">
+                  <span className="text-muted">صافي <b className={`font-mono ${s.pnl >= 0 ? "text-profit" : "text-loss"}`} dir="ltr">{s.pnl >= 0 ? "+" : ""}{s.pnl.toFixed(0)}$</b> · تراجع <b className="font-mono text-loss/85" dir="ltr">−{s.maxDD.toFixed(0)}$</b></span>
+                  <span className="font-mono font-bold text-corona" dir="ltr" title={minCapitalNote(s)}>${s.minCapital.toLocaleString("en-US")}</span>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+        <div className="mt-5 flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-corona/40 bg-corona/[0.06] px-6 py-5">
+          <div>
+            <div className="text-[17px] font-bold">التلات بوتات الأساسية مع بعض</div>
+            <div className="mt-0.5 text-[13px] text-muted">ترند + مومنتم + شورت العملات الجديدة — نادراً ما بيخسروا في نفس الوقت</div>
+          </div>
+          <div className="flex gap-8 text-center">
+            <div><div className="font-mono text-[22px] font-bold text-profit" dir="ltr">+{COMBINED.core.pnl.toFixed(0)}$</div><div className="text-[11px] text-faint">صافي الربح</div></div>
+            <div><div className="font-mono text-[22px] font-bold text-loss/85" dir="ltr">−{COMBINED.core.maxDD.toFixed(0)}$</div><div className="text-[11px] text-faint">أقصى تراجع</div></div>
+            <div><div className={`font-mono text-[22px] font-bold ${sharpeTone(COMBINED.core.sharpeOut)}`}>{COMBINED.core.sharpeOut.toFixed(2)}</div><div className="text-[11px] text-faint">Sharpe ‎2024+</div></div>
+            <div><div className="font-mono text-[22px] font-bold text-corona" dir="ltr">${STRATEGIES.slice(0, 3).reduce((a, s) => a + s.minCapital, 0).toLocaleString("en-US")}</div><div className="text-[11px] text-faint">أقل رأس مال</div></div>
+          </div>
         </div>
         <div className="mt-3 flex flex-wrap gap-4 text-xs text-faint">
           <span>Sharpe = الربح مقارنةً بتقلّبه (فوق 1 كويس)</span>

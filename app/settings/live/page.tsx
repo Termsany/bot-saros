@@ -1,7 +1,8 @@
 "use client"
 import { useEffect, useState } from "react"
-import { Logo } from "@/components/Logo"
-import { ShieldCheck, Eye, EyeOff, Power, AlertTriangle, Key, CheckCircle2 } from "lucide-react"
+import { AppShell } from "@/components/AppShell"
+import { Card, CardHeader, PageHeader, Pill, btn, field, label } from "@/components/ui"
+import { ShieldCheck, Eye, EyeOff, Power, CheckCircle2 } from "lucide-react"
 import { authHeaders } from "@/lib/supabase"
 import { CONSENT_TEXT } from "@/lib/liveConsent"
 
@@ -34,6 +35,14 @@ export default function UserLiveSettingsPage() {
   const [agreeChecked, setAgreeChecked] = useState(false)
   const [msg, setMsg] = useState<{ type: "success" | "error"; text: string } | null>(null)
   const [busy, setBusy] = useState(false)
+  // same defaults and caps as backend/app/user_live_activation.py (the backend re-checks them)
+  const [leverage, setLeverage] = useState(2)
+  const [riskPerTrade, setRiskPerTrade] = useState(0.25)
+  const [maxRisk, setMaxRisk] = useState(1)
+  const riskError = !(leverage >= 1 && leverage <= 5) ? "الرافعة من 1 لـ 5"
+    : !(riskPerTrade > 0 && riskPerTrade <= 1) ? "المخاطرة لكل صفقة لحد 1%"
+    : !(maxRisk > 0 && maxRisk <= 3) ? "أقصى مخاطرة مفتوحة لحد 3%"
+    : riskPerTrade > maxRisk ? "المخاطرة لكل صفقة لازم تكون أقل من أقصى مخاطرة مفتوحة" : ""
 
   async function loadStatus() {
     try {
@@ -74,6 +83,7 @@ export default function UserLiveSettingsPage() {
   }
 
   async function enableLive() {
+    if (riskError) { setMsg({ type: "error", text: riskError }); return }
     if (confirmText !== CONSENT_TEXT || !agreeChecked) {
       setMsg({ type: "error", text: "لازم تكتب نص الموافقة بالكامل وتعلّم المربع" })
       return
@@ -82,7 +92,7 @@ export default function UserLiveSettingsPage() {
     try {
       const r = await fetch(`${API}/api/user/live/enable`, {
         method: "POST", headers: await authHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify({ exchange, confirm: confirmText }),
+        body: JSON.stringify({ exchange, confirm: confirmText, leverage, risk_per_trade_pct: riskPerTrade, max_aggregate_risk_pct: maxRisk }),
       })
       const j = await r.json().catch(() => ({}))
       if (r.ok) {
@@ -111,102 +121,125 @@ export default function UserLiveSettingsPage() {
     }
   }
 
+  const keysReady = !!status[exchange]?.configured
+  const consentReady = confirmText === CONSENT_TEXT && agreeChecked
+  const exName = EXCHANGES.find(e => e.id === exchange)?.name
+  const steps: [string, string, "done" | "now" | "todo"][] = [
+    ["مفاتيح المنصة", keysReady ? "اتحفظت · من غير سحب" : "احفظ مفاتيحك", keysReady ? "done" : "now"],
+    ["حدود المخاطرة", riskError ? riskError : `x${leverage} · ${riskPerTrade}% للصفقة`, !keysReady ? "todo" : riskError ? "now" : "done"],
+    ["الموافقة", consentReady ? "اتكتبت ✓" : "اقرا واكتب النص", !keysReady || riskError ? "todo" : consentReady ? "done" : "now"],
+    ["التفعيل", liveStatus.enabled ? `شغال على ${liveStatus.exchange}` : "مستني الخطوات اللي قبله", liveStatus.enabled ? "done" : consentReady ? "now" : "todo"],
+  ]
+  const riskFields: [string, number, (v: number) => void, number][] = [
+    ["الرافعة (1–5)", leverage, setLeverage, 1],
+    ["المخاطرة لكل صفقة % (لحد 1)", riskPerTrade, setRiskPerTrade, 0.05],
+    ["أقصى مخاطرة مفتوحة % (لحد 3)", maxRisk, setMaxRisk, 0.25],
+  ]
   return (
-    <div className="min-h-screen bg-void text-ink">
-      <header className="flex h-16 items-center justify-between border-b border-line bg-surface/90 backdrop-blur px-5 lg:px-8 sticky top-0 z-30">
-        <Logo />
-        <a href="/dashboard" className="px-4 py-2 rounded bg-corona text-void text-xs font-bold">المنصة</a>
-      </header>
+    <AppShell active="/settings/live">
+      <PageHeader title="التداول الحقيقي على حسابك" subtitle="حسابك، مفاتيحك، قرارك · مستقل تمامًا عن حساب الإدارة"
+        status={<Pill tone={liveStatus.enabled ? "profit" : "neutral"}>{liveStatus.enabled ? `● LIVE على ${liveStatus.exchange}` : "مش مفعّل"}</Pill>}/>
 
-      <div className="mx-auto max-w-[900px] px-5 lg:px-8 py-8 space-y-6">
-        <div>
-          <h1 className="text-lg font-black flex items-center gap-2"><Key size={16} className="text-corona"/> إعدادات التداول الحقيقي الخاصة بك</h1>
-          <p className="font-mono text-xs text-faint">حسابك، مفاتيحك، قرارك — مستقل تمامًا عن حساب الأدمن</p>
+      <ol className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {steps.map(([t, h, s], i) => (
+          <li key={t} className={`flex items-center gap-3 rounded-[14px] border px-4 py-3.5 ${s === "now" ? "border-corona bg-corona/[0.08]" : "border-line bg-surface"}`}>
+            <span className={`grid h-[30px] w-[30px] shrink-0 place-items-center rounded-full font-mono text-sm ${s === "done" ? "bg-profit/15 text-profit" : s === "now" ? "bg-corona/15 text-corona" : "bg-surface2 text-faint"}`}>{s === "done" ? "✓" : i + 1}</span>
+            <div className="min-w-0"><div className={`text-[15px] font-semibold ${s === "todo" ? "text-muted" : ""}`}>{t}</div><div className={`truncate text-[12px] ${s === "done" ? "text-profit" : "text-faint"}`}>{h}</div></div>
+          </li>
+        ))}
+      </ol>
+
+      {msg && (
+        <div className={`rounded-xl border p-3 text-sm ${msg.type === "success" ? "border-profit/30 bg-profit/[0.06] text-profit" : "border-loss/30 bg-loss/[0.06] text-loss"}`}>{msg.text}</div>
+      )}
+
+      <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
+        <div className="min-w-0 space-y-5">
+          {/* Save/update own key — write-only form, never re-displayed */}
+          <Card>
+            <CardHeader title="1 · مفاتيح المنصة" sub="بتتشفر على السيرفر ومش بترجع للمتصفح تاني"/>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="block"><span className={label}>المنصة</span>
+                <select value={exchange} onChange={e => setExchange(e.target.value)} className={field}>
+                  {EXCHANGES.map(ex => <option key={ex.id} value={ex.id}>{ex.name}</option>)}
+                </select>
+              </label>
+              <label className="block"><span className={label}>API key</span>
+                <input value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="API key" className={`${field} font-mono`} dir="ltr"/>
+              </label>
+              <label className="relative block"><span className={label}>Secret</span>
+                <input value={secret} onChange={e => setSecret(e.target.value)} type={show ? "text" : "password"} placeholder="Secret" className={`${field} pr-10 font-mono`} dir="ltr"/>
+                <button type="button" onClick={() => setShow(!show)} aria-label={show ? "اخفي" : "اظهر"} className="absolute bottom-3 right-3 text-faint hover:text-ink">{show ? <EyeOff size={15}/> : <Eye size={15}/>}</button>
+              </label>
+              {exchange === "okx" && (
+                <label className="block"><span className={label}>Passphrase (OKX بس)</span>
+                  <input value={passphrase} onChange={e => setPassphrase(e.target.value)} type={show ? "text" : "password"} className={`${field} font-mono`} dir="ltr"/>
+                </label>
+              )}
+            </div>
+            <button onClick={saveKeys} disabled={busy} className={`${btn.secondary} mt-4`}><ShieldCheck size={15}/> احفظ متشفّر</button>
+          </Card>
+
+          <Card>
+            <CardHeader title="2 · حدود المخاطرة" sub="بتتسجل مع الموافقة · السيرفر بيرفض أي قيمة برا الحدود دي"/>
+            <div className="grid gap-3 sm:grid-cols-3">
+              {riskFields.map(([l, v, set, step]) => (
+                <label key={l} className="block"><span className={label}>{l}</span>
+                  <input type="number" value={v} step={step} min={0} onChange={e => set(Number(e.target.value))} className={`${field} font-mono`} dir="ltr"/>
+                </label>
+              ))}
+            </div>
+            <div className={`mt-4 rounded-xl px-4 py-3 text-[13px] ${riskError ? "bg-loss/10 text-loss" : "bg-surface2 text-muted"}`}>
+              {riskError || <>لو الوقف اتضرب في صفقة: بتخسر <b className="font-mono text-loss">{riskPerTrade}%</b> من رصيدك · كل الصفقات المفتوحة مع بعض: <b className="font-mono text-ink">{maxRisk}%</b> بالكتير</>}
+            </div>
+          </Card>
+
+          {/* Explicit consent + enable/disable */}
+          <Card className={liveStatus.enabled ? "border-profit/40" : "border-corona/30"}>
+            <CardHeader title="3 · الموافقة والتفعيل" sub="على مسؤوليتك الخاصة"/>
+            {liveStatus.enabled ? (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2 text-sm text-profit"><CheckCircle2 size={16}/> LIVE مفعّل على {liveStatus.exchange} · x{liveStatus.leverage} · {liveStatus.risk_per_trade_pct}% للصفقة · أقصى {liveStatus.max_aggregate_risk_pct}%</div>
+                <button onClick={disableLive} disabled={busy} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-loss px-4 py-2.5 text-sm font-semibold text-void"><Power size={15}/> وقّف التداول الحقيقي دلوقتي</button>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <p className="text-[14px] leading-7 text-muted">معنى الموافقة: الحساب والمفاتيح بتوعك، وانت بتشغّل التداول الحقيقي بفلوسك وعلى مسؤوليتك، بعيد عن إدارة المنصة. وفاهم إن ده ممكن يخسّرك فلوس، وانت المسؤول بالكامل.</p>
+                <p className="text-[12px] text-faint">اكتب النص الإنجليزي ده بالظبط (السيرفر بيقارنه حرف بحرف):</p>
+                <div className="rounded-xl border border-line bg-void p-3 font-mono text-[12px] leading-6" dir="ltr">{CONSENT_TEXT}</div>
+                <textarea value={confirmText} onChange={e => setConfirmText(e.target.value)} placeholder="اكتب نص الموافقة بالكامل هنا" rows={3} className={`${field} font-mono text-[12px]`} dir="ltr"/>
+                <label className="flex items-center gap-2 text-sm font-semibold">
+                  <input type="checkbox" checked={agreeChecked} onChange={e => setAgreeChecked(e.target.checked)} className="h-4 w-4 accent-corona"/>
+                  قريت وفاهم المخاطر بالكامل
+                </label>
+                <button onClick={enableLive} disabled={busy || !consentReady || !!riskError || !keysReady} className={`${btn.primary} w-full`}>فعّل LIVE على {exName}</button>
+                {!keysReady && <p className="text-[12px] text-faint">احفظ مفاتيح {exName} الأول.</p>}
+              </div>
+            )}
+          </Card>
         </div>
 
-        {msg && (
-          <div className={`rounded-xl border p-3 text-xs ${msg.type === "success" ? "border-profit/30 bg-profit/[0.06] text-profit" : "border-loss/30 bg-loss/[0.06] text-loss"}`}>
-            {msg.text}
-          </div>
-        )}
-
-        {/* Key-configured status per exchange — configured/paper booleans only, never the key value */}
-        <section className="rounded-xl border border-line bg-surface p-4">
-          <h2 className="text-sm font-bold mb-3">حالة مفاتيحك</h2>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        <Card>
+          <h2 className="mb-3 text-[17px] font-bold">حالة حسابك</h2>
+          {/* Key-configured status per exchange — configured/paper booleans only, never the key value */}
+          <div className="divide-y divide-line">
             {EXCHANGES.map(ex => {
               const st = status[ex.id] || { configured: false, paper: true }
               return (
-                <div key={ex.id} className="rounded-lg border border-line p-2 text-center">
-                  <div className="text-xs font-bold">{ex.name}</div>
-                  <div className={`text-[11px] font-mono ${st.configured ? (st.paper ? "text-corona" : "text-profit") : "text-faint"}`}>
-                    {st.configured ? (st.paper ? "Paper" : "LIVE") : "غير مربوط"}
-                  </div>
+                <div key={ex.id} className="flex items-center justify-between py-2.5 text-[13px]">
+                  <span className="text-muted">مفاتيح {ex.name}</span>
+                  <Pill tone={st.configured ? (st.paper ? "corona" : "profit") : "neutral"}>{st.configured ? (st.paper ? "محفوظة · Paper" : "LIVE") : "مش موجودة"}</Pill>
                 </div>
               )
             })}
+            <div className="flex items-center justify-between py-2.5 text-[13px]">
+              <span className="text-muted">التداول الحقيقي</span>
+              <Pill tone={liveStatus.enabled ? "profit" : "neutral"}>{liveStatus.enabled ? "شغال" : "مش مفعّل"}</Pill>
+            </div>
           </div>
-        </section>
-
-        {/* Save/update own key — write-only form, never re-displayed */}
-        <section className="rounded-xl border border-line bg-surface p-4">
-          <h2 className="text-sm font-bold mb-3">حفظ/تحديث مفاتيحك</h2>
-          <div className="space-y-2">
-            <select value={exchange} onChange={e => setExchange(e.target.value)}
-              className="w-full bg-surface border border-line rounded-lg px-3 py-2.5 text-xs">
-              {EXCHANGES.map(ex => <option key={ex.id} value={ex.id}>{ex.name}</option>)}
-            </select>
-            <input value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="API Key"
-              className="w-full bg-surface border border-line rounded-lg px-3 py-2.5 text-xs font-mono"/>
-            <div className="relative">
-              <input value={secret} onChange={e => setSecret(e.target.value)} type={show ? "text" : "password"} placeholder="Secret"
-                className="w-full bg-surface border border-line rounded-lg px-3 py-2.5 pr-9 text-xs font-mono"/>
-              <button onClick={() => setShow(!show)} className="absolute right-2 top-1/2 -translate-y-1/2 text-faint">
-                {show ? <EyeOff size={14}/> : <Eye size={14}/>}
-              </button>
-            </div>
-            {exchange === "okx" && (
-              <input value={passphrase} onChange={e => setPassphrase(e.target.value)} type={show ? "text" : "password"}
-                placeholder="Passphrase (OKX فقط)" className="w-full bg-surface border border-line rounded-lg px-3 py-2.5 text-xs font-mono"/>
-            )}
-            <button onClick={saveKeys} disabled={busy}
-              className="w-full py-2.5 rounded-lg text-xs font-bold bg-line hover:bg-surface2 border border-line text-white flex items-center justify-center gap-2">
-              <ShieldCheck size={12}/> حفظ مشفر
-            </button>
-          </div>
-        </section>
-
-        {/* Explicit consent + enable/disable */}
-        <section className="rounded-xl border border-corona/30 bg-corona/[0.04] p-4">
-          <h2 className="text-sm font-bold mb-2 flex items-center gap-2"><AlertTriangle size={14} className="text-corona"/> تفعيل LIVE — على مسؤوليتك الخاصة</h2>
-          {liveStatus.enabled ? (
-            <div className="space-y-2">
-              <div className="flex items-center gap-2 text-xs text-profit"><CheckCircle2 size={14}/> LIVE مفعّل على {liveStatus.exchange}</div>
-              <button onClick={disableLive} disabled={busy}
-                className="w-full py-2.5 rounded-lg text-xs font-bold bg-loss text-void flex items-center justify-center gap-2">
-                <Power size={12}/> إيقاف التداول الحقيقي الآن
-              </button>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              <div className="rounded-lg border border-line bg-surface p-3 text-[11px] font-mono leading-relaxed" dir="ltr">
-                {CONSENT_TEXT}
-              </div>
-              <textarea value={confirmText} onChange={e => setConfirmText(e.target.value)}
-                placeholder="اكتب نص الموافقة بالكامل هنا"
-                className="w-full bg-surface border border-line rounded-lg px-3 py-2.5 text-xs font-mono" rows={3} dir="ltr"/>
-              <label className="flex items-center gap-2 text-xs">
-                <input type="checkbox" checked={agreeChecked} onChange={e => setAgreeChecked(e.target.checked)}/>
-                أوافق وأفهم المخاطر بالكامل
-              </label>
-              <button onClick={enableLive} disabled={busy || confirmText !== CONSENT_TEXT || !agreeChecked}
-                className="w-full py-2.5 rounded-lg text-xs font-bold bg-corona text-void disabled:opacity-40">
-                تفعيل LIVE على {exchange}
-              </button>
-            </div>
-          )}
-        </section>
+          <p className="mt-4 rounded-xl border border-loss/40 bg-loss/[0.06] p-3 text-[12px] leading-6 text-muted"><b className="text-loss">لو التداول الحقيقي مقفول على السيرفر</b> هيترفض التفعيل حتى لو كمّلت الخطوات. تقدر تجهّز مفاتيحك وحدودك من دلوقتي.</p>
+        </Card>
       </div>
-    </div>
+    </AppShell>
   )
 }
