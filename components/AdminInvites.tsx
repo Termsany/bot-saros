@@ -89,6 +89,7 @@ export function InviteDialog({ open, onClose, prices, emailConfigured, onCreated
           <div className="space-y-4">
             <div className={`rounded-xl border px-4 py-3 text-[14px] ${done.emailed ? "border-profit/30 bg-profit/10 text-profit" : "border-corona/30 bg-corona/10 text-corona"}`}>
               {done.emailed ? <>اتبعتت على <b dir="ltr">{email.trim()}</b> ✓</> : sendEmail ? "الدعوة اتعملت بس الإيميل ما اتبعتش — انسخ الرابط وابعته بنفسك." : "الدعوة اتعملت — انسخ الرابط وابعته بنفسك."}
+              {!done.emailed && done.email_error && <div className="mt-1.5 font-mono text-[12px] text-muted" dir="ltr" style={{ textAlign: "right" }}>{done.email_error}</div>}
             </div>
             <div><span className={label}>رابط الدعوة (شغال 14 يوم، ولنفس الإيميل بس)</span><CopyLink link={done.link}/></div>
             <div className="flex gap-2"><button onClick={onClose} className={`${btn.primary} flex-1`}>تمام</button></div>
@@ -186,7 +187,7 @@ export function InvitesPanelView({ data, prices, onInvite, onAction, busy }: {
                   <td className="px-2 py-3"><div className="font-semibold" dir="ltr" style={{ textAlign: "right" }}>{inv.email}</div>{inv.note && <div className="text-[12px] text-faint">{inv.note}</div>}</td>
                   <td className="px-2 py-3"><Pill tone={inv.kind === "gift" ? "signal" : inv.kind === "trial" ? "umbra" : "corona"}>{KIND[inv.kind]?.title}</Pill><div className="mt-1 text-[12px] text-muted">{inv.offer}</div></td>
                   <td className="px-2 py-3"><Pill tone={tone}>{st}</Pill>{inv.opened_checkout_at && inv.state === "pending" && <div className="mt-1 text-[11px] text-faint">فتح صفحة الدفع</div>}</td>
-                  <td className="px-2 py-3 text-muted">{inv.emailed_at ? fmtDate(inv.emailed_at) : <span className="text-faint" title={inv.email_error || ""}>رابط بس</span>}</td>
+                  <td className="px-2 py-3 text-muted">{inv.emailed_at ? fmtDate(inv.emailed_at) : <><span className="text-faint">رابط بس</span>{inv.email_error && <div className="max-w-[220px] truncate font-mono text-[11px] text-loss" dir="ltr" style={{ textAlign: "right" }} title={inv.email_error}>{inv.email_error}</div>}</>}</td>
                   <td className="px-2 py-3 text-muted">{live ? fmtDate(inv.link_expires_at) : "—"}</td>
                   <td className="px-2 py-3">
                     {live && <div className="flex justify-end gap-1.5">

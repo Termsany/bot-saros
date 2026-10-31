@@ -179,7 +179,11 @@ async def send_email(to: str, subject: str, body_html: str, *, transport: "httpx
             r = await client.post("https://api.resend.com/emails", headers={"Authorization": f"Bearer {key}"},
                                   json={"from": sender, "to": [to], "subject": subject, "html": body_html})
         if r.status_code not in (200, 201, 202):
-            return {"ok": False, "error": f"resend http {r.status_code}"}
+            # Resend says why ("The da3m.io domain is not verified", "API key is invalid", ...): keep it for the admin.
+            # Its error body never echoes the key.
+            try: why = str((r.json() or {}).get("message") or "")[:200]
+            except Exception: why = ""
+            return {"ok": False, "error": f"resend http {r.status_code}" + (f": {why}" if why else "")}
         return {"ok": True, "error": None}
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": type(exc).__name__}
