@@ -1,8 +1,10 @@
 "use client"
 import { useState } from "react"
-import { BRAND } from "@/lib/brand"
-import { Logo } from "@/components/Logo"
+import { AppShell } from "@/components/AppShell"
+import { Card, CardHeader, PageHeader, Pill, btn } from "@/components/ui"
 import { authHeaders } from "@/lib/supabase"
+
+const EXAMPLES = ["مومنتم + فلتر تذبذب: لونج أقوى 5 عملات لو التذبذب أقل من متوسطه", "شورت بعد الـ pump: عملة طلعت 30% في يوم بفوليوم 3 أضعاف", "Mean reversion على BTC فريم ساعة"]
 
 export default function LLMLab(){
   const [prompt, setPrompt] = useState("RSI divergence + volume spike for BTC 4h — lenient thresholds")
@@ -20,70 +22,79 @@ export default function LLMLab(){
     }catch(e:any){ setError(String(e.message||e)) }
     setLoading(false)
   }
+  const st = result?.backtest?.stats
 
   return (
-    <div className="min-h-screen bg-void text-ink">
-      <header className="flex h-16 items-center justify-between border-b border-line bg-surface/90 backdrop-blur px-5 lg:px-8 sticky top-0 z-30">
-        <Logo />
-        <div className="flex items-center gap-2">
-          <a href="/dashboard" className="px-4 py-2 rounded bg-corona text-void text-xs font-bold">المنصة</a>
-          <a href="/" className="text-xs text-muted hover:text-white">الرئيسية</a>
-        </div>
-      </header>
-      <div className="mx-auto max-w-[900px] p-5 lg:p-8 space-y-5">
-        <div className="rounded border border-corona/20 bg-corona/[0.06] p-3 flex justify-between items-center">
-          <div><div className="text-xs font-bold text-corona">الوضع التلقائي مفعّل</div><div className="font-mono text-[11px] text-muted">كل فكرة WR ≥60% تضاف للـ Elite تلقائياً بدون تدخل</div></div>
-          <a href="/api/llm/promoted" target="_blank" className="text-xs px-3 py-1.5 rounded border border-line bg-surface">المُرقّاة</a>
-        </div>
-        <div>
-          <h1 className="text-xl font-black">مختبر الاستراتيجيات</h1>
-          <p className="font-mono text-xs text-faint mt-1">اكتب وصف و الـ LLM يولد الكود + باك تست فوري عبر <b className="text-corona">Claude Sonnet 5</b> (CodeCraft)</p>
-        </div>
+    <AppShell active="/llm-lab">
+      <PageHeader title="مختبر AI" subtitle="اكتب فكرة · الذكاء الاصطناعي يكتب الاستراتيجية ويجربها فورًا"
+        status={<Pill tone="signal">Paper فقط · مفيش أوامر حقيقية</Pill>}/>
 
-        <div className="rounded border border-line bg-surface p-5">
-          <label className="font-mono text-[11px] tracking-[0.14em] text-faint">وصف الاستراتيجية</label>
-          <textarea value={prompt} onChange={e=>setPrompt(e.target.value)} rows={3}
-            className="w-full mt-2 bg-surface border border-line rounded-xl px-3 py-3 text-sm focus:border-corona/40 outline-none"
-            placeholder="مثال: اخترع استراتيجية تمزج Bollinger Squeeze + حجم للـ 15m" />
-          <button onClick={generate} disabled={loading || !prompt.trim()}
-            className={`w-full mt-3 py-3 rounded-xl text-sm font-black ${loading?"bg-line text-faint":"bg-corona text-void hover:bg-corona-deep"}`}>
-            {loading ? "جاري التحليل..." : "حوّل الفكرة لاستراتيجية"}
-          </button>
-        </div>
-
-        {loading && (
-          <div className="rounded border border-line bg-surface p-8 text-center">
-            <div className="w-10 h-10 mx-auto rounded-full border-2 border-line border-t-corona animate-spin"/>
-            <div className="text-sm font-bold mt-3">الـ LLM يكتب الكود...</div>
-            <div className="font-mono text-xs text-faint mt-1">قد يستغرق 10-20 ثانية</div>
-          </div>
-        )}
-
-        {error && <div className="rounded border border-loss/30 bg-loss/[0.06] p-4 text-xs text-loss whitespace-pre-wrap">{error}</div>}
-
-        {result && (
-          <div className="rounded border border-line bg-surface p-5 space-y-4">
-            <div className="flex justify-between">
-              <h3 className="text-sm font-bold">النتيجة — {result.name}</h3>
-              <span className={`px-3 py-1 rounded-full text-xs font-black border ${result.backtest?.stats?.pnl >=0 ? "bg-profit/10 text-profit border-profit/30":"bg-loss/10 text-loss border-loss/30"}`}>
-                {result.backtest?.stats ? `${result.backtest.stats.pnl>=0?"مكسب":"خسارة"} ${result.backtest.stats.pnl.toFixed(2)} USDT` : "لا يوجد باك تست"}
-              </span>
-            </div>
-            {result.backtest?.stats && (
-              <div className="grid grid-cols-3 gap-2 text-center">
-                <div className="rounded border border-line bg-surface p-3"><div className="font-mono text-[10px] text-faint">الصفقات</div><div className="font-mono text-lg font-black">{result.backtest.stats.total}</div><div className="font-mono text-[11px] text-faint">{result.backtest.stats.wins}W / {result.backtest.stats.losses}L</div></div>
-                <div className="rounded border border-line bg-surface p-3"><div className="font-mono text-[10px] text-faint">Win Rate</div><div className={`font-mono text-lg font-black ${result.backtest.stats.win_rate>=45?"text-profit":"text-corona"}`}>{result.backtest.stats.win_rate.toFixed(1)}%</div><div className="font-mono text-[11px] text-faint">PF {result.backtest.stats.profit_factor?.toFixed(2)}</div></div>
-                <div className="rounded border border-line bg-surface p-3"><div className="font-mono text-[10px] text-faint">PnL</div><div className={`font-mono text-lg font-black ${result.backtest.stats.pnl>=0?"text-profit":"text-loss"}`}>{result.backtest.stats.pnl>=0?"+":""}{result.backtest.stats.pnl.toFixed(2)}</div><div className="font-mono text-[11px] text-faint">MaxDD {result.backtest.stats.max_dd?.toFixed(2)}</div></div>
+      <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
+        <div className="min-w-0 space-y-5">
+          <Card>
+            <CardHeader title="فكرة الاستراتيجية"/>
+            <textarea value={prompt} onChange={e=>setPrompt(e.target.value)} rows={4} aria-label="وصف الاستراتيجية"
+              className="w-full rounded-xl border border-corona/50 bg-void px-4 py-3.5 text-[15px] leading-7 outline-none focus:border-corona"
+              placeholder="مثال: اخترع استراتيجية تمزج Bollinger Squeeze + حجم للـ 15m"/>
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-[12px] text-faint">أمثلة:</span>
+                {EXAMPLES.map(x => (
+                  <button key={x} onClick={()=>setPrompt(x)} className="rounded-full bg-surface2 px-3 py-1 text-[12px] text-muted transition hover:text-ink">{x.split(":")[0]}</button>
+                ))}
               </div>
-            )}
-            <details className="rounded border border-line bg-surface p-3"><summary className="text-xs font-bold cursor-pointer">عرض الكود</summary><pre className="mt-2 text-xs font-mono overflow-auto max-h-[320px] whitespace-pre-wrap">{result.code}</pre></details>
+              <button onClick={generate} disabled={loading || !prompt.trim()} className={btn.primary}>
+                {loading ? "الـ AI بيكتب الكود…" : "حوّل الفكرة لاستراتيجية"}
+              </button>
+            </div>
+          </Card>
 
+          {loading && (
+            <Card className="py-10 text-center">
+              <div className="mx-auto h-10 w-10 animate-spin rounded-full border-2 border-line border-t-corona"/>
+              <div className="mt-3 text-sm font-bold">الـ AI بيكتب الكود ويجربه…</div>
+              <div className="mt-1 text-xs text-faint">ممكن ياخد من 10 لـ 20 ثانية</div>
+            </Card>
+          )}
+
+          {error && <div className="whitespace-pre-wrap rounded-2xl border border-loss/30 bg-loss/[0.06] p-4 text-sm text-loss">{error}</div>}
+
+          {result && (
+            <Card>
+              <CardHeader title={`النتيجة — ${result.name}`}
+                action={st ? <Pill tone={st.pnl >= 0 ? "profit" : "loss"}>{st.pnl >= 0 ? "مكسب" : "خسارة"} <span className="font-mono" dir="ltr">{st.pnl.toFixed(2)} USDT</span></Pill> : <Pill>مفيش باك تست</Pill>}/>
+              {st && (
+                <div className="grid grid-cols-3 gap-3 text-center">
+                  {[["الصفقات", String(st.total), `${st.wins} كسبانة / ${st.losses} خسرانة`, ""],
+                    ["نسبة الكسب", `${st.win_rate.toFixed(1)}%`, `PF ${st.profit_factor?.toFixed(2)}`, st.win_rate >= 45 ? "text-profit" : "text-corona"],
+                    ["الصافي", `${st.pnl >= 0 ? "+" : ""}${st.pnl.toFixed(2)}`, `أسوأ تراجع ${st.max_dd?.toFixed(2)}`, st.pnl >= 0 ? "text-profit" : "text-loss"]].map(([l, v, h, c]) => (
+                    <div key={l} className="rounded-xl bg-surface2 p-3">
+                      <div className="text-[12px] text-muted">{l}</div>
+                      <div className={`font-mono text-xl font-bold tabular ${c}`} dir="ltr">{v}</div>
+                      <div className="text-[11px] text-faint">{h}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <details className="mt-4 rounded-xl border border-line bg-void p-3"><summary className="cursor-pointer text-xs font-bold">عرض الكود</summary><pre className="mt-2 max-h-[320px] overflow-auto whitespace-pre-wrap font-mono text-xs" dir="ltr">{result.code}</pre></details>
+            </Card>
+          )}
+        </div>
+
+        <Card>
+          <CardHeader title="شروط القبول" sub="الاستراتيجية بتتضاف للـ Elite لوحدها لو عدّت الشرط ده"/>
+          <div className="space-y-3">
+            {[["نسبة الكسب 60% أو أكتر", "على الباك تست اللي بيتعمل للفكرة"], ["Profit factor ‏1.2 أو أكتر", "الكسب على الأقل 1.2 ضعف الخسارة"]].map(([l, h]) => (
+              <div key={l} className="flex gap-2.5">
+                <span className="mt-0.5 grid h-[22px] w-[22px] shrink-0 place-items-center rounded-md bg-corona/15 text-[11px] text-corona">◆</span>
+                <div><div className="text-[14px] font-semibold">{l}</div><div className="text-[12px] text-muted">{h}</div></div>
+              </div>
+            ))}
           </div>
-        )}
+          <p className="mt-4 rounded-xl bg-surface2 p-3 text-[12px] leading-6 text-muted">جاي في تحديث الباك إند: 300 صفقة على الأقل، نتيجة على فترة ما اتختارتش عليها، حد لأسوأ تراجع، والربح مش من صفقات قليلة.</p>
+          <a href="/api/llm/promoted" target="_blank" className={`${btn.secondary} mt-4 w-full`}>الاستراتيجيات اللي اتضافت</a>
+        </Card>
       </div>
-      <footer className="mx-auto max-w-[900px] px-5 lg:px-8 border-t border-line mt-6 py-6 flex justify-between font-mono text-[11px] text-faint">
-        <span>LLM Lab — {BRAND.name}</span><span>CodeCraft · Claude Sonnet 5</span>
-      </footer>
-    </div>
+    </AppShell>
   )
 }

@@ -6,7 +6,7 @@ import { getMyTier } from "@/lib/supabase"
 import { PAIRS } from "@/lib/pairs"
 import { AppShell } from "@/components/AppShell"
 import { Kpi } from "@/components/Kpi"
-import { RaqmMark } from "@/components/Logo"
+import { Card, CardHeader, PageHeader, Pill } from "@/components/ui"
 import { apiBacktest, apiUserTier, apiChartObjectUrl } from "@/lib/api"
 import { runBacktestClient } from "@/lib/backtest-client"
 import { runPortfolioBacktest, PORTFOLIO_LEVERAGES } from "@/lib/portfolio-backtest"
@@ -41,7 +41,10 @@ const shortTs = (s: string) => String(s).slice(5,16).replace("T"," ")
 function Field({ label, children }: { label: string, children: React.ReactNode }){
   return <label className="block"><span className="mb-1.5 block text-xs font-semibold text-muted">{label}</span>{children}</label>
 }
-const inputCls = "w-full rounded-lg border border-line bg-surface2 px-3 py-2 text-sm outline-none transition focus:border-corona/50"
+const inputCls = "w-full rounded-xl border border-line bg-void px-3 py-2.5 text-sm outline-none transition focus:border-corona/60"
+function Step({ n, title, right }: { n: number, title: string, right?: React.ReactNode }){
+  return <div className="flex items-center justify-between gap-2"><h2 className="flex items-center gap-2 text-[15px] font-semibold"><span className="grid h-[22px] w-[22px] place-items-center rounded-full bg-corona/15 font-mono text-[12px] text-corona">{n}</span>{title}</h2>{right}</div>
+}
 
 export default function BacktestPage(){
   const [symbol, setSymbol] = useState("BTC/USDT")
@@ -98,7 +101,7 @@ export default function BacktestPage(){
   async function run(){
     if(from > to){ setError("التاريخ معكوس — «من» لازم يكون قبل «إلى»"); return }
     if(overLimit){ setError(`المدة ${span} يوم — باقتك تسمح بـ ${maxDays} يوم كحد أقصى. رقّي باقتك لباك تست أطول`); return }
-    setLoading(true); setError(""); setResult(null); setChartFile(""); setStdout("")
+    setLoading(true); setError(""); setResult(null); setChartFile(""); setStdout(""); setRestored(false)
     if(portfolio){
       try{
         const res = await runPortfolioBacktest({ strategy: selected[0], from, to, amount, leverage })
@@ -142,26 +145,73 @@ export default function BacktestPage(){
     }
   }, [result])
   const s = result?.stats
+
+  // the last run survives a reload (this browser only); a failed read or write just means no saved run
+  const SAVED = "raqm:last-backtest"
+  const [restored, setRestored] = useState(false)
+  useEffect(()=>{
+    try{
+      const saved = JSON.parse(localStorage.getItem(SAVED) || "null")
+      if(saved?.result?.stats && saved?.ran){ setResult(saved.result); setRan(saved.ran); setRestored(true) }
+    }catch{}
+  }, [])
+  useEffect(()=>{
+    if(!result || !ran || restored) return
+    try{ localStorage.setItem(SAVED, JSON.stringify({ result, ran })) }catch{}
+  }, [result, ran, restored])
+  const yearly = useMemo(()=>{
+    const by: Record<string, number> = {}
+    for(const t of result?.trades || []){ const y = String(t.exit_ts).slice(0, 4); if(/^\d{4}$/.test(y)) by[y] = (by[y] || 0) + t.pnl }
+    return Object.entries(by).sort(([a],[b])=> a.localeCompare(b))
+  }, [result])
+  function exportCsv(){
+    if(!result) return
+    const cols = ["symbol","side","entry_ts","entry","exit_ts","exit","qty","pnl","reason"] as const
+    const esc = (v: unknown) => { const x = String(v ?? ""); return /[",\n]/.test(x) ? `"${x.replace(/"/g, '""')}"` : x }
+    const csv = [cols.join(","), ...result.trades.map(t=> cols.map(c=> esc(c === "symbol" ? (t.symbol || result.symbol) : (t as any)[c])).join(","))].join("\n")
+    const url = URL.createObjectURL(new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" }))
+    const a = document.createElement("a"); a.href = url; a.download = `backtest-${(ran?.strategies || []).join("+")}-${ran?.from}-${ran?.to}.csv`; a.click()
+    setTimeout(()=> URL.revokeObjectURL(url), 1000)
+  }
   const roi = s ? s.pnl / amount * 100 : 0
 
   return (
     <AppShell active="/backtest" tier={tier}>
-      <header className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="text-[26px] font-bold">Backtest</h1>
-          <p className="text-[13px] text-muted">اختبر أي استراتيجية على بيانات السوق الحقيقية قبل ما تخاطر بفلوسك</p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2" dir="ltr">
-          <span className="flex items-center gap-1.5 rounded-full border border-line bg-surface px-3 py-1.5 font-mono text-[11px] font-bold text-profit"><i className="h-1.5 w-1.5 rounded-full bg-profit"/> BYBIT · OKX · BINANCE</span>
-          <span className="rounded-full border border-line bg-surface px-3 py-1.5 font-mono text-[11px] font-bold text-corona">{maxDays===null ? "∞ DAYS" : `MAX ${maxDays} DAYS`}</span>
-        </div>
-      </header>
+      <PageHeader title="Backtest" subtitle="اختبر أي استراتيجية على بيانات السوق الحقيقية قبل ما تخاطر بفلوسك"
+        status={<>
+          <Pill tone="profit"><span className="font-mono" dir="ltr">BYBIT · OKX · BINANCE</span></Pill>
+          <Pill tone="corona"><span className="font-mono">{maxDays===null ? "بلا حدود" : `لحد ${maxDays} يوم`}</span></Pill>
+        </>}/>
 
       <div className="grid items-start gap-4 lg:grid-cols-[380px_minmax(0,1fr)]">
         {/* settings — right column in RTL */}
         <section className="space-y-5 rounded-2xl border border-line bg-surface p-5 lg:sticky lg:top-8">
+          <h2 className="text-[17px] font-bold">إعدادات التشغيل</h2>
           <div className="space-y-3">
-            <h2 className="text-sm font-bold">السوق</h2>
+            <Step n={1} title="الاستراتيجية"/>
+            <div className="space-y-1.5">
+              {STRATEGIES.map((st, i)=>{
+                const on = selected.includes(st.id), locked = i >= planCount
+                return (
+                  <button key={st.id} onClick={()=>toggle(st.id)} aria-pressed={on} disabled={locked}
+                    className={`flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2 text-right transition disabled:cursor-not-allowed disabled:opacity-60 ${on ? "bg-surface2 ring-1 ring-corona/30" : "border border-line hover:bg-surface2/60"}`}>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5 truncate text-sm font-bold">{st.nameAr}{st.risk === "high" && <span className="rounded-full bg-loss/10 px-1.5 text-[10px] text-loss">HIGH RISK</span>}</div>
+                      <div className="font-mono text-[11px] text-muted"><span className={`font-bold ${pfTone(st.pf)}`}>PF {st.pf.toFixed(2)}</span><span className="mx-1.5 text-faint">·</span>WR {st.winRate}%<span className="mx-1.5 text-faint">·</span>Sharpe <span className={sharpeTone(st.sharpeOut)}>{st.sharpeOut.toFixed(2)}</span></div>
+                      <div className="mt-0.5 text-[11px] text-faint">{st.perCoin ? "على العملة اللي تختارها" : "على كل العملات زي البوت"} · {st.sides} · <span className="font-bold text-corona" title={minCapitalNote(st)}>أقل رأس مال ${st.minCapital.toLocaleString("en-US")}</span></div>
+                    </div>
+                    {locked
+                      ? <span className="flex shrink-0 items-center gap-1 rounded-full bg-corona/10 px-2 py-0.5 text-[10px] font-bold text-corona"><Lock size={11}/> {unlockTier(i).name}</span>
+                      : <span className={`grid h-5 w-5 shrink-0 place-items-center rounded-full border ${on ? "border-corona bg-corona text-void" : "border-faint"}`}>{on && <Check size={13} strokeWidth={3}/>}</span>}
+                  </button>
+                )
+              })}
+            </div>
+            {portfolio && <p className="text-[11px] leading-5 text-faint">النتيجة = صفقات البوت في اختباره الكامل (كل عملات Binance من 2019، والعملات بتتختار بالفوليوم وقتها، شامل الرسوم والـ funding) اللي فتحت في المدة دي. صفقاته الحية على <a href={BOT_PAGE} target="_blank" rel="noopener" className="text-corona hover:underline">صفحة البوتات</a>.</p>}
+          </div>
+
+          <div className="space-y-3 border-t border-line pt-5">
+            <Step n={2} title="السوق والمدة" right={<span className={`font-mono text-[11px] font-bold ${overLimit ? "text-loss" : "text-muted"}`}>{span} يوم{maxDays!==null && ` / ${maxDays}`}</span>}/>
             <Field label="العملة">
               {portfolio
                 ? <div className={`${inputCls} text-muted`}>كل العملات — زي البوت بالظبط ({sel?.nameAr})</div>
@@ -176,13 +226,6 @@ export default function BacktestPage(){
                   <button key={tf} onClick={()=>setTimeframe(tf)} disabled={trend && tf!=="1d"} className={`rounded-lg py-1.5 font-mono text-xs font-bold transition disabled:opacity-30 ${(trend ? tf==="1d" : timeframe===tf) ? "bg-corona text-void" : "text-muted hover:text-ink"}`}>{tf}</button>
                 ))}
               </div>
-            </div>
-          </div>
-
-          <div className="space-y-3 border-t border-line pt-5">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-bold">المدة</h2>
-              <span className={`font-mono text-[11px] font-bold ${overLimit ? "text-loss" : "text-muted"}`}>{span} يوم{maxDays!==null && ` / ${maxDays}`}</span>
             </div>
             <div className="grid grid-cols-2 gap-2">
               <Field label="من"><input type="date" value={from} max={to} onChange={e=>setFrom(e.target.value)} className={inputCls}/></Field>
@@ -203,16 +246,9 @@ export default function BacktestPage(){
           </div>
 
           <div className="space-y-3 border-t border-line pt-5">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-bold">مبلغ الصفقة</h2>
-              <span className="font-mono text-lg font-bold text-corona" dir="ltr">${amount}</span>
-            </div>
+            <Step n={3} title="الحجم والرافعة" right={<span className="font-mono text-lg font-bold text-corona" dir="ltr">${amount}</span>}/>
             <input type="range" min={10} max={200} step={10} value={amount} onChange={e=>setAmount(parseInt(e.target.value))} className="w-full accent-corona" aria-label="مبلغ الصفقة"/>
             <p className="text-xs text-faint">هامش <b className="font-mono text-ink">${amount}</b> × رافعة x{leverage} = حجم صفقة <b className="font-mono text-corona">${amount*leverage}</b>{trend && " (أقصى حجم — بيصغر لما السوق يهيج)"} · فلوس وهمية 100%</p>
-          </div>
-
-          <div className="space-y-2 border-t border-line pt-5">
-            <h2 className="text-sm font-bold">الرافعة</h2>
             <div className="grid grid-cols-4 gap-0.5 rounded-[10px] bg-surface2 p-[3px]" dir="ltr">
               {[1, 2, 3, 5].map(x=>(
                 <button key={x} onClick={()=>setLeverage(x)} aria-pressed={leverage===x} disabled={portfolio && !(PORTFOLIO_LEVERAGES[selected[0]] || [2]).includes(x)} className={`rounded-lg py-1.5 font-mono text-xs font-bold transition disabled:opacity-30 ${leverage===x ? "bg-corona text-void" : "text-muted hover:text-ink"}`}>x{x}</button>
@@ -225,29 +261,6 @@ export default function BacktestPage(){
               : trend
               ? <>الترند اليومي اتختبر على x2. الصفقة بتفضل مفتوحة أسابيع، والوقف بيتحط قبل التصفية: نزول {(80/leverage).toFixed(0)}% يقفلها.</>
               : <>كل الأرقام المنشورة على x5. رافعة أعلى = ربح وخسارة أكبر بنفس النسبة.</>}</p>
-          </div>
-
-          <div className="space-y-3 border-t border-line pt-5">
-            <h2 className="text-sm font-bold">الاستراتيجية</h2>
-            <div className="space-y-1.5">
-              {STRATEGIES.map((st, i)=>{
-                const on = selected.includes(st.id), locked = i >= planCount
-                return (
-                  <button key={st.id} onClick={()=>toggle(st.id)} aria-pressed={on} disabled={locked}
-                    className={`flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2 text-right transition disabled:cursor-not-allowed disabled:opacity-60 ${on ? "bg-surface2 ring-1 ring-corona/30" : "border border-line hover:bg-surface2/60"}`}>
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-1.5 truncate text-sm font-bold">{st.nameAr}{st.risk === "high" && <span className="rounded-full bg-loss/10 px-1.5 text-[10px] text-loss">HIGH RISK</span>}</div>
-                      <div className="font-mono text-[11px] text-muted"><span className={`font-bold ${pfTone(st.pf)}`}>PF {st.pf.toFixed(2)}</span><span className="mx-1.5 text-faint">·</span>WR {st.winRate}%<span className="mx-1.5 text-faint">·</span>Sharpe <span className={sharpeTone(st.sharpeOut)}>{st.sharpeOut.toFixed(2)}</span></div>
-                      <div className="mt-0.5 text-[11px] text-faint">{st.perCoin ? "على العملة اللي تختارها" : "على كل العملات زي البوت"} · {st.sides} · <span className="font-bold text-corona" title={minCapitalNote(st)}>أقل رأس مال ${st.minCapital.toLocaleString("en-US")}</span></div>
-                    </div>
-                    {locked
-                      ? <span className="flex shrink-0 items-center gap-1 rounded-full bg-corona/10 px-2 py-0.5 text-[10px] font-bold text-corona"><Lock size={11}/> {unlockTier(i).name}</span>
-                      : <span className={`grid h-5 w-5 shrink-0 place-items-center rounded-full border ${on ? "border-corona bg-corona text-void" : "border-faint"}`}>{on && <Check size={13} strokeWidth={3}/>}</span>}
-                  </button>
-                )
-              })}
-            </div>
-            {portfolio && <p className="text-[11px] leading-5 text-faint">النتيجة = صفقات البوت في اختباره الكامل (كل عملات Binance من 2019، والعملات بتتختار بالفوليوم وقتها، شامل الرسوم والـ funding) اللي فتحت في المدة دي. صفقاته الحية على <a href={BOT_PAGE} target="_blank" rel="noopener" className="text-corona hover:underline">صفحة البوتات</a>.</p>}
           </div>
 
           <button onClick={run} disabled={loading || selected.length===0 || overLimit}
@@ -275,13 +288,25 @@ export default function BacktestPage(){
             </div>
           )}
 
-          {!result && !loading && (
-            <div className="grid min-h-[480px] place-items-center rounded-2xl border border-dashed border-line bg-surface/50 p-8 text-center">
-              <div className="max-w-sm">
-                <RaqmMark size={64} className="mx-auto opacity-80"/>
-                <h2 className="mt-4 text-lg font-bold">جاهز للاختبار</h2>
-                <p className="mt-2 text-sm leading-6 text-muted">اختار العملة والمدة والاستراتيجية من اليمين، واضغط «شغّل». النتيجة هتظهر هنا: الأرقام، وشارت السعر بنقط الدخول والخروج، ومنحنى الأرباح، وكل صفقة.</p>
+          {!result && !loading && sel && (
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-end justify-between gap-3">
+                <div>
+                  <h2 className="text-[17px] font-bold">{sel.nameAr} في الاختبار الكامل</h2>
+                  <p className="text-[12px] text-muted">كل عملات Binance من 2019 · شامل الرسوم والـ funding · اختار المدة واضغط «شغّل» تشوف أي فترة</p>
+                </div>
+                <Pill tone="corona">قبل ما تشغّل</Pill>
               </div>
+              <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
+                <Kpi label="الصفقات" value={sel.trades.toLocaleString("en-US")} tone="neutral" sub="في الاختبار الكامل"/>
+                <Kpi label="نسبة الفوز" value={`${sel.winRate}%`} tone="neutral" sub="من كل الصفقات"/>
+                <Kpi label="Profit Factor" value={sel.pf.toFixed(2)} tone={sel.pf >= 1 ? "profit" : "loss"} sub="الكسب ÷ الخسارة"/>
+                <Kpi label="Sharpe من 2024" value={sel.sharpeOut.toFixed(2)} tone={sel.sharpeOut >= 0.5 ? "profit" : "neutral"} sub="فترة ما اتختارتش عليها"/>
+              </div>
+              <Card>
+                <CardHeader title="إزاي بتشتغل" sub={`${sel.sides} · أقل رأس مال $${sel.minCapital.toLocaleString("en-US")}`}/>
+                <p className="text-[14px] leading-7 text-muted">{sel.method}</p>
+              </Card>
             </div>
           )}
 
@@ -293,9 +318,13 @@ export default function BacktestPage(){
                   <p className="font-mono text-xs text-muted" dir="ltr" style={{textAlign:"right"}}>{ran?.from} → {ran?.to} · {ranStrategies.map(x=> x.name).join(" + ")}</p>
                   {result.portfolio && dataTo && ran?.to && ran.to > dataTo && <p className="text-[11px] text-corona">بيانات الاختبار لحد {dataTo} — اللي بعدها على صفحة البوتات مباشر</p>}
                 </div>
-                <span className={`rounded-full px-4 py-1.5 text-sm font-bold ${s.pnl>=0 ? "bg-profit/10 text-profit" : "bg-loss/10 text-loss"}`}>
-                  {s.pnl>=0 ? "مكسب" : "خسارة"} <span className="font-mono" dir="ltr">{signed(s.pnl)} USDT</span>
-                </span>
+                <div className="flex flex-wrap items-center gap-2">
+                  {restored && <Pill tone="neutral">آخر تشغيل · محفوظ في المتصفح</Pill>}
+                  <button onClick={exportCsv} disabled={!result.trades.length} className="rounded-xl border border-line bg-surface2 px-3.5 py-2 text-[13px] font-semibold transition hover:border-corona/40 disabled:opacity-40">تصدير CSV</button>
+                  <span className={`rounded-full px-4 py-1.5 text-sm font-bold ${s.pnl>=0 ? "bg-profit/10 text-profit" : "bg-loss/10 text-loss"}`}>
+                    {s.pnl>=0 ? "مكسب" : "خسارة"} <span className="font-mono" dir="ltr">{signed(s.pnl)} USDT</span>
+                  </span>
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
@@ -308,7 +337,7 @@ export default function BacktestPage(){
               {result.prices && result.prices.length > 1 && (
                 <div className="rounded-2xl border border-line bg-surface p-5">
                   <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                    <h3 className="text-base font-bold">السعر والصفقات</h3>
+                    <h3 className="text-[17px] font-bold">السعر والصفقات</h3>
                     <div className="flex flex-wrap gap-3 text-[11px] text-muted">
                       <span className="flex items-center gap-1"><i className="h-2 w-2 rounded-full bg-profit"/> دخول LONG</span>
                       <span className="flex items-center gap-1"><i className="h-2 w-2 rounded-full bg-loss"/> دخول SHORT</span>
@@ -336,7 +365,7 @@ export default function BacktestPage(){
 
               <div className="rounded-2xl border border-line bg-surface p-5">
                 <div className="mb-3 flex items-center justify-between">
-                  <h3 className="text-base font-bold">منحنى الأرباح</h3>
+                  <h3 className="text-[17px] font-bold">منحنى الأرباح</h3>
                   <span className="font-mono text-[11px] text-muted">بعد كل صفقة · USDT</span>
                 </div>
                 <div className="h-[200px]" dir="ltr">
@@ -359,6 +388,20 @@ export default function BacktestPage(){
                 </div>
               </div>
 
+              {yearly.length > 1 && (
+                <Card>
+                  <CardHeader title="الربح لكل سنة" sub="مجموع ربح الصفقات اللي قفلت في السنة · USDT"/>
+                  <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${Math.min(yearly.length, 8)}, minmax(0, 1fr))` }}>
+                    {yearly.map(([y, v]) => (
+                      <div key={y} className={`rounded-xl px-2 py-2.5 text-center ${v >= 0 ? "bg-profit/10" : "bg-loss/10"}`}>
+                        <div className={`font-mono text-[15px] font-medium tabular ${v >= 0 ? "text-profit" : "text-loss"}`} dir="ltr">{signed(v)}</div>
+                        <div className="text-[12px] text-muted">{y}</div>
+                      </div>
+                    ))}
+                  </div>
+                </Card>
+              )}
+
               {chartFile && (
                 <div className="rounded-2xl border border-line bg-surface p-5">
                   <h3 className="mb-3 text-base font-bold">شارت السيرفر</h3>
@@ -380,7 +423,7 @@ export default function BacktestPage(){
 
               <div className="overflow-hidden rounded-2xl border border-line bg-surface">
                 <div className="flex items-center justify-between px-5 py-4">
-                  <h3 className="text-base font-bold">الصفقات</h3>
+                  <h3 className="text-[17px] font-bold">الصفقات</h3>
                   <span className="font-mono text-[11px] text-muted">{result.trades.length} صفقة</span>
                 </div>
                 <div className="max-h-[420px] overflow-auto">
