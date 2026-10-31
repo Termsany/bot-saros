@@ -232,12 +232,13 @@ def _place_user_market_order(ex, symbol, side, margin_usdt, leverage, price, cli
 
 
 def run_trend_daily_live_cycle(*, user_id: str, symbol: str, ex, bot_dir, analysis: dict,
-                                activation_path=None, margin_usdt: "float | None" = None):
+                                activation_path=None, margin_usdt: "float | None" = None, entries_block: "str | None" = None):
     """One live cycle of the single-leg trend_daily strategy for exactly one user.
 
     `analysis` is the same shape bot.analyze()/strategies_trend produces:
     {"price": float, "trend": {"on": bool, "ts": int, "size": float}, ...}.
-    Returns a dict describing what happened (fired/action/reason) for logging/testing.
+    `entries_block` (the server's live switch off, the operator's kill switch) refuses new entries only: an open
+    position still exits on its signal. Returns a dict describing what happened (fired/action/reason).
     """
     activation_path = activation_path or (Path(bot_dir) / "user_live_activation.sqlite3")
     rec = ula.get_user_live_record(activation_path, user_id=user_id)
@@ -270,6 +271,9 @@ def run_trend_daily_live_cycle(*, user_id: str, symbol: str, ex, bot_dir, analys
     # symbol is never auto-resolved — it blocks new entries until a human clears it.
     if (state.get("recovery_required") or {}).get(symbol):
         return {"fired": False, "reason": f"recovery_required for {symbol} — blocked pending reconciliation"}
+
+    if entries_block:
+        return {"fired": False, "reason": f"no new entries — {entries_block}"}
 
     if not sig.get("on"):
         return {"fired": False, "reason": "no entry signal"}

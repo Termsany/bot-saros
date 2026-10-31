@@ -109,8 +109,8 @@ def reconcile_user_positions(user_id: str, ex, bot_dir) -> dict:
 
 
 def _server_allows_live():
-    """The server's own real-money switch and the operator's kill switch bind per-user trading too (not wired yet:
-    when it is, exits must still run while this refuses)."""
+    """The server's own real-money switch and the operator's kill switch bind per-user trading too. A refusal stops
+    new entries only: the tick still reconciles, polls each user's kill switch and runs exits."""
     import os
     if os.getenv("ALLOW_LIVE_TRADING", "").strip().lower() != "true":
         return False, "ALLOW_LIVE_TRADING is off"
@@ -146,15 +146,14 @@ def run_scheduler_tick(*, bot_dir, activation_path=None, watch_symbols: Iterable
     defaults to the per-user-keys-only ccxt factory; tests inject a fake.
     """
     activation_path = activation_path or (Path(bot_dir) / "user_live_activation.sqlite3")
-    ok, why = _server_allows_live()
-    if not ok:
-        return {"skipped": why}
     if not _TICK_LOCK.acquire(blocking=False):
         return {"skipped": "previous tick still running"}
     try:
+        ok, why = _server_allows_live()
+        entries_block = None if ok else why
         users = iterate_live_enabled_keyed_users(activation_path)
         if not users:
-            return {"users_processed": 0, "results": {}, "errors": {}}
+            return {"users_processed": 0, "results": {}, "errors": {}, "entries_blocked": entries_block}
         results: dict = {}
         errors: dict = {}
         for rec in users:
@@ -171,11 +170,11 @@ def run_scheduler_tick(*, bot_dir, activation_path=None, watch_symbols: Iterable
                     analysis = analysis_provider(symbol)
                     per_symbol[symbol] = ult.run_trend_daily_live_cycle(
                         user_id=user_id, symbol=symbol, ex=ex, bot_dir=bot_dir,
-                        analysis=analysis, activation_path=activation_path)
+                        analysis=analysis, activation_path=activation_path, entries_block=entries_block)
                 results[user_id] = per_symbol
             except Exception as e:  # one user's failure must never stop the next user
                 errors[user_id] = str(e)
                 continue
-        return {"users_processed": len(users), "results": results, "errors": errors}
+        return {"users_processed": len(users), "results": results, "errors": errors, "entries_blocked": entries_block}
     finally:
         _TICK_LOCK.release()

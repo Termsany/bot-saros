@@ -63,26 +63,41 @@ class ZeroUsersNoCallsTests(SchedulerTestBase):
 
 
 class ServerSwitchTests(SchedulerTestBase):
-    def test_tick_refuses_while_the_server_switch_is_off(self):
-        import os
-        os.environ["ALLOW_LIVE_TRADING"] = ""
-        self._enable("u1"); factory = mock.Mock()
-        r = sched.run_scheduler_tick(bot_dir=self.bot_dir, activation_path=self.activation_path, watch_symbols=["SOL/USDT:USDT"],
-                                     analysis_provider=lambda s: SIG_ON, exchange_factory=factory)
-        self.assertIn("ALLOW_LIVE_TRADING", r["skipped"]); factory.assert_not_called()
+    """The server's live switch off or the operator's kill switch tripped stops new entries only: an open position
+    still exits on its signal in the same tick (review 2026-10-31: the tick used to return before any exit)."""
+    SOL, DOGE = "SOL/USDT:USDT", "DOGE/USDT:USDT"
 
-    def test_tick_refuses_while_the_operator_kill_switch_is_tripped(self):
+    def _open_then_block(self, block):
+        self._enable("u1"); ex = FakeBinance(balance=50_000.0)
+        opened = sched.run_scheduler_tick(bot_dir=self.bot_dir, activation_path=self.activation_path, watch_symbols=[self.SOL],
+                                          analysis_provider=lambda s: SIG_ON, exchange_factory=lambda u, e: ex)
+        self.assertTrue(opened["results"]["u1"][self.SOL]["fired"])
+        block()
+        return sched.run_scheduler_tick(bot_dir=self.bot_dir, activation_path=self.activation_path, watch_symbols=[self.SOL, self.DOGE],
+                                        analysis_provider=lambda s: SIG_OFF if s == self.SOL else SIG_ON, exchange_factory=lambda u, e: ex)
+
+    def _assert_exit_but_no_entry(self, r, why):
+        self.assertIn(why, r["entries_blocked"])
+        self.assertEqual(r["results"]["u1"][self.SOL]["action"], "exit")             # the open position still exits
+        doge = r["results"]["u1"][self.DOGE]
+        self.assertFalse(doge["fired"]); self.assertIn(why, doge["reason"])         # no new entry
+
+    def test_switch_off_still_exits_but_never_enters(self):
         import os
-        riskmgr.save_risk_state(self.bot_dir / "risk_state.json", riskmgr._default_state())
-        riskmgr.trip_kill_switch(self.bot_dir / "risk_state.json", "operator")
-        os.environ["RAQM_RISK_DIR"] = str(self.bot_dir)
+        r = self._open_then_block(lambda: os.environ.__setitem__("ALLOW_LIVE_TRADING", ""))
+        self._assert_exit_but_no_entry(r, "ALLOW_LIVE_TRADING")
+
+    def test_operator_kill_switch_still_exits_but_never_enters(self):
+        import os
+        def trip():
+            riskmgr.save_risk_state(self.bot_dir / "risk_state.json", riskmgr._default_state())
+            riskmgr.trip_kill_switch(self.bot_dir / "risk_state.json", "operator")
+            os.environ["RAQM_RISK_DIR"] = str(self.bot_dir)
         try:
-            self._enable("u1"); factory = mock.Mock()
-            r = sched.run_scheduler_tick(bot_dir=self.bot_dir, activation_path=self.activation_path, watch_symbols=["SOL/USDT:USDT"],
-                                         analysis_provider=lambda s: SIG_ON, exchange_factory=factory)
+            r = self._open_then_block(trip)
         finally:
             os.environ.pop("RAQM_RISK_DIR", None)
-        self.assertIn("kill switch", r["skipped"]); factory.assert_not_called()
+        self._assert_exit_but_no_entry(r, "kill switch")
 
 
 class PerUserIsolationTests(SchedulerTestBase):

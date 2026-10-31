@@ -56,6 +56,29 @@ class WatchdogTests(unittest.TestCase):
         self.assertEqual(wd.step({}, {"kill:demo": ("قفل", 1)})[1], ["🚨 قفل"])       # urgent ones at once
         self.assertEqual(wd.step({"down:demo:x": {"count": 1, "text": "t"}}, {})[1], [])  # cleared before alerting
 
+    # review 2026-10-31: the watchdog could go silent exactly when it mattered most
+    def test_a_status_left_by_the_other_environment_is_a_problem_not_skipped(self):
+        self.status("trend_daily", env="live")                                        # Demo bot switched on, live's file left
+        self.assertEqual(set(self.seen()), {"stale:demo:trend_daily"})
+
+    def test_a_crash_while_checking_is_itself_an_alert(self):
+        orig = wd.problems
+        try:
+            wd.problems = lambda now: (_ for _ in ()).throw(OSError("systemctl missing"))
+            seen = wd.checks(NOW)
+        finally:
+            wd.problems = orig
+        self.assertEqual(set(seen), {"watchdog"}); self.assertIn("systemctl missing", seen["watchdog"][0])
+
+    def test_long_alerts_go_in_parts_telegram_accepts(self):
+        lines = ["🐶 مراقب رقم"] + [f"🚨 COIN{i}/USDT في trend_breakout (Demo) مش متأكدين إن وقف الخسارة على Binance" for i in range(66)]
+        parts = wd.chunks(lines)
+        self.assertGreater(len(parts), 1)
+        self.assertTrue(all(len(p) <= wd.LIMIT for p in parts))
+        self.assertEqual("\n".join(parts).split("\n"), lines)                          # nothing lost or reordered
+        self.assertEqual(wd.chunks(["x" * 5000]), ["x" * wd.LIMIT])
+        self.assertEqual(wd.chunks([]), [])
+
 
 if __name__ == "__main__":
     unittest.main()
