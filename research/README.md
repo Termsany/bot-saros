@@ -2,6 +2,25 @@
 
 How the numbers on the site are produced, and why the engine settings are what they are.
 
+## Market data: download once, then only what's new
+
+Every study reads `universe_daily.pkl` (daily candles of every Binance USDT-M perpetual since 2019, delisted
+included) and `universe_funding.pkl` (real funding per coin per day) from `$RAQM_RESEARCH_CACHE`, or
+`research/.cache` when it isn't set. The full history was downloaded once on the server (fast connection), in
+`/opt/raqm-data/research`. Copy it once to a PC:
+
+```bash
+mkdir -p research/.cache && scp root@bot.da3m.io:/opt/raqm-data/research/universe_*.pkl research/.cache/
+```
+
+Then, before a backtest, add only the days since the last update (a few minutes, a little data):
+
+```bash
+python research/universe_data.py && python research/funding_store.py
+```
+
+Without a copy the same two commands build everything from scratch (about 10 minutes of candles, longer for funding).
+
 ## Method
 
 - **Data:** last 2,000 closed candles from Bybit for BTC, ETH, SOL and XRP on 1h and 4h — 8 data sets

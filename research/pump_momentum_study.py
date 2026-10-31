@@ -12,7 +12,7 @@ fees 0.04%, $20 margin x2, chosen on Sharpe of daily realised PnL before 2024 (s
 
   python research/pump_momentum_study.py          # downloads the missing funding windows first (Bybit, Binance fallback)
 """
-import sys, pickle, itertools, math, time, json, urllib.request
+import os, sys, pickle, itertools, math, time, json, urllib.error, urllib.request
 from pathlib import Path
 import numpy as np, pandas as pd
 
@@ -24,6 +24,9 @@ from universe_study import ranks
 CACHE = ss.CACHE
 AMOUNT, LEV, FEE, CUT = ss.AMOUNT, ss.LEV, ss.FEE, ss.CUT
 DAY = 86_400_000
+# pause between Binance funding requests (500 per 5 minutes per IP). On the server use 2 or more: its trading bots
+# share that budget for the funding evidence of every close
+PAUSE = float(os.getenv("RAQM_FUNDING_PAUSE") or 0.65)
 
 
 def rank_table(data, min_history):
@@ -68,8 +71,11 @@ def fetch_windows(windows, fund_raw):
                 try:
                     with urllib.request.urlopen(f"https://fapi.binance.com/fapi/v1/fundingRate?symbol={s}&startTime={start}&endTime={b + DAY}&limit=1000", timeout=20) as r:
                         f = json.loads(r.read()); break
+                except urllib.error.HTTPError as e:
+                    if e.code == 418: raise SystemExit(f"Binance banned this IP (418), retry after {e.headers.get('Retry-After')}s — stopped")
+                    time.sleep(5 + attempt * 10)
                 except Exception: time.sleep(5 + attempt * 10)
-            time.sleep(0.65)
+            time.sleep(PAUSE)
             if not f: break
             for x in f:
                 d = x["fundingTime"] // DAY * DAY; day[d] = day.get(d, 0.0) + float(x["fundingRate"])

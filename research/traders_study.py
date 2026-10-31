@@ -20,6 +20,7 @@ to see whether it improves the combination after 2024.
 
   python research/traders_study.py
 """
+import os
 import sys, pickle, itertools, math
 from pathlib import Path
 import numpy as np, pandas as pd
@@ -31,7 +32,7 @@ import pump_momentum_study as pm
 import bots_stats as bs
 from universe_study import ranks
 
-CACHE = Path(__file__).resolve().parent / ".cache"
+CACHE = Path(os.getenv("RAQM_RESEARCH_CACHE") or Path(__file__).resolve().parent / ".cache")   # shared store: research/README.md
 AMOUNT, LEV, FEE, CUT = 20, 2, 0.0004, pd.Timestamp("2024-01-01")
 SLIP = 0.0005
 MIN_TRADES = 60
