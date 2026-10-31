@@ -91,6 +91,38 @@ class SendEmailTests(unittest.TestCase):
         self.assertEqual(out["error"], "resend http 403: The da3m.io domain is not verified.")
         self.assertNotIn("re_secret", out["error"])
 
+    def test_sender_address_forgives_hand_edited_env_values(self):
+        ok = "RAQM <raqm@da3m.io>"
+        for raw in ("RAQM <raqm@da3m.io>", '"RAQM <raqm@da3m.io>"', "'RAQM <raqm@da3m.io>'", "RAQM <raqm@da3m.io>\r",
+                    "  RAQM   < raqm@da3m.io >  ", "“RAQM <raqm@da3m.io>”", '"RAQM" <raqm@da3m.io>'):
+            self.assertEqual(pi.sender_address(raw), ok, repr(raw))
+        self.assertEqual(pi.sender_address(" raqm@da3m.io\r"), "raqm@da3m.io")
+        self.assertEqual(pi.sender_address("<raqm@da3m.io>"), "raqm@da3m.io")
+        for bad in ("", "RAQM", "RAQM <raqm>", "RAQM raqm@da3m.io", "RAQM <invite@الدومين>", "a <b@c.com> <d@e.com>"):
+            self.assertIsNone(pi.sender_address(bad), repr(bad))
+
+    def test_bad_sender_is_reported_without_calling_resend(self):
+        import httpx
+        called = []
+        with mock.patch.dict(os.environ, {"RESEND_API_KEY": "k", "INVITE_FROM_EMAIL": "RAQM raqm@da3m.io"}):
+            out = asyncio.run(pi.send_email("a@b.com", "s", "x", transport=httpx.MockTransport(lambda r: called.append(r) or httpx.Response(200))))
+        self.assertFalse(out["ok"])
+        self.assertIn("'RAQM raqm@da3m.io'", out["error"])
+        self.assertEqual(called, [])
+
+    def test_cleaned_values_reach_resend(self):
+        import httpx, json as _json
+        seen = {}
+
+        def handler(request):
+            seen["auth"] = request.headers["Authorization"]
+            seen["from"] = _json.loads(request.content)["from"]
+            return httpx.Response(200, json={"id": "1"})
+        with mock.patch.dict(os.environ, {"RESEND_API_KEY": '"re_k"\r', "INVITE_FROM_EMAIL": '"RAQM <raqm@da3m.io>"\r'}):
+            out = asyncio.run(pi.send_email("a@b.com", "s", "x", transport=httpx.MockTransport(handler)))
+        self.assertTrue(out["ok"])
+        self.assertEqual(seen, {"auth": "Bearer re_k", "from": "RAQM <raqm@da3m.io>"})
+
     def test_resend_ok(self):
         import httpx
         with mock.patch.dict(os.environ, {"RESEND_API_KEY": "k", "INVITE_FROM_EMAIL": "RAQM <raqm@da3m.io>"}):

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import html
 import os
+import re
 import secrets
 from datetime import datetime, timedelta, timezone
 
@@ -165,15 +166,40 @@ def reminder_email(tier: str, days_left: int, link: str) -> tuple[str, str]:
     return subject, body
 
 
+_QUOTES = "\"'“”‘’`"
+
+
+def _clean(value: str) -> str:
+    """A .env value as typed: without surrounding spaces, quotes or a Windows line end (\r)."""
+    v = (value or "").replace("\r", "").replace("\n", "").strip()
+    while len(v) >= 2 and v[0] in _QUOTES and v[-1] in _QUOTES:
+        v = v[1:-1].strip()
+    return v
+
+
+def sender_address(raw: str) -> str | None:
+    """INVITE_FROM_EMAIL as Resend wants it — "email@domain" or "Name <email@domain>" — or None if it isn't one.
+    Forgives what editing a .env by hand adds: quotes, spaces (also inside < >), a \r."""
+    v = _clean(raw)
+    m = re.fullmatch(r"(.*?)\s*<\s*([^<>\s]+)\s*>", v)
+    name, email = (_clean(m.group(1)), m.group(2)) if m else ("", v)
+    if not valid_email(email): return None
+    if any(c in name for c in "<>\"\r\n"): return None
+    return f"{name} <{email}>" if name else email
+
+
 def email_configured() -> bool:
-    return bool(os.getenv("RESEND_API_KEY") and os.getenv("INVITE_FROM_EMAIL"))
+    return bool(_clean(os.getenv("RESEND_API_KEY", "")) and _clean(os.getenv("INVITE_FROM_EMAIL", "")))
 
 
 async def send_email(to: str, subject: str, body_html: str, *, transport: "httpx.AsyncBaseTransport | None" = None) -> dict:
     """Send through Resend. {"ok": bool, "error": str|None}; never raises, never returns the key."""
-    key, sender = os.getenv("RESEND_API_KEY", ""), os.getenv("INVITE_FROM_EMAIL", "")
-    if not key or not sender:
+    key, raw = _clean(os.getenv("RESEND_API_KEY", "")), os.getenv("INVITE_FROM_EMAIL", "")
+    if not key or not _clean(raw):
         return {"ok": False, "error": "email not configured (RESEND_API_KEY / INVITE_FROM_EMAIL)"}
+    sender = sender_address(raw)
+    if not sender:   # not a secret: show it as the server read it, hidden characters included
+        return {"ok": False, "error": f"INVITE_FROM_EMAIL is not an address like Name <you@domain>: {raw!r}"[:240]}
     try:
         async with httpx.AsyncClient(transport=transport, timeout=10) as client:
             r = await client.post("https://api.resend.com/emails", headers={"Authorization": f"Bearer {key}"},
@@ -183,7 +209,8 @@ async def send_email(to: str, subject: str, body_html: str, *, transport: "httpx
             # Its error body never echoes the key.
             try: why = str((r.json() or {}).get("message") or "")[:200]
             except Exception: why = ""
-            return {"ok": False, "error": f"resend http {r.status_code}" + (f": {why}" if why else "")}
+            return {"ok": False, "error": (f"resend http {r.status_code}" + (f": {why}" if why else "")
+                                           + (f" (from: {sender})" if r.status_code == 422 else ""))[:300]}
         return {"ok": True, "error": None}
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": type(exc).__name__}
