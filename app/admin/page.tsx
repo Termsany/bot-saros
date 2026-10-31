@@ -5,6 +5,7 @@ import { Logo } from "@/components/Logo"
 import { AppShell } from "@/components/AppShell"
 import { PageHeader, Pill } from "@/components/ui"
 import { LiveStrategies } from "@/components/LiveStrategies"
+import { AdminOverview } from "@/components/AdminOverview"
 import { TIERS } from "@/lib/strategies"
 import { apiIsAdmin } from "@/lib/api"
 import { authHeaders } from "@/lib/supabase"
@@ -283,7 +284,7 @@ export default function AdminPage() {
     url.searchParams.set("tab", id)
     window.history.replaceState({}, "", `${url.pathname}?${url.searchParams.toString()}`)
   }
-  const sectionEndpoints: Record<string, string[]> = { overview: ["overview", "recovery"], users: ["users"], finance: ["finance"], live: ["paper"], real: [], strategies: ["strategies"], paper: ["paper"], risk: ["risk", "recovery"], readiness: ["readiness"], health: ["health", "recovery", "activation"], recovery: ["recovery"], timeline: ["audit", "recovery"], audit: ["audit"], settings: [] }
+  const sectionEndpoints: Record<string, string[]> = { overview: ["overview", "recovery", "finance"], users: ["users"], finance: ["finance"], live: ["paper"], real: [], strategies: ["strategies"], paper: ["paper"], risk: ["risk", "recovery"], readiness: ["readiness"], health: ["health", "recovery", "activation"], recovery: ["recovery"], timeline: ["audit", "recovery"], audit: ["audit"], settings: [] }
   const currentSectionErrors = sectionEndpoints[section]?.map(key => endpointErrors[key]).filter(Boolean) as string[] || []
   useEffect(() => {
     const requested = new URLSearchParams(window.location.search).get("tab")
@@ -416,30 +417,7 @@ export default function AdminPage() {
         {currentSectionErrors.length > 0 && <div className="rounded-xl border border-amber-400/30 bg-amber-400/10 p-3 text-xs text-amber-200">هذا القسم لم يستقبل تحديثًا جديدًا: {currentSectionErrors.join(" · ")}. البيانات السابقة، إن وُجدت، ما زالت معروضة.</div>}
 
         {section === "overview" && (
-          <div className="space-y-5">
-            <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
-              <Card title="بوتات VPS شغالة" value={`${liveSummaryOverview.running ?? "—"} / ${REAL_BOT_IDS.length}`} />
-              <Card title="صفقات مفتوحة (VPS)" value={String(liveSummaryOverview.open_positions ?? "—")} />
-              <Card title="صافي الربح (VPS)" value={String(liveSummaryOverview.total_pnl ?? "—")} tone={Number(liveSummaryOverview.total_pnl) > 0 ? "profit" : Number(liveSummaryOverview.total_pnl) < 0 ? "loss" : "neutral"} />
-              <Card title="قفل الطوارئ" value={o.kill_switch?.tripped ? "شغال" : "مش شغال"} tone={o.kill_switch?.tripped ? "loss" : "profit"} />
-            </div>
-            <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_372px]">
-              <div className="min-w-0"><LiveStrategies /></div>
-              <div className="space-y-5">
-                <Panel title="التنبيهات"><AlertCenter alerts={operationalAlerts} /></Panel>
-                <Panel title="حالة النظام">
-                  <div className="divide-y divide-line text-[13px]">
-                    {[
-                      ["الـ API", o.health?.api || "unavailable"],
-                      ["الدخول الجديد", o.entry_paused?.paused ? "متوقف" : "مسموح"],
-                      ["المحفظة الورقية (Dashboard bot)", `${o.paper?.open ?? "—"} مفتوحة`],
-                      ["الاستراتيجيات الكلية", String(o.strategies ?? "—")],
-                    ].map(([k, v]) => <div key={k} className="flex items-center justify-between gap-3 py-2.5"><span className="text-muted">{k}</span><b className="font-semibold">{v}</b></div>)}
-                  </div>
-                </Panel>
-              </div>
-            </div>
-          </div>
+          <AdminOverview finance={data.finance?.finance} killTripped={!!o.kill_switch?.tripped} operationalAlerts={operationalAlerts} onOpen={selectSection} />
         )}
 
         {section === "users" && (
