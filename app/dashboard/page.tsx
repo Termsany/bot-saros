@@ -131,6 +131,16 @@ export default function Dashboard(){
   const symbolTrades = bots.flatMap(b=> b.positions.filter(p=> p.label===base && p.side!=="pair" && p.entry).map(p=> ({ ...p, bot: b.strategy.nameAr })))
   const nextIn = lastUpdated && now ? Math.max(0, REFRESH_S - Math.floor((now.getTime() - lastUpdated.getTime())/1000)) : null
   const closedTotal = total.wins + total.losses
+  // closed trades from every bot's public history (same files as the live bots list), newest first
+  const closedTrades = useMemo(() => bots.flatMap(b => ((b.raw?.history || []) as any[]).map(h => ({
+    bot: b.strategy.nameAr, label: h.pair || String(h.symbol || "").replace("/USDT", "").split(":")[0],
+    side: h.pair ? "pair" : h.side, entry: h.pair ? null : h.entry, exit: h.pair ? null : h.exit,
+    pnl: Number(h.pnl) || 0, reason: h.reason || "", time: h.time as string | undefined,
+  }))).sort((a, b) => Date.parse(b.time || "0") - Date.parse(a.time || "0")).slice(0, 8), [bots])
+  const momentumRaw = bots.find(b => b.strategy.live === "momentum")?.raw
+  const nextRebalance = momentumRaw?.next_rebalance
+    ? new Date(momentumRaw.next_rebalance).toLocaleString("ar-EG", { weekday: "long", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit", timeZone: "Africa/Cairo", numberingSystem: "latn" }) + " بتوقيت مصر"
+    : ""
 
   return (
     <AppShell active="/dashboard" tier={tier} engine={{ running: total.running > 0 }} nextIn={nextIn}>
@@ -234,9 +244,42 @@ export default function Dashboard(){
                 )
               })}
             </div>
+            {nextRebalance && (
+              <div className="mt-3 rounded-xl border border-corona/35 bg-corona/[0.08] px-3.5 py-3">
+                <div className="text-[12px] font-semibold text-corona">التبديل الأسبوعي الجاي (المومنتم)</div>
+                <div className="text-[14px] font-semibold">{nextRebalance}</div>
+              </div>
+            )}
             <a href="#live-bots" className="mt-3 text-center text-[13px] font-semibold text-corona">تفاصيل كل بوت ←</a>
           </Card>
         </section>
+
+        <Card>
+          <CardHeader title="آخر الصفقات المقفولة" sub="من كل البوتات · Paper" action={<a href="#live-bots" className="text-[13px] font-semibold text-corona">كل الصفقات ←</a>}/>
+          {closedTrades.length === 0 ? <div className="rounded-xl bg-surface2/50 px-3 py-6 text-center text-xs text-faint">{loaded ? "مفيش صفقات مقفولة لسه" : "بيحمّل…"}</div> : (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[720px] text-[13px]">
+                <thead className="text-[12px] text-faint">
+                  <tr>{["العملة", "البوت", "الاتجاه", "الدخول", "الخروج", "الربح", "السبب", "الوقت"].map(h => <th key={h} className="px-3 py-2 text-right font-semibold">{h}</th>)}</tr>
+                </thead>
+                <tbody>
+                  {closedTrades.map((t, i) => (
+                    <tr key={i} className="border-t border-line">
+                      <td className="px-3 py-2.5 font-semibold" dir="ltr" style={{ textAlign: "right" }}>{t.label}</td>
+                      <td className="px-3 py-2.5 text-muted">{t.bot}</td>
+                      <td className="px-3 py-2.5"><Pill tone={t.side === "long" ? "profit" : t.side === "short" ? "loss" : "umbra"}>{t.side === "long" ? "لونج" : t.side === "short" ? "شورت" : "زوج"}</Pill></td>
+                      <td className="px-3 py-2.5 font-mono tabular" dir="ltr" style={{ textAlign: "right" }}>{t.entry != null ? fmt(t.entry) : "—"}</td>
+                      <td className="px-3 py-2.5 font-mono tabular" dir="ltr" style={{ textAlign: "right" }}>{t.exit != null ? fmt(t.exit) : "—"}</td>
+                      <td className={`px-3 py-2.5 font-mono font-bold tabular ${t.pnl >= 0 ? "text-profit" : "text-loss"}`} dir="ltr" style={{ textAlign: "right" }}>{signed(t.pnl)}</td>
+                      <td className="px-3 py-2.5 text-muted">{t.reason}</td>
+                      <td className="px-3 py-2.5 font-mono text-[12px] text-faint" dir="ltr" style={{ textAlign: "right" }}>{t.time ? new Date(t.time).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "UTC" }) : "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Card>
 
         <Card id="strategies" className="scroll-mt-6">
           <CardHeader title="الاستراتيجيات" sub="الأرقام من اختبار على كل عملات Binance من 2019 (والمشطوبة كمان)، هامش $20 × 2، شامل الرسوم والـ funding. نتايج سابقة، مش ضمان."

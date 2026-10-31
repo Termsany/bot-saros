@@ -101,7 +101,7 @@ export default function BacktestPage(){
   async function run(){
     if(from > to){ setError("التاريخ معكوس — «من» لازم يكون قبل «إلى»"); return }
     if(overLimit){ setError(`المدة ${span} يوم — باقتك تسمح بـ ${maxDays} يوم كحد أقصى. رقّي باقتك لباك تست أطول`); return }
-    setLoading(true); setError(""); setResult(null); setChartFile(""); setStdout("")
+    setLoading(true); setError(""); setResult(null); setChartFile(""); setStdout(""); setRestored(false)
     if(portfolio){
       try{
         const res = await runPortfolioBacktest({ strategy: selected[0], from, to, amount, leverage })
@@ -145,6 +145,34 @@ export default function BacktestPage(){
     }
   }, [result])
   const s = result?.stats
+
+  // the last run survives a reload (this browser only); a failed read or write just means no saved run
+  const SAVED = "raqm:last-backtest"
+  const [restored, setRestored] = useState(false)
+  useEffect(()=>{
+    try{
+      const saved = JSON.parse(localStorage.getItem(SAVED) || "null")
+      if(saved?.result?.stats && saved?.ran){ setResult(saved.result); setRan(saved.ran); setRestored(true) }
+    }catch{}
+  }, [])
+  useEffect(()=>{
+    if(!result || !ran || restored) return
+    try{ localStorage.setItem(SAVED, JSON.stringify({ result, ran })) }catch{}
+  }, [result, ran, restored])
+  const yearly = useMemo(()=>{
+    const by: Record<string, number> = {}
+    for(const t of result?.trades || []){ const y = String(t.exit_ts).slice(0, 4); if(/^\d{4}$/.test(y)) by[y] = (by[y] || 0) + t.pnl }
+    return Object.entries(by).sort(([a],[b])=> a.localeCompare(b))
+  }, [result])
+  function exportCsv(){
+    if(!result) return
+    const cols = ["symbol","side","entry_ts","entry","exit_ts","exit","qty","pnl","reason"] as const
+    const esc = (v: unknown) => { const x = String(v ?? ""); return /[",\n]/.test(x) ? `"${x.replace(/"/g, '""')}"` : x }
+    const csv = [cols.join(","), ...result.trades.map(t=> cols.map(c=> esc(c === "symbol" ? (t.symbol || result.symbol) : (t as any)[c])).join(","))].join("\n")
+    const url = URL.createObjectURL(new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" }))
+    const a = document.createElement("a"); a.href = url; a.download = `backtest-${(ran?.strategies || []).join("+")}-${ran?.from}-${ran?.to}.csv`; a.click()
+    setTimeout(()=> URL.revokeObjectURL(url), 1000)
+  }
   const roi = s ? s.pnl / amount * 100 : 0
 
   return (
@@ -290,9 +318,13 @@ export default function BacktestPage(){
                   <p className="font-mono text-xs text-muted" dir="ltr" style={{textAlign:"right"}}>{ran?.from} → {ran?.to} · {ranStrategies.map(x=> x.name).join(" + ")}</p>
                   {result.portfolio && dataTo && ran?.to && ran.to > dataTo && <p className="text-[11px] text-corona">بيانات الاختبار لحد {dataTo} — اللي بعدها على صفحة البوتات مباشر</p>}
                 </div>
-                <span className={`rounded-full px-4 py-1.5 text-sm font-bold ${s.pnl>=0 ? "bg-profit/10 text-profit" : "bg-loss/10 text-loss"}`}>
-                  {s.pnl>=0 ? "مكسب" : "خسارة"} <span className="font-mono" dir="ltr">{signed(s.pnl)} USDT</span>
-                </span>
+                <div className="flex flex-wrap items-center gap-2">
+                  {restored && <Pill tone="neutral">آخر تشغيل · محفوظ في المتصفح</Pill>}
+                  <button onClick={exportCsv} disabled={!result.trades.length} className="rounded-xl border border-line bg-surface2 px-3.5 py-2 text-[13px] font-semibold transition hover:border-corona/40 disabled:opacity-40">تصدير CSV</button>
+                  <span className={`rounded-full px-4 py-1.5 text-sm font-bold ${s.pnl>=0 ? "bg-profit/10 text-profit" : "bg-loss/10 text-loss"}`}>
+                    {s.pnl>=0 ? "مكسب" : "خسارة"} <span className="font-mono" dir="ltr">{signed(s.pnl)} USDT</span>
+                  </span>
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
@@ -355,6 +387,20 @@ export default function BacktestPage(){
                   </ResponsiveContainer>
                 </div>
               </div>
+
+              {yearly.length > 1 && (
+                <Card>
+                  <CardHeader title="الربح لكل سنة" sub="مجموع ربح الصفقات اللي قفلت في السنة · USDT"/>
+                  <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${Math.min(yearly.length, 8)}, minmax(0, 1fr))` }}>
+                    {yearly.map(([y, v]) => (
+                      <div key={y} className={`rounded-xl px-2 py-2.5 text-center ${v >= 0 ? "bg-profit/10" : "bg-loss/10"}`}>
+                        <div className={`font-mono text-[15px] font-medium tabular ${v >= 0 ? "text-profit" : "text-loss"}`} dir="ltr">{signed(v)}</div>
+                        <div className="text-[12px] text-muted">{y}</div>
+                      </div>
+                    ))}
+                  </div>
+                </Card>
+              )}
 
               {chartFile && (
                 <div className="rounded-2xl border border-line bg-surface p-5">

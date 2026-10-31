@@ -37,6 +37,8 @@ const STRATEGY_LABELS_AR: Record<string, string> = {
   ratio_trend: "ترند النسبة", vol_breakout: "اختراق التقلب", rsi2_pullback: "RSI2 الارتداد",
   trend_breakout: "اختراق الترند", default: "Default",
 }
+// the design's main tabs (Figma "04 · الإدارة"); the rest open from "المزيد"
+const PRIMARY_TABS = ["overview", "real", "live", "strategies", "risk", "users", "finance", "health", "audit"]
 const REAL_BOT_IDS = ["trend_daily", "listing_short", "momentum_ls", "ratio_trend", "vol_breakout", "rsi2_pullback", "trend_breakout"]
 const NO_SERVICE_IDS = ["default"]
 const ALL_STRATEGY_IDS = [...REAL_BOT_IDS, ...NO_SERVICE_IDS]
@@ -232,6 +234,7 @@ export default function AdminPage() {
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
+  const [moreOpen, setMoreOpen] = useState(false)
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null)
   const [autoRefresh, setAutoRefresh] = useState(true)
   const [access, setAccess] = useState<"checking" | "allowed" | "denied">("checking")
@@ -381,15 +384,30 @@ export default function AdminPage() {
             <button onClick={() => void load()} disabled={busy} className="rounded-xl bg-corona px-4 py-2 text-sm font-semibold text-void disabled:opacity-50">حدّث دلوقتي</button>
           </>} />
         {error && <div className="mb-4 rounded-xl border border-loss/40 bg-loss/10 p-3 text-sm text-loss">{error}</div>}
-        <nav className="rounded-xl border border-line bg-surface p-1" aria-label="أقسام الإدارة">
+        <nav className="relative rounded-xl border border-line bg-surface p-1" aria-label="أقسام الإدارة">
           <div className="flex gap-1 overflow-x-auto">
-            {sections.map(([id, label, Icon]) => (
-              <button key={id} onClick={() => selectSection(id)} aria-current={section === id ? "page" : undefined}
+            {PRIMARY_TABS.map(id => sections.find(s => s[0] === id)!).map(([id, label, Icon]) => (
+              <button key={id} onClick={() => { selectSection(id); setMoreOpen(false) }} aria-current={section === id ? "page" : undefined}
                 className={`flex items-center gap-2 whitespace-nowrap rounded-[9px] px-3.5 py-2 text-[13px] transition ${section === id ? "bg-surface2 font-semibold text-ink" : "text-muted hover:bg-surface2/60 hover:text-ink"}`}>
                 <Icon size={15} strokeWidth={1.8} className={section === id ? "text-corona" : ""} />{label}
               </button>
             ))}
+            {(() => { const more = sections.filter(s => !PRIMARY_TABS.includes(s[0])); const cur = more.find(s => s[0] === section); return (
+              <button onClick={() => setMoreOpen(v => !v)} aria-expanded={moreOpen}
+                className={`flex items-center gap-1.5 whitespace-nowrap rounded-[9px] px-3.5 py-2 text-[13px] transition ${cur ? "bg-surface2 font-semibold text-ink" : "text-muted hover:bg-surface2/60 hover:text-ink"}`}>
+                {cur ? cur[1] : "المزيد"} <span aria-hidden>▾</span>
+              </button>) })()}
           </div>
+          {moreOpen && (
+            <div className="absolute left-1 top-full z-20 mt-1 min-w-[220px] rounded-xl border border-line bg-surface2 p-1 shadow-xl">
+              {sections.filter(s => !PRIMARY_TABS.includes(s[0])).map(([id, label, Icon]) => (
+                <button key={id} onClick={() => { selectSection(id); setMoreOpen(false) }}
+                  className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-right text-[13px] ${section === id ? "bg-surface font-semibold text-ink" : "text-muted hover:bg-surface hover:text-ink"}`}>
+                  <Icon size={15} strokeWidth={1.8} />{label}
+                </button>
+              ))}
+            </div>
+          )}
         </nav>
         <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted">
           <span>{loading ? "جاري تحديث بيانات المركز…" : lastRefreshed ? `آخر مزامنة كاملة: ${lastRefreshed.toLocaleTimeString("ar-EG")}` : "بانتظار أول مزامنة"}</span>
@@ -398,19 +416,28 @@ export default function AdminPage() {
         {currentSectionErrors.length > 0 && <div className="rounded-xl border border-amber-400/30 bg-amber-400/10 p-3 text-xs text-amber-200">هذا القسم لم يستقبل تحديثًا جديدًا: {currentSectionErrors.join(" · ")}. البيانات السابقة، إن وُجدت، ما زالت معروضة.</div>}
 
         {section === "overview" && (
-          <div className="space-y-4">
-            <Panel title="التنبيهات التشغيلية"><AlertCenter alerts={operationalAlerts} /></Panel>
-            <div className="grid md:grid-cols-4 gap-3">
-            {[
-              ["الحالة", o.health?.api || "unavailable"],
-              ["بوتات VPS تعمل", `${liveSummaryOverview.running ?? "—"}/${REAL_BOT_IDS.length}`],
-              ["مراكز مفتوحة (VPS الحقيقية)", liveSummaryOverview.open_positions ?? "—"],
-              ["صافي PnL (VPS الحقيقية)", liveSummaryOverview.total_pnl ?? "—"],
-              ["المحفظة الورقية (Dashboard bot)", `${o.paper?.open ?? "—"} مراكز مفتوحة`],
-              ["الاستراتيجيات الكلية", o.strategies ?? "—"],
-              ["الإدخالات", o.entry_paused?.paused ? "متوقفة" : "مسموحة"],
-              ["Kill switch", o.kill_switch?.tripped ? "مفعل" : "غير مفعل"],
-            ].map(([k, v]) => <Card key={k} title={k} value={String(v)} />)}
+          <div className="space-y-5">
+            <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
+              <Card title="بوتات VPS شغالة" value={`${liveSummaryOverview.running ?? "—"} / ${REAL_BOT_IDS.length}`} />
+              <Card title="صفقات مفتوحة (VPS)" value={String(liveSummaryOverview.open_positions ?? "—")} />
+              <Card title="صافي الربح (VPS)" value={String(liveSummaryOverview.total_pnl ?? "—")} tone={Number(liveSummaryOverview.total_pnl) > 0 ? "profit" : Number(liveSummaryOverview.total_pnl) < 0 ? "loss" : "neutral"} />
+              <Card title="قفل الطوارئ" value={o.kill_switch?.tripped ? "شغال" : "مش شغال"} tone={o.kill_switch?.tripped ? "loss" : "profit"} />
+            </div>
+            <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_372px]">
+              <div className="min-w-0"><LiveStrategies /></div>
+              <div className="space-y-5">
+                <Panel title="التنبيهات"><AlertCenter alerts={operationalAlerts} /></Panel>
+                <Panel title="حالة النظام">
+                  <div className="divide-y divide-line text-[13px]">
+                    {[
+                      ["الـ API", o.health?.api || "unavailable"],
+                      ["الدخول الجديد", o.entry_paused?.paused ? "متوقف" : "مسموح"],
+                      ["المحفظة الورقية (Dashboard bot)", `${o.paper?.open ?? "—"} مفتوحة`],
+                      ["الاستراتيجيات الكلية", String(o.strategies ?? "—")],
+                    ].map(([k, v]) => <div key={k} className="flex items-center justify-between gap-3 py-2.5"><span className="text-muted">{k}</span><b className="font-semibold">{v}</b></div>)}
+                  </div>
+                </Panel>
+              </div>
             </div>
           </div>
         )}

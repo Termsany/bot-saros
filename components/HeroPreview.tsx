@@ -47,22 +47,24 @@ export function HeroPreview(){
       <div className="mt-4 border-t border-line pt-4">
         <div className="mb-3 flex items-center justify-between text-xs">
           <span className="font-bold">البوتات شغالة دلوقتي</span>
-          <span className="flex items-center gap-1.5 font-mono text-faint" dir="ltr"><i className="h-1.5 w-1.5 animate-pulse rounded-full bg-profit"/> {loaded ? `${total.running}/4 LIVE · PAPER` : "…"}</span>
+          <span className="flex items-center gap-1.5 font-mono text-faint" dir="ltr"><i className="h-1.5 w-1.5 animate-pulse rounded-full bg-profit"/> {loaded ? `${total.running}/${bots.length} LIVE · PAPER` : "…"}</span>
         </div>
         <div className="space-y-2">
-          {(loaded ? bots : []).map(b=>{
+          {(loaded ? [...bots].sort((a, b) => b.open - a.open || Math.abs(b.realized + b.unrealized) - Math.abs(a.realized + a.unrealized)).slice(0, 3) : []).map(b=>{
             const t = b.realized + b.unrealized
             return (
-              <div key={b.strategy.id} className="flex items-center gap-3">
-                <span className="min-w-0 flex-1 truncate text-sm font-semibold">{b.strategy.nameAr}{b.strategy.risk === "high" && <span className="mr-1.5 text-[10px] font-bold text-loss">HIGH RISK</span>}</span>
-                <span className="shrink-0 font-mono text-[11px] text-faint">{b.open} مفتوحة</span>
-                <span className={`w-20 shrink-0 text-left font-mono text-xs font-bold ${t > 0 ? "text-profit" : t < 0 ? "text-loss" : "text-muted"}`} dir="ltr">{money(t)}</span>
+              <div key={b.strategy.id} className="flex items-center justify-between gap-3 rounded-xl bg-surface2/60 px-3 py-2.5">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5 truncate text-sm font-semibold">{b.strategy.nameAr}{b.strategy.risk === "high" && <span className="rounded-full border border-loss/40 bg-loss/10 px-1.5 text-[10px] font-semibold text-loss">خطورة عالية</span>}</div>
+                  <div className="text-[11px] text-muted">{b.open ? `${b.open} مفتوحة` : "مفيش صفقات مفتوحة"}</div>
+                </div>
+                <span className={`shrink-0 font-mono text-[15px] font-medium ${t > 0 ? "text-profit" : t < 0 ? "text-loss" : "text-muted"}`} dir="ltr">{money(t)}</span>
               </div>
             )
           })}
           {!loaded && <div className="py-2 text-center text-xs text-faint">بيحمّل البوتات…</div>}
         </div>
-        <p className="mt-3 text-[11px] leading-5 text-faint">فلوس وهمية، بتتحدث لوحدها. <a href={BOT_PAGE} target="_blank" rel="noopener" className="text-corona hover:underline">كل الصفقات مباشر ←</a></p>
+        <p className="mt-3 text-[11px] leading-5 text-faint">فلوس وهمية، بتتحدث لوحدها. <a href={BOT_PAGE} target="_blank" rel="noopener" className="text-corona hover:underline">كل البوتات والصفقات مباشر ←</a></p>
       </div>
     </div>
   )
