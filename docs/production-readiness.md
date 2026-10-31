@@ -124,7 +124,12 @@ Open items from the review:
 - ~~live activation readiness is self-declared and the risk allocation is not enforced as a cap~~ — fixed: readiness
   is derived server-side from `readiness_evidence.json` (verified provenance) and the server live switch; allocation is
   split server-side and enforced by the risk gate as each strategy's open-risk cap (a share of the account's aggregate
-  risk budget). The legacy generic entry path also checks the activation gate now.
+  risk budget). The legacy generic entry path also checks the activation gate now. **With a capital plan set** (owner,
+  2026-10-30/31) the risk-share cap is not applied; instead each strategy switched on for the account gets an even
+  share of the plan's open-trade count (`risk_manager.strategy_slots`: count ÷ strategies on, at least 1), checked by
+  the risk gate for single legs and whole baskets, and never above the strategy's own tested cap (`bot._strategy_full`).
+  A basket larger than the share (momentum_ls opens 10 legs) cannot enter until the capital is raised or fewer
+  strategies are on.
 
 ## Deployment (2026-10-29)
 

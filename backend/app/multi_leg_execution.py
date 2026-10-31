@@ -87,16 +87,18 @@ class MultiLegExecutionEngine:
         finally:
             con.close()
 
-    def _reserve(self, strategy, legs, equity, equity_observed_at=None, strategy_risk_share=None):
+    def _reserve(self, strategy, legs, equity, equity_observed_at=None, strategy_risk_share=None, strategies_sharing=None):
         fn = getattr(self.riskmgr, "pre_trade_gate_basket", None)
         if callable(fn):
             return fn(self.risk_path, strategy=strategy, legs=legs, equity_usdt=equity,
-                      equity_observed_at=equity_observed_at, strategy_risk_share=strategy_risk_share)
+                      equity_observed_at=equity_observed_at, strategy_risk_share=strategy_risk_share,
+                      strategies_sharing=strategies_sharing)
         reserved = []
         for leg in legs:
             ok, reason = self.riskmgr.pre_trade_gate(self.risk_path, strategy=strategy, **leg, equity_usdt=equity,
                                                      equity_observed_at=equity_observed_at,
-                                                     strategy_risk_share=strategy_risk_share)
+                                                     strategy_risk_share=strategy_risk_share,
+                                                     strategies_sharing=strategies_sharing)
             if not ok:
                 for prior in reserved:
                     self.riskmgr.rollback_reservation(self.risk_path, strategy=strategy, symbol=prior["symbol"])
@@ -120,7 +122,7 @@ class MultiLegExecutionEngine:
     def execute(self, *, strategy, intent, legs, equity_usdt, execute_leg, compensate_leg,
                 verify_protection, state=None, execution_id=None, reserve=True,
                 persist_fills=None, cycle_token=None, unwind_failed_leg=None, equity_observed_at=None,
-                strategy_risk_share=None):
+                strategy_risk_share=None, strategies_sharing=None):
         """Execute a basket. ``legs`` are sorted by caller-provided ``order`` then symbol.
 
         ``unwind_failed_leg(leg)`` is asked about an entry leg that raised: its order may have filled before the
@@ -157,7 +159,7 @@ class MultiLegExecutionEngine:
         payload = {"legs": ordered, "intent": intent, "cycle_token": cycle_token}
         self._write_execution(execution_id, strategy, intent, "intent_persisted", payload)
         ok, reason = (True, None) if not reserve else self._reserve(strategy, ordered, equity_usdt, equity_observed_at,
-                                                                   strategy_risk_share)
+                                                                   strategy_risk_share, strategies_sharing)
         if not ok:
             self._write_execution(execution_id, strategy, intent, "risk_blocked", payload, {"reason": reason})
             return {"ok": False, "status": "risk_blocked", "reason": reason, "execution_id": execution_id}

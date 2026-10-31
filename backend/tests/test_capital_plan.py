@@ -119,18 +119,84 @@ class BotSizingTests(unittest.TestCase):
                 self.assertEqual(botmod.position_size(100.0), 100.0)                      # paper never reads it
 
 
+class FairShareGateTests(unittest.TestCase):
+    """Owner (2026-10-31): with a capital plan, each strategy switched on gets an even share of the account's count."""
+    def setUp(self):
+        self.td = tempfile.TemporaryDirectory(ignore_cleanup_errors=True); self.path = Path(self.td.name) / "r.json"
+        rm.save_risk_state(self.path, rm._default_state({**LOOSE, "capital_usdt": 500}))   # 10 trades of $30
+    def tearDown(self): self.td.cleanup()
+
+    def gate(self, sym, strategy, sharing):
+        return rm.pre_trade_gate(self.path, strategy=strategy, symbol=sym, side="long", risk_usdt=1, notional_usdt=60,
+                                 equity_usdt=1000, equity_observed_at=rm._now(), strategies_sharing=sharing)
+
+    def basket(self, n, sharing, prefix="B"):
+        legs = [{"symbol": f"{prefix}{i}/USDT", "side": "long", "risk_usdt": 1, "notional_usdt": 60} for i in range(n)]
+        return rm.pre_trade_gate_basket(self.path, strategy="momentum_ls", legs=legs, equity_usdt=1000,
+                                        equity_observed_at=rm._now(), strategies_sharing=sharing)
+
+    def test_the_slots(self):
+        plan = rm.capital_plan({**rm.DEFAULT_LIMITS, "capital_usdt": 500, "risk_per_trade_pct": 5.0})   # 10 trades
+        self.assertEqual([rm.strategy_slots(plan, n) for n in (1, 2, 3, 7, 20)], [10, 5, 3, 1, 1])
+        self.assertIsNone(rm.strategy_slots(plan, None)); self.assertIsNone(rm.strategy_slots(None, 3))
+
+    def test_one_strategy_on_takes_the_whole_account(self):
+        for i in range(10): self.assertTrue(self.gate(f"C{i}/USDT", "a", 1)[0], i)
+        self.assertIn("max open trades", self.gate("C10/USDT", "a", 1)[1])
+
+    def test_the_busiest_cant_take_the_others_slots(self):
+        for i in range(3): self.assertTrue(self.gate(f"A{i}/USDT", "a", 3)[0], i)
+        ok, why = self.gate("A3/USDT", "a", 3)
+        self.assertFalse(ok); self.assertIn("share", why)
+        for i in range(3): self.assertTrue(self.gate(f"B{i}/USDT", "b", 3)[0], i)       # b still has its 3
+
+    def test_a_basket_counts_every_leg_against_the_share(self):
+        ok, why = self.basket(4, 3)                                                       # 4 legs > 10 // 3
+        self.assertFalse(ok); self.assertIn("share", why)
+        self.assertEqual(rm.load_risk_state(self.path)["open_risk"], {})                 # nothing of it reserved
+        self.assertTrue(self.basket(4, 2)[0])                                             # 4 legs <= 10 // 2
+
+    def test_no_plan_no_share(self):
+        rm.update_limits(self.path, {"capital_usdt": None})
+        for i in range(5): self.assertTrue(self.gate(f"C{i}/USDT", "a", 7)[0], i)
+
+
 class StrategyCapTests(unittest.TestCase):
-    """Owner's request (2026-10-30): no per-strategy number of trades — with a capital plan, only the account's count."""
-    def test_with_a_plan_only_the_account_count_limits(self):
-        state = {"positions": {f"C{i}/USDT:USDT": {} for i in range(10)}}
-        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d, mock.patch.object(botmod, "RISK_PATH", Path(d) / "r.json"), \
-             mock.patch.dict(botmod.CONFIG, {"paper_trading": False}):
-            rm.save_risk_state(botmod.RISK_PATH, rm._default_state())
-            self.assertTrue(botmod._strategy_full(state, 10))                 # no plan: the strategy's own cap
-            rm.update_limits(botmod.RISK_PATH, {"capital_usdt": 5000})
-            self.assertFalse(botmod._strategy_full(state, 10))                # plan: the account's count only
-            with mock.patch.dict(botmod.CONFIG, {"paper_trading": True}):
-                self.assertTrue(botmod._strategy_full(state, 10))             # paper keeps the tested cap
+    """The strategy's own cap (as tested) always holds; with a plan, so does its even share of the account's count."""
+    def setUp(self):
+        self.td = tempfile.TemporaryDirectory(ignore_cleanup_errors=True); d = Path(self.td.name)
+        self.patches = [mock.patch.object(botmod, "RISK_PATH", d / "r.json"), mock.patch.object(botmod, "ACTIVATION_PATH", d / "a.sqlite3"),
+                        mock.patch.dict(botmod.CONFIG, {"paper_trading": False}), mock.patch.dict(os.environ, {"BINANCE_ENV": "demo"})]
+        for p in self.patches: p.start()
+        rm.save_risk_state(botmod.RISK_PATH, rm._default_state({"capital_usdt": 500, "risk_per_trade_pct": 5.0}))   # 10 trades
+    def tearDown(self):
+        for p in reversed(self.patches): p.stop()
+        self.td.cleanup()
+
+    def full(self, n, cap=10):
+        return botmod._strategy_full({"positions": {f"C{i}/USDT:USDT": {} for i in range(n)}}, cap)
+
+    def test_one_strategy_on_gets_the_account_up_to_its_own_cap(self):
+        botmod.live_activation.set_demo_strategies(botmod.ACTIVATION_PATH, strategies=["trend_daily"], set_by="t")
+        self.assertFalse(self.full(9)); self.assertTrue(self.full(10)); self.assertTrue(self.full(4, cap=4))
+
+    def test_three_on_share_the_account(self):
+        botmod.live_activation.set_demo_strategies(botmod.ACTIVATION_PATH, strategies=["trend_daily", "rsi2_pullback", "momentum_ls"], set_by="t")
+        self.assertFalse(self.full(2)); self.assertTrue(self.full(3))                    # 10 // 3
+
+    def test_nothing_chosen_on_demo_is_all_seven(self):
+        self.assertEqual(botmod._strategies_sharing(), 7); self.assertTrue(self.full(1))   # 10 // 7
+
+    def test_an_unreadable_choice_is_the_smallest_share(self):
+        with mock.patch.object(botmod.live_activation, "demo_strategies", side_effect=OSError("locked")):
+            self.assertEqual(botmod._strategies_sharing(), 7)
+
+    def test_no_plan_or_paper_keeps_the_tested_cap(self):
+        rm.update_limits(botmod.RISK_PATH, {"capital_usdt": None})
+        self.assertFalse(self.full(9)); self.assertTrue(self.full(10))
+        rm.update_limits(botmod.RISK_PATH, {"capital_usdt": 500})
+        with mock.patch.dict(botmod.CONFIG, {"paper_trading": True}):
+            self.assertIsNone(botmod._strategies_sharing()); self.assertFalse(self.full(9))
 
 
 class SafetyTests(unittest.TestCase):

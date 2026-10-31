@@ -49,7 +49,7 @@ function CapitalPanel({ env, cfg, reload }: { env: "demo"|"live", cfg: any, relo
   return (
     <div className="rounded-2xl border border-line bg-surface p-4">
       <h2 className="text-sm font-black">راس المال والمارجن</h2>
-      <p className="mt-1 text-xs text-muted">راس المال بيحدد أقصى عدد صفقات مفتوحة في نفس الوقت (كل الاستراتيجيات مع بعض)، و{c.capital_reserve_pct ?? 40}% منه بيفضل احتياطي. المارجن لكل صفقة: سيبه فاضي يتحسب لوحده ({c.capital_margin_pct ?? 1}% من راس المال ومش أقل من {usd(c.capital_min_margin_usdt ?? 30)})، أو اكتبه بنفسك. رافعة 2x ووقف 40% من السعر.</p>
+      <p className="mt-1 text-xs text-muted">راس المال بيحدد أقصى عدد صفقات مفتوحة في نفس الوقت، وبيتقسم بالتساوي على الاستراتيجيات الشغالة، و{c.capital_reserve_pct ?? 40}% منه بيفضل احتياطي. المارجن لكل صفقة: سيبه فاضي يتحسب لوحده ({c.capital_margin_pct ?? 1}% من راس المال ومش أقل من {usd(c.capital_min_margin_usdt ?? 30)})، أو اكتبه بنفسك. رافعة 2x ووقف 40% من السعر.</p>
       <div className="mt-3 flex flex-wrap items-end gap-3">
         <label className="text-xs text-muted">راس المال (USDT)
           <input type="number" min={0} inputMode="decimal" value={value} onChange={e => setValue(e.target.value)} dir="ltr" placeholder="مثلا 1000"
@@ -81,6 +81,23 @@ function CapitalPanel({ env, cfg, reload }: { env: "demo"|"live", cfg: any, relo
         </div>
       </> : <div className="mt-2 text-xs text-faint">مفيش خطة: كل بوت بيدخل بالحجم المضبوط في خدمته ومفيش حد لعدد الصفقات.</div>}
       {p && p.eff < Number(value) && <div className="mt-2 text-xs text-loss">رصيد الحساب ({usd(p.eff)}) أقل من راس المال اللي كتبته: الحساب كله على الرصيد.</div>}
+    </div>
+  )
+}
+
+// trades a strategy opens at once: a momentum basket is 5 long + 5 short (bot.MOM), a ratio pair 2 legs
+const OPENS_AT_ONCE: Record<string, number> = { momentum_ls: 10, ratio_trend: 2 }
+
+/** Same rule as risk_manager.strategy_slots: the account's count split evenly between the strategies on, at least 1. */
+function SharePanel({ total, chosen }: { total?: number, chosen: Set<string> }){
+  const k = chosen.size
+  if(!total || !k) return null
+  const share = Math.max(1, Math.floor(total / k))
+  const starved = [...chosen].filter(s => (OPENS_AT_ONCE[s] || 1) > share)
+  return (
+    <div className="mt-3 text-xs text-muted">
+      كل استراتيجية شغالة ليها لحد <b className="font-mono" dir="ltr">{share}</b> صفقة مفتوحة ({total} مكان في الحساب ÷ {k} استراتيجية)، ومن غير ما تعدّي الحد اللي اتجربت عليه.
+      {starved.map(s => <div key={s} className="mt-1 text-loss">⚠️ {LABELS[s] || s} بتفتح {OPENS_AT_ONCE[s]} صفقات مع بعض، فبنصيب {share} مش هتدخل خالص: ارفع راس المال أو شغّل استراتيجيات أقل.</div>)}
     </div>
   )
 }
@@ -157,6 +174,7 @@ export function LiveStrategies(){
             </label>
           ))}
         </div>
+        <SharePanel total={cfg.capital?.plan?.max_open} chosen={chosen} />
         <div className="mt-3 flex items-center gap-3">
           <button onClick={save} disabled={saving || !changed || (env === "live" && !account.trim() && chosen.size > 0)}
             className="rounded-lg bg-corona px-4 py-2 text-xs font-black text-bg disabled:opacity-40">{saving ? "بيحفظ…" : "احفظ"}</button>
