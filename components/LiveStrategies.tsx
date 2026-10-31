@@ -2,8 +2,10 @@
 import { useCallback, useEffect, useState } from "react"
 import { apiLiveStatus, apiLiveStrategies, apiSetCapital, apiSetLiveStrategies } from "@/lib/api"
 import { LivePositions } from "@/components/LivePositions"
+import { Card, CardHeader, Pill, Toggle, btn, field, label, type Tone } from "@/components/ui"
 
-const usd = (v: number) => `$${v.toLocaleString("en-US", { maximumFractionDigits: 2 })}`
+const usd = (v: number) => `${v < 0 ? "−" : ""}$${Math.abs(v).toLocaleString("en-US", { maximumFractionDigits: 2 })}`
+const signedUsd = (v: number) => `${v > 0 ? "+" : ""}${usd(v)}`
 
 const LEV = 2, STOP = 0.40   // every strategy: x2 and a 40% stop (risk_manager.PLAN_LEVERAGE / PLAN_STOP_LOSS)
 
@@ -22,9 +24,22 @@ function plan(capital: number, manual: number, c: any){
   return { eff, margin, maxOpen, loss, lossPct, worst: loss * maxOpen / eff * 100, level, blockedPerTrade, allowed: blockedPerTrade ? 0 : Math.min(maxOpen, byAgg) }
 }
 
-const LEVEL: Record<string, [string, string, string]> = {
-  low: ["منخفضة", "text-profit", "border-profit/40"], medium: ["متوسطة", "text-amber-300", "border-amber-300/40"],
-  high: ["عالية", "text-loss", "border-loss/40"], very_high: ["عالية جدًا", "text-loss", "border-loss"],
+const LEVEL: Record<string, [string, Tone]> = {
+  low: ["خطورة منخفضة", "profit"], medium: ["خطورة متوسطة", "corona"], high: ["خطورة عالية", "loss"], very_high: ["خطورة عالية جدًا", "loss"],
+}
+
+function Tile({ label, value, hint }: { label: string, value: string, hint?: string }){
+  return (
+    <div className="min-w-0 rounded-[10px] bg-surface2 px-3 py-2.5">
+      <div className="truncate text-[11px] text-muted">{label}</div>
+      <div className="truncate font-mono text-[15px] font-semibold tabular" dir="ltr" style={{ textAlign: "right" }}>{value}</div>
+      {hint && <div className="truncate text-[11px] text-faint">{hint}</div>}
+    </div>
+  )
+}
+
+function Note({ tone, children }: { tone: "loss" | "corona", children: React.ReactNode }){
+  return <div className={`mt-2 rounded-[10px] border px-3 py-2 text-[12px] ${tone === "loss" ? "border-loss/30 bg-loss/10 text-loss" : "border-corona/30 bg-corona/10 text-corona"}`}>{children}</div>
 }
 
 /** The owner's capital for this account, and optionally their own margin per trade: the margin and the most trades
@@ -41,70 +56,137 @@ function CapitalPanel({ env, cfg, reload }: { env: "demo"|"live", cfg: any, relo
   const changed = Number(value) !== (c.capital_usdt || 0) || Number(manual) !== (c.capital_margin_override_usdt || 0)
   async function save(){
     const n = Number(value) || 0, m = Number(manual) || 0
-    const risk = p ? `\nلو الوقف اتضرب في صفقة: −${usd(p.loss)} (${p.lossPct.toFixed(1)}% من راس المال) — خطورة ${LEVEL[p.level][0]}` : ""
+    const risk = p ? `\nلو الوقف اتضرب في صفقة: −${usd(p.loss)} (${p.lossPct.toFixed(1)}% من راس المال) — ${LEVEL[p.level][0]}` : ""
     if(!confirm(n ? `راس المال ${usd(n)} على ${env === "demo" ? "الـ Demo" : "الحساب الحقيقي"}:\nمارجن ${usd(p!.margin)} لكل صفقة${m ? " (يدوي)" : ""}، وبحد أقصى ${p!.maxOpen} صفقة مفتوحة.${risk}` : "إلغاء خطة راس المال؟")) return
     try{ await apiSetCapital(env, n, m); setMsg("✅ اتحفظ"); reload() } catch(e: any){ setMsg(`⚠️ ${e.message}`) }
   }
   const lv = p ? LEVEL[p.level] : null
   return (
-    <div className="rounded-2xl border border-line bg-surface p-4">
-      <h2 className="text-sm font-black">راس المال والمارجن</h2>
-      <p className="mt-1 text-xs text-muted">راس المال بيحدد أقصى عدد صفقات مفتوحة في نفس الوقت، وبيتقسم بالتساوي على الاستراتيجيات الشغالة، و{c.capital_reserve_pct ?? 40}% منه بيفضل احتياطي. المارجن لكل صفقة: سيبه فاضي يتحسب لوحده ({c.capital_margin_pct ?? 1}% من راس المال ومش أقل من {usd(c.capital_min_margin_usdt ?? 30)})، أو اكتبه بنفسك. رافعة 2x ووقف 40% من السعر.</p>
-      <div className="mt-3 flex flex-wrap items-end gap-3">
-        <label className="text-xs text-muted">راس المال (USDT)
-          <input type="number" min={0} inputMode="decimal" value={value} onChange={e => setValue(e.target.value)} dir="ltr" placeholder="مثلا 1000"
-            className="mt-1 block w-36 rounded-lg border border-line bg-bg px-2 py-1.5 text-sm" />
+    <Card>
+      <CardHeader title={`راس المال (${env === "demo" ? "Demo" : "حقيقي"})`} action={lv && <Pill tone={lv[1]}>{lv[0]}</Pill>}
+        sub={`${c.capital_reserve_pct ?? 40}% احتياطي · رافعة 2x · وقف 40% من السعر`} />
+      <div className="grid grid-cols-2 gap-3">
+        <label className="min-w-0"><span className={label}>راس المال (USDT)</span>
+          <input type="number" min={0} inputMode="decimal" value={value} onChange={e => setValue(e.target.value)} dir="ltr" placeholder="مثلا 1000" className={`${field} font-mono`} />
         </label>
-        <label className="text-xs text-muted">المارجن لكل صفقة (اختياري)
-          <input type="number" min={0} inputMode="decimal" value={manual} onChange={e => setManual(e.target.value)} dir="ltr" placeholder="تلقائي"
-            className="mt-1 block w-36 rounded-lg border border-line bg-bg px-2 py-1.5 text-sm" />
+        <label className="min-w-0"><span className={label}>المارجن لكل صفقة</span>
+          <input type="number" min={0} inputMode="decimal" value={manual} onChange={e => setManual(e.target.value)} dir="ltr" placeholder="تلقائي" className={`${field} font-mono`} />
         </label>
-        <button onClick={save} disabled={!changed} className="rounded-lg bg-corona px-4 py-2 text-xs font-black text-bg disabled:opacity-40">احفظ</button>
-        {msg && <span className="text-xs text-muted">{msg}</span>}
       </div>
+      <p className="mt-2 text-[12px] text-faint">سيب المارجن فاضي يتحسب لوحده: {c.capital_margin_pct ?? 1}% من راس المال ومش أقل من {usd(c.capital_min_margin_usdt ?? 30)}.</p>
       {p && lv ? <>
-        <div className="mt-3 grid gap-2 text-xs sm:grid-cols-3">
-          <div className="rounded-xl border border-line/70 p-2">المارجن لكل صفقة{Number(manual) > 0 && <span className="text-faint"> (يدوي)</span>}<div className="font-mono text-base font-black" dir="ltr">{usd(p.margin)}</div><div className="text-[10px] text-faint">حجم الصفقة {usd(p.margin * LEV)}</div></div>
-          <div className="rounded-xl border border-line/70 p-2">أقصى صفقات مفتوحة<div className="font-mono text-base font-black" dir="ltr">{p.maxOpen}</div></div>
-          <div className="rounded-xl border border-line/70 p-2">مفتوح دلوقتي<div className="font-mono text-base font-black" dir="ltr">{c.open_trades ?? "—"}{c.plan ? ` / ${c.plan.max_open}` : ""}</div></div>
+        <div className="mt-4 grid grid-cols-2 gap-2">
+          <Tile label={`المارجن${Number(manual) > 0 ? " (يدوي)" : ""}`} value={usd(p.margin)} hint={`حجم الصفقة ${usd(p.margin * LEV)}`} />
+          <Tile label="أقصى صفقات مفتوحة" value={String(p.maxOpen)} />
+          <Tile label="مفتوح دلوقتي" value={`${c.open_trades ?? "—"}${c.plan ? ` / ${c.plan.max_open}` : ""}`} />
+          <Tile label="الرصيد" value={c.equity_last != null ? usd(Math.round(Number(c.equity_last))) : "—"} />
         </div>
-        <div className={`mt-3 rounded-xl border ${lv[2]} p-3 text-xs`}>
-          <div className="font-black">مدى الخطورة: <span className={lv[1]}>{lv[0]}</span></div>
-          <ul className="mt-1 space-y-0.5 text-muted">
-            <li>لو الوقف اتضرب في صفقة واحدة: <b className="text-loss" dir="ltr">−{usd(p.loss)}</b> = <b className={lv[1]}>{p.lossPct.toFixed(1)}%</b> من راس المال</li>
-            <li>لو الوقف اتضرب في كل الصفقات المفتوحة مرة واحدة ({p.maxOpen}): <b className="text-loss">−{p.worst.toFixed(0)}%</b> من راس المال</li>
-            <li className="text-faint">منخفضة أقل من 1% للصفقة · متوسطة 1–2% · عالية 2–5% · عالية جدًا فوق 5%</li>
-          </ul>
-          {p.margin * LEV < 50 && <div className="mt-1 text-loss">⚠️ حجم الصفقة {usd(p.margin * LEV)} أقل من أقل أمر على BTC في Binance ($50) — صفقات BTC هتترفض.</div>}
-          {p.blockedPerTrade && <div className="mt-1 text-loss">⛔ خسارة الصفقة {p.lossPct.toFixed(1)}% أكبر من حد المخاطرة للصفقة الواحدة في دفتر المخاطرة ({c.risk_per_trade_pct}%): كل الدخول هيترفض لحد ما تقلّل المارجن أو ترفع الحد.</div>}
-          {!p.blockedPerTrade && p.allowed < p.maxOpen && <div className="mt-1 text-amber-300">حد المخاطرة الإجمالي في دفتر المخاطرة ({c.max_aggregate_risk_pct}%) هيوقف الدخول عند {p.allowed} صفقة، قبل الـ {p.maxOpen}.</div>}
+        <div className="mt-3 space-y-1 text-[12px] text-muted">
+          <div>وقف واحد = <b className="font-mono text-loss" dir="ltr">−{usd(p.loss)}</b> ({p.lossPct.toFixed(1)}% من راس المال)</div>
+          <div>كل الوقفات مع بعض ({p.maxOpen}) = <b className="font-mono text-loss" dir="ltr">−{p.worst.toFixed(0)}%</b></div>
+          <div className="text-faint">منخفضة أقل من 1% للصفقة · متوسطة 1–2% · عالية 2–5% · عالية جدًا فوق 5%</div>
         </div>
-      </> : <div className="mt-2 text-xs text-faint">مفيش خطة: كل بوت بيدخل بالحجم المضبوط في خدمته ومفيش حد لعدد الصفقات.</div>}
-      {p && p.eff < Number(value) && <div className="mt-2 text-xs text-loss">رصيد الحساب ({usd(p.eff)}) أقل من راس المال اللي كتبته: الحساب كله على الرصيد.</div>}
-    </div>
+        {p.margin * LEV < 50 && <Note tone="loss">حجم الصفقة {usd(p.margin * LEV)} أقل من أقل أمر على BTC في Binance ($50) — صفقات BTC هتترفض.</Note>}
+        {p.blockedPerTrade && <Note tone="loss">خسارة الصفقة {p.lossPct.toFixed(1)}% أكبر من حد المخاطرة للصفقة الواحدة ({c.risk_per_trade_pct}%): كل الدخول هيترفض لحد ما تقلّل المارجن أو ترفع الحد.</Note>}
+        {!p.blockedPerTrade && p.allowed < p.maxOpen && <Note tone="corona">حد المخاطرة الإجمالي ({c.max_aggregate_risk_pct}%) هيوقف الدخول عند {p.allowed} صفقة، قبل الـ {p.maxOpen}.</Note>}
+      </> : <p className="mt-4 rounded-[10px] bg-surface2 px-3 py-2.5 text-[12px] text-muted">مفيش خطة: كل بوت بيدخل بالحجم المضبوط في خدمته ومفيش حد لعدد الصفقات.</p>}
+      {p && p.eff < Number(value) && <Note tone="loss">رصيد الحساب ({usd(p.eff)}) أقل من راس المال اللي كتبته: الحساب كله على الرصيد.</Note>}
+      <div className="mt-4 flex items-center gap-3">
+        <button onClick={save} disabled={!changed} className={`${btn.primary} flex-1`}>احفظ راس المال</button>
+        {msg && <span className="text-[12px] text-muted">{msg}</span>}
+      </div>
+    </Card>
   )
 }
 
 // trades a strategy opens at once: a momentum basket is 5 long + 5 short (bot.MOM), a ratio pair 2 legs
 const OPENS_AT_ONCE: Record<string, number> = { momentum_ls: 10, ratio_trend: 2 }
 
-/** Same rule as risk_manager.strategy_slots: the account's count split evenly between the strategies on, at least 1. */
-function SharePanel({ total, chosen }: { total?: number, chosen: Set<string> }){
-  const k = chosen.size
-  if(!total || !k) return null
-  const share = Math.max(1, Math.floor(total / k))
-  const starved = [...chosen].filter(s => (OPENS_AT_ONCE[s] || 1) > share)
-  return (
-    <div className="mt-3 text-xs text-muted">
-      كل استراتيجية شغالة ليها لحد <b className="font-mono" dir="ltr">{share}</b> صفقة مفتوحة ({total} مكان في الحساب ÷ {k} استراتيجية)، ومن غير ما تعدّي الحد اللي اتجربت عليه.
-      {starved.map(s => <div key={s} className="mt-1 text-loss">⚠️ {LABELS[s] || s} بتفتح {OPENS_AT_ONCE[s]} صفقات مع بعض، فبنصيب {share} مش هتدخل خالص: ارفع راس المال أو شغّل استراتيجيات أقل.</div>)}
-    </div>
-  )
-}
-
 const LABELS: Record<string, string> = {
   trend_daily: "ترند يومي", vol_breakout: "اختراق التقلب", rsi2_pullback: "RSI2 الارتداد", trend_breakout: "اختراق الترند",
   listing_short: "شورت العملات الجديدة", momentum_ls: "مومنتم لونج/شورت", ratio_trend: "ترند النسبة",
+}
+
+/** The drawing only (no fetching), so it can be checked with sample data. */
+export function LiveStrategiesView({ env, onEnv, cfg, status, chosen, onToggle, account, onAccount, onSave, saving, msg, reload }: {
+  env: "demo"|"live", onEnv: (e: "demo"|"live") => void, cfg: any, status: any, chosen: Set<string>, onToggle: (id: string, on: boolean) => void,
+  account: string, onAccount: (v: string) => void, onSave: () => void, saving: boolean, msg: string, reload: () => void,
+}){
+  const envSwitch = (
+    <div className="inline-flex rounded-xl border border-line bg-surface p-1">
+      {(["demo", "live"] as const).map(e => (
+        <button key={e} onClick={() => onEnv(e)}
+          className={`rounded-[9px] px-4 py-1.5 text-[13px] transition ${env === e ? "bg-surface2 font-semibold text-ink" : "text-muted hover:text-ink"}`}>
+          {e === "demo" ? "Demo · فلوس وهمية" : "فلوس حقيقية"}
+        </button>
+      ))}
+    </div>
+  )
+  if(cfg === undefined) return <div className="space-y-5">{envSwitch}<Card><p className="py-8 text-center text-[13px] text-faint">بيحمّل…</p></Card></div>
+  if(cfg === null) return <div className="space-y-5">{envSwitch}<Card><p className="py-8 text-center text-[13px] text-loss">مش متاح (أدمن بس)</p></Card></div>
+
+  const rows: any[] = cfg.strategies || []
+  const total: number | undefined = cfg.capital?.plan?.max_open
+  const onCount = rows.filter(r => chosen.has(r.id)).length
+  const share = total && onCount ? Math.max(1, Math.floor(total / onCount)) : null
+  const starved = share != null ? rows.filter(r => chosen.has(r.id) && (OPENS_AT_ONCE[r.id] || 1) > share) : []
+  const changed = rows.some(r => r.on !== chosen.has(r.id))
+  const openPnl = (id: string) => ((status?.strategies?.[id]?.positions || []) as any[]).reduce((a, p) => a + (Number(p.pnl) || 0), 0)
+  const state = (r: any): [string, Tone] => r.review?.length ? ["محتاج مراجعة", "loss"] : !chosen.has(r.id) ? ["متوقفة", "neutral"]
+    : r.entry_block ? ["الدخول متوقف", "corona"] : r.running ? ["شغال", "profit"] : ["البوت مش شغال", "neutral"]
+  const withBots = rows.filter(r => status?.strategies?.[r.id]?.running || status?.strategies?.[r.id]?.positions?.length)
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        {envSwitch}
+        {env === "live" && <Pill tone={cfg.enabled ? "profit" : "loss"}>{cfg.enabled ? "التداول الحقيقي مسموح على السيرفر" : "التداول الحقيقي مقفول على السيرفر (ALLOW_LIVE_TRADING)"}</Pill>}
+      </div>
+
+      <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_372px]">
+        <Card>
+          <CardHeader title="الاستراتيجيات على حسابك"
+            sub={share != null ? `كل استراتيجية شغالة ليها لحد ${share} صفقات (${total} مكان ÷ ${onCount})` : "تشتغل = تقدر تدخل صفقات. مقفولة = مش هتدخل جديد، والمفتوح بيخرج على قاعدته ووقفه."}
+            action={<>
+              {msg && <span className="text-[12px] text-muted">{msg}</span>}
+              <button onClick={onSave} disabled={saving || !changed || (env === "live" && !account.trim() && chosen.size > 0)} className={btn.secondary}>{saving ? "بيحفظ…" : "احفظ التغييرات"}</button>
+            </>} />
+          {env === "live" && (
+            <label className="mb-4 block max-w-sm"><span className={label}>اسم الحساب (لازم يطابق BINANCE_LIVE_ACCOUNT على السيرفر)</span>
+              <input value={account} onChange={e => onAccount(e.target.value)} dir="ltr" className={field} />
+            </label>
+          )}
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[620px] text-[13px]">
+              <thead className="text-[12px] text-faint">
+                <tr>{["الاستراتيجية", "تشتغل", "البوت", "مفتوحة / النصيب", "ربح المفتوح", "الحالة"].map(h => <th key={h} className="px-2 py-2 text-right font-semibold">{h}</th>)}</tr>
+              </thead>
+              <tbody>
+                {rows.map(r => {
+                  const on = chosen.has(r.id), pnl = openPnl(r.id), [st, tone] = state(r)
+                  return (
+                    <tr key={r.id} className="border-t border-line">
+                      <td className="px-2 py-3 text-[14px] font-semibold">{LABELS[r.id] || r.id}</td>
+                      <td className="px-2 py-3"><Toggle on={on} onChange={v => onToggle(r.id, v)} label={`${LABELS[r.id] || r.id} تشتغل`}/></td>
+                      <td className="px-2 py-3 text-[12px] text-muted">{r.running ? `شغال${r.env ? " · " + r.env : ""}` : "مش شغال"}</td>
+                      <td className="px-2 py-3 font-mono tabular" dir="ltr" style={{ textAlign: "right" }}>{r.positions ?? 0} / {on && share != null ? share : "—"}</td>
+                      <td className={`px-2 py-3 font-mono tabular ${pnl > 0 ? "text-profit" : pnl < 0 ? "text-loss" : "text-muted"}`} dir="ltr" style={{ textAlign: "right" }}>{signedUsd(pnl)}</td>
+                      <td className="px-2 py-3"><Pill tone={tone}>{st}</Pill></td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+          {starved.map(r => <Note key={r.id} tone="loss">{LABELS[r.id] || r.id} بتفتح {OPENS_AT_ONCE[r.id]} صفقات مع بعض، فبنصيب {share} مش هتدخل خالص: ارفع راس المال أو شغّل استراتيجيات أقل.</Note>)}
+        </Card>
+        <CapitalPanel env={env} cfg={cfg} reload={reload} />
+      </div>
+
+      {withBots.length > 0 && <h2 className="pt-1 text-[17px] font-bold">الصفقات المفتوحة على Binance</h2>}
+      {withBots.map(r => <LivePositions key={r.id} strategy={r.id} label={LABELS[r.id] || r.id} st={status.strategies[r.id]} reload={reload} />)}
+    </div>
+  )
 }
 
 /** The admin's own live account: yes/no per strategy (the activation record the bots check before every entry),
@@ -139,51 +221,7 @@ export function LiveStrategies(){
     finally{ setSaving(false) }
   }
 
-  if(cfg === undefined) return <div className="text-xs text-faint">بيحمّل…</div>
-  if(cfg === null) return <div className="text-xs text-loss">مش متاح (أدمن بس)</div>
-  const changed = cfg.strategies.some((r: any) => r.on !== chosen.has(r.id))
-  return (
-    <div className="space-y-3">
-      <CapitalPanel env={env} cfg={cfg} reload={load} />
-      <div className="rounded-2xl border border-line bg-surface p-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-sm font-black">الاستراتيجيات على حسابك</h2>
-          <div className="flex gap-1 text-xs">
-            {(["demo", "live"] as const).map(e => (
-              <button key={e} onClick={() => { setEnv(e); setCfg(undefined); setMsg("") }}
-                className={`rounded-lg px-3 py-1 font-bold ${env === e ? "bg-corona text-bg" : "border border-line text-muted"}`}>{e === "demo" ? "Demo (فلوس وهمية)" : "فلوس حقيقية"}</button>
-            ))}
-          </div>
-        </div>
-        {env === "live" && <div className={`mt-1 text-[11px] ${cfg.enabled ? "text-profit" : "text-loss"}`}>{cfg.enabled ? "التداول الحقيقي مسموح على السيرفر" : "التداول الحقيقي مقفول على السيرفر (ALLOW_LIVE_TRADING)"}</div>}
-        <p className="mt-1 text-xs text-muted">نعم = الاستراتيجية تقدر تدخل صفقات على حسابك. لا = مش هتدخل جديد، والمفتوح بيخرج على قاعدته ووقفه.</p>
-        {env === "live" && <label className="mt-3 block text-xs text-muted">اسم الحساب (لازم يطابق BINANCE_LIVE_ACCOUNT على السيرفر)
-          <input value={account} onChange={e => setAccount(e.target.value)} dir="ltr" className="mt-1 block w-full max-w-xs rounded-lg border border-line bg-bg px-2 py-1.5 text-sm" />
-        </label>}
-        <div className="mt-3 grid gap-2 sm:grid-cols-2">
-          {cfg.strategies.map((r: any) => (
-            <label key={r.id} className="flex cursor-pointer items-center justify-between gap-2 rounded-xl border border-line/70 px-3 py-2">
-              <span className="text-sm font-bold">{LABELS[r.id] || r.id}
-                <span className={`mr-2 text-[10px] ${r.running ? "text-profit" : "text-faint"}`}>{r.running ? `شغال${r.env ? " · " + r.env : ""} · ${r.positions} صفقة` : "البوت مش شغال"}</span>
-                {r.review?.length > 0 && <span className="mr-1 text-[10px] text-loss">· محتاج مراجعة</span>}
-              </span>
-              <span className="flex items-center gap-2 text-xs">
-                <span className={chosen.has(r.id) ? "text-profit" : "text-faint"}>{chosen.has(r.id) ? "نعم" : "لا"}</span>
-                <input type="checkbox" checked={chosen.has(r.id)} onChange={e => setChosen(s => { const n = new Set(s); e.target.checked ? n.add(r.id) : n.delete(r.id); return n })} />
-              </span>
-            </label>
-          ))}
-        </div>
-        <SharePanel total={cfg.capital?.plan?.max_open} chosen={chosen} />
-        <div className="mt-3 flex items-center gap-3">
-          <button onClick={save} disabled={saving || !changed || (env === "live" && !account.trim() && chosen.size > 0)}
-            className="rounded-lg bg-corona px-4 py-2 text-xs font-black text-bg disabled:opacity-40">{saving ? "بيحفظ…" : "احفظ"}</button>
-          {msg && <span className="text-xs text-muted">{msg}</span>}
-        </div>
-      </div>
-      {cfg.strategies.filter((r: any) => status?.strategies?.[r.id]?.running || status?.strategies?.[r.id]?.positions?.length).map((r: any) => (
-        <LivePositions key={r.id} strategy={r.id} label={LABELS[r.id] || r.id} st={status.strategies[r.id]} reload={load} />
-      ))}
-    </div>
-  )
+  return <LiveStrategiesView env={env} onEnv={e => { setEnv(e); setCfg(undefined); setMsg("") }} cfg={cfg} status={status} chosen={chosen}
+    onToggle={(id, on) => setChosen(s => { const n = new Set(s); on ? n.add(id) : n.delete(id); return n })}
+    account={account} onAccount={setAccount} onSave={save} saving={saving} msg={msg} reload={load} />
 }

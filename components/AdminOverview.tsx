@@ -22,7 +22,7 @@ function Stat({ label, value, hint, tone }: { label: string, value: string, hint
   return (
     <div className="min-w-0 rounded-2xl border border-line bg-surface px-5 py-[18px]">
       <div className="text-[13px] text-muted">{label}</div>
-      <div className={`mt-1.5 truncate font-mono text-[22px] font-bold leading-tight tabular ${tone === "profit" ? "text-profit" : tone === "loss" ? "text-loss" : "text-ink"}`}>{value}</div>
+      <div className={`mt-1.5 truncate font-mono text-[22px] font-bold leading-tight tabular ${tone === "profit" ? "text-profit" : tone === "loss" ? "text-loss" : "text-ink"}`} dir="ltr" style={{ textAlign: "right" }}>{value}</div>
       <div className="mt-1.5 text-[12px] text-faint">{hint}</div>
     </div>
   )
