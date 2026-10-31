@@ -1,16 +1,24 @@
 import { NextRequest, NextResponse } from "next/server"
 
+const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+const PAID = ["starter","pro","elite"]
+const NAMES: Record<string,string> = { starter: "Starter", pro: "Pro", elite: "Elite" }
+// the backend's refusals for an invitation, as the invitee should read them
+const INVITE_ERRORS: Record<number,string> = {
+  403: "الدعوة دي لإيميل تاني، أو لسه ما أكدتش إيميلك",
+  404: "الدعوة مش موجودة",
+  409: "الدعوة دي مابقتش شغالة، أو انت مشترك في الباقة دي بالفعل",
+}
+
 export async function POST(req: NextRequest){
-  const { tier } = await req.json().catch(()=>({}))
-  if(!["starter","pro","elite"].includes(tier)){
+  const body = await req.json().catch(()=>({}))
+  const invite = typeof body.invite === "string" && /^[A-Za-z0-9_-]{16,64}$/.test(body.invite) ? body.invite : null
+  if(!invite && !PAID.includes(body.tier)){
     return NextResponse.json({ error: "invalid tier" }, { status: 400 })
   }
   const secret = process.env.STRIPE_SECRET_KEY
   if(!secret){
-    return NextResponse.json({
-      error: "Stripe غير مربوط — ضع STRIPE_SECRET_KEY في .env.local و STRIPE_*_PRICE_ID",
-      hint: "أنشئ منتجات في stripe.com/dashboard/products وخذ Price IDs"
-    }, { status: 503 })
+    return NextResponse.json({ error: "الدفع مش متاح دلوقتي (Stripe مش مربوط)" }, { status: 503 })
   }
 
   // The buyer must be signed in: the subscription is tied to their user id, not a typed email
@@ -26,15 +34,25 @@ export async function POST(req: NextRequest){
     return NextResponse.json({ error: "سجّل دخول الأول", login: "/auth" }, { status: 401 })
   }
 
-  const priceMap: Record<string,string> = {
-    starter: process.env.STRIPE_STARTER_PRICE_ID || "",
-    pro: process.env.STRIPE_PRO_PRICE_ID || "",
-    elite: process.env.STRIPE_ELITE_PRICE_ID || "",
+  // What to charge comes from the backend, never from the browser: the admin's current price for the plan, or an
+  // invitation's plan and free days (the backend checks it belongs to this account)
+  let tier: string = body.tier, price: number | undefined, trialDays: number | null = null
+  try{
+    if(invite){
+      const r = await fetch(`${API}/api/invites/${invite}/checkout`, { method: "POST", headers: { Authorization: `Bearer ${token}` }, cache: "no-store" })
+      if(!r.ok) return NextResponse.json({ error: INVITE_ERRORS[r.status] || "تعذر فتح الدعوة — حاول مرة أخرى" }, { status: r.status === 404 ? 404 : r.status === 403 ? 403 : 409 })
+      const t = await r.json()
+      tier = t.tier; price = t.price_usd; trialDays = t.trial_days || null
+    } else {
+      const r = await fetch(`${API}/api/plans`, { cache: "no-store" })
+      if(r.ok) price = (await r.json()).prices?.[tier]
+    }
+  }catch{ /* handled below */ }
+  if(!PAID.includes(tier) || !Number.isInteger(price) || !price || price < 1){
+    return NextResponse.json({ error: "تعذر معرفة سعر الباقة دلوقتي — حاول بعد شوية" }, { status: 503 })
   }
-  const priceId = priceMap[tier]
-  if(!priceId){
-    return NextResponse.json({ error: `سعر ${tier} غير مربوط — ضع STRIPE_${tier.toUpperCase()}_PRICE_ID` }, { status: 503 })
-  }
+  // an existing Stripe product per plan keeps the dashboard tidy; without one Stripe makes it from the name
+  const productId = process.env[`STRIPE_${tier.toUpperCase()}_PRODUCT_ID`]
   // Stripe SDK dynamic import so build doesn't fail without keys
   const Stripe = (await import("stripe")).default
   const stripe = new Stripe(secret)
@@ -57,16 +75,19 @@ export async function POST(req: NextRequest){
         return NextResponse.json({ error: "عندك اشتراك فعّال بالفعل — لتغيير الباقة الغِ الحالي الأول" }, { status: 409 })
       }
     }
-    const meta = { tier, user_id: user.id }
+    const meta: Record<string,string> = { tier, user_id: user.id, ...(invite ? { invite } : {}) }
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
-      line_items: [{ price: priceId, quantity: 1 }],
+      line_items: [{ quantity: 1, price_data: {
+        currency: "usd", unit_amount: price * 100, recurring: { interval: "month" },
+        ...(productId ? { product: productId } : { product_data: { name: `RAQM ${NAMES[tier]}` } }),
+      } }],
       success_url: `${origin}/dashboard?checkout=success`,
       cancel_url: `${origin}/#pricing`,
       ...(customerId ? { customer: customerId } : { customer_email: user.email || undefined }),
       client_reference_id: user.id,
       metadata: meta,
-      subscription_data: { metadata: meta },
+      subscription_data: { metadata: meta, ...(trialDays ? { trial_period_days: trialDays } : {}) },
     })
     return NextResponse.json({ url: session.url })
   }catch(e:any){

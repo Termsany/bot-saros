@@ -88,6 +88,45 @@ class ProtectiveOrder(Base):
     status = Column(String, default="open")
     created_at = Column(String)
 
+class PlanPrice(Base):
+    """A paid plan's monthly price as the admin set it; a plan with no row costs admin_users.TIER_PRICES_USD."""
+    __tablename__ = "plan_prices"
+    tier = Column(String, primary_key=True)
+    price_usd = Column(Integer)
+    updated_at = Column(String)
+    updated_by = Column(String)
+
+class Invitation(Base):
+    """An admin's invitation to one email address: a plan as a gift for some days, a free trial before paying,
+    or a plain payment link. The id is the secret in the link."""
+    __tablename__ = "invitations"
+    id = Column(String, primary_key=True)
+    email = Column(String, index=True)
+    tier = Column(String)
+    kind = Column(String)                            # gift | trial | paid
+    days = Column(Integer, nullable=True)            # gift / trial length
+    status = Column(String, default="pending")       # pending | accepted | revoked
+    note = Column(String, nullable=True)
+    created_at = Column(String)
+    created_by = Column(String)
+    link_expires_at = Column(String)
+    emailed_at = Column(String, nullable=True)
+    email_error = Column(String, nullable=True)
+    opened_checkout_at = Column(String, nullable=True)
+    accepted_at = Column(String, nullable=True)
+    accepted_user_id = Column(String, nullable=True)
+
+class PlanGrant(Base):
+    """A plan given as a gift: on top of the user's paid plan (the higher one counts) until expires_at."""
+    __tablename__ = "plan_grants"
+    user_id = Column(String, primary_key=True)
+    email = Column(String)
+    tier = Column(String)
+    expires_at = Column(String)
+    invite_id = Column(String, nullable=True)
+    granted_at = Column(String)
+    reminded_at = Column(String, nullable=True)
+
 engine = create_async_engine(DATABASE_URL, echo=False)
 async_session = async_sessionmaker(engine, expire_on_commit=False)
 

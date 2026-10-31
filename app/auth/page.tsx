@@ -10,6 +10,12 @@ type AuthMode = "login" | "signup" | "reset" | "recovery"
 const SAFE_AUTH_MESSAGE = "تعذر إتمام العملية الآن. راجع البيانات وحاول مرة أخرى."
 const SAFE_CONFIG_MESSAGE = "الخدمة غير متاحة مؤقتًا. حاول مرة أخرى لاحقًا."
 
+/** Where to go after signing in: ?next=, a path on this site only (an invitation page, say) — never another origin. */
+function nextPath(): string | null {
+  const next = new URLSearchParams(window.location.search).get("next") || ""
+  return /^\/(?!\/)[A-Za-z0-9/_-]*$/.test(next) ? next : null
+}
+
 function safeAuthMessage(mode: AuthMode) {
   if (mode === "signup") return "تعذر إنشاء الحساب. راجع البيانات وحاول مرة أخرى."
   if (mode === "reset") return "تعذر إرسال رابط الاستعادة. راجع البريد وحاول مرة أخرى."
@@ -35,10 +41,16 @@ export default function AuthPage() {
     // real recovery hash tokens itself (detectSessionInUrl) and emits the
     // PASSWORD_RECOVERY auth event only when it establishes a verified
     // recovery session, so that event is the sole trigger for recovery UI.
+    // an invitation link sends people here with their email and the page to come back to
+    const q = new URLSearchParams(window.location.search)
+    if (q.get("email")) setEmail(q.get("email") || "")
+    if (q.get("mode") === "signup") setMode("signup")
     if (!supabase || !isSupabaseConfigured) return
 
     const { data } = supabase.auth.onAuthStateChange((event: string) => {
       if (event === "PASSWORD_RECOVERY") setMode("recovery")
+      // signed in by the email-confirmation link that carried ?next=
+      else if (event === "SIGNED_IN" && nextPath()) window.location.assign(nextPath()!)
     })
     return () => data.subscription.unsubscribe()
   }, [])
@@ -86,14 +98,16 @@ export default function AuthPage() {
         if (error) throw error
         setMsg("تم إرسال رابط استعادة كلمة المرور إلى بريدك.")
       } else if (mode === "signup") {
-        const { error } = await supabase.auth.signUp({ email: email.trim(), password })
+        const next = nextPath()
+        const { error } = await supabase.auth.signUp({ email: email.trim(), password,
+          ...(next ? { options: { emailRedirectTo: `${window.location.origin}/auth?next=${encodeURIComponent(next)}` } } : {}) })
         if (error) throw error
         setMsg("تم إنشاء الحساب. تفقد بريدك الإلكتروني للتأكيد.")
       } else {
         const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password })
         if (error) throw error
         setMsg("تم تسجيل الدخول ✅")
-        window.setTimeout(() => window.location.assign("/"), 800)
+        window.setTimeout(() => window.location.assign(nextPath() || "/"), 800)
       }
     } catch {
       setMsg(safeAuthMessage(mode))

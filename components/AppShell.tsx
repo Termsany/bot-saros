@@ -5,7 +5,7 @@ import { Logo } from "@/components/Logo"
 import { Pill } from "@/components/ui"
 import { AccountMenu, signOut } from "@/components/AccountMenu"
 import { apiIsAdmin } from "@/lib/api"
-import { getMyTier, getUser } from "@/lib/supabase"
+import { getMyPlan, getUser, type MyPlan } from "@/lib/supabase"
 import { Activity, Bot, CandlestickChart, House, KeyRound, LayoutDashboard, LogOut, ShieldCheck, Sparkles } from "lucide-react"
 
 type NavItem = { href: string, label: string, icon: typeof House, adminOnly?: boolean }
@@ -47,12 +47,13 @@ export function AppShell({ active, tier: tierProp, engine, nextIn, children }: {
 }){
   const [isAdmin, setIsAdmin] = useState(false)
   const [loadedTier, setLoadedTier] = useState<string | null>(null)
+  const [gift, setGift] = useState<MyPlan["gift"]>(null)
   const [email, setEmail] = useState("")
   useEffect(() => {
     let live = true
     apiIsAdmin().then(v => { if (live) setIsAdmin(v) })
     getUser().then(u => { if (live) setEmail(u?.email || "") }).catch(() => {})
-    if (tierProp === undefined) getMyTier().then(t => { if (live) setLoadedTier(t) }).catch(() => {})
+    getMyPlan().then(p => { if (live){ setGift(p.gift); if (tierProp === undefined) setLoadedTier(p.tier) } }).catch(() => {})
     return () => { live = false }
   }, [tierProp])
   const tier = tierProp ?? loadedTier ?? "free"
@@ -79,7 +80,10 @@ export function AppShell({ active, tier: tierProp, engine, nextIn, children }: {
               <Pill tone="corona"><span className="font-mono uppercase">{tier}</span></Pill>
             </div>
             <p className="text-[12px] leading-5 text-muted">{PLAN_COPY[tier] || PLAN_COPY.free}</p>
-            {tier !== "elite" && <a href="/#pricing" className="block rounded-lg bg-corona py-2 text-center text-xs font-bold text-void transition hover:bg-corona-soft">رقّي باقتك</a>}
+            {gift && <div className="rounded-lg border border-signal/30 bg-signal/10 px-3 py-2 text-[12px] text-signal">
+              باقة {gift.tier} هدية · فاضل <b className="font-mono">{Math.max(0, Math.ceil((new Date(gift.expires_at).getTime() - Date.now()) / 86_400_000))}</b> يوم
+            </div>}
+            {(tier !== "elite" || gift) && <a href="/#pricing" className="block rounded-lg bg-corona py-2 text-center text-xs font-bold text-void transition hover:bg-corona-soft">{gift ? "اشترك قبل ما الهدية تخلص" : "رقّي باقتك"}</a>}
             {engine && (
               <div className={`flex items-center justify-between rounded-lg px-3 py-2 text-xs ${engine.running ? "bg-profit/10 text-profit" : "bg-line/60 text-muted"}`}>
                 <span className="font-semibold">{engine.running ? "● المحرك شغال" : "○ المحرك واقف"}</span>
