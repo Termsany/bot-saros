@@ -25,7 +25,10 @@ usermod -aG raqmrisk raqmlive; usermod -aG raqmrisk raqmapi
 gpasswd -d raqmlive raqmapi >/dev/null 2>&1 || true
 install -d -o root -g raqmlive -m 750 "$L"
 install -d -o raqmlive -g raqmlive -m 700 "$L/state"
-for f in bot.py strategies_trend.py strategies_advanced.py strategies_wave.py; do install -m 644 -o root -g root "$T/$f" "$L/$f"; done
+for f in bot.py strategies_trend.py strategies_advanced.py strategies_wave.py trade_card.py; do install -m 644 -o root -g root "$T/$f" "$L/$f"; done
+# the Telegram trade card's fonts (trade_card.py)
+install -d -o root -g root -m 755 "$L/assets" "$L/assets/fonts"
+for f in "$T"/assets/fonts/*; do install -m 644 -o root -g root "$f" "$L/assets/fonts/"; done
 install -d -o root -g root -m 755 "$L/backend" "$L/backend/app"
 # every backend module bot.py imports (stdlib only): order placement, multi-leg engine, execution checks, risk ledger, activation
 for m in __init__ oco multi_leg_execution execution_safety risk_manager live_activation; do

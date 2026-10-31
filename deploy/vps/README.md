@@ -15,8 +15,12 @@ The daily trend bot runs on its own server (Render's free plan sleeps and loses 
 Update the bot after a change:
 
 ```bash
-scp bot.py strategies_*.py root@SERVER:/opt/raqm-bot/ && ssh root@SERVER 'chown raqm:raqm /opt/raqm-bot/*.py && systemctl restart raqm-bot'
+scp -r bot.py strategies_*.py trade_card.py assets root@SERVER:/opt/raqm-bot/ && ssh root@SERVER 'chown -R raqm:raqm /opt/raqm-bot/*.py /opt/raqm-bot/assets && systemctl restart raqm-bot'
 ```
+
+Closed trades go to Telegram as an image card (`trade_card.py`, fonts in `assets/fonts`). The card needs Pillow in
+the bot's venv, once: `sudo -u raqm /opt/raqm-bot/venv/bin/pip install --only-binary=:all: pillow==13.0.0`. Without
+it the bot still runs and sends the card's text instead.
 
 Follow it: `journalctl -u raqm-bot -f`. Restarting keeps open trades (state.json) and never enters the same
 signal twice.

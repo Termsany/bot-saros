@@ -248,28 +248,68 @@ def _resolve_live_symbols(ex, symbols, allowed):
 
 _tg_queue = None
 
-def _tg_worker(q):
+def _tg_text(tok, chat, text):
     import urllib.request
+    try:
+        body = json.dumps({"chat_id": chat, "text": text, "disable_web_page_preview": True}).encode()
+        urllib.request.urlopen(urllib.request.Request(f"https://api.telegram.org/bot{tok}/sendMessage", data=body,
+                               headers={"Content-Type": "application/json"}), timeout=15)
+    except Exception as e: print(f"telegram: {e}")
+
+def _tg_card(tok, chat, card):
+    """A closed trade's card as a photo (trade_card.py); its caption alone when the image can't be made or sent."""
+    import trade_card
+    text = trade_card.caption(card)
+    try:
+        trade_card.send_photo(tok, chat, trade_card.render(card), text)
+    except Exception as e:
+        print(f"telegram card: {e}"); _tg_text(tok, chat, text)
+    time.sleep(1)   # Telegram allows about one message a second per chat; a weekly rebalance closes ten at once
+
+def _tg_worker(q):
     while True:
-        tok, chat, text = q.get()
-        try:
-            body = json.dumps({"chat_id": chat, "text": text, "disable_web_page_preview": True}).encode()
-            urllib.request.urlopen(urllib.request.Request(f"https://api.telegram.org/bot{tok}/sendMessage", data=body,
-                                   headers={"Content-Type": "application/json"}), timeout=15)
-        except Exception as e: print(f"telegram: {e}")
+        item = q.get()
+        if item[0] == "card": _tg_card(*item[1:])
+        else: _tg_text(*item)
 
 def notify(text):
     """Telegram message from the standalone bot (python bot.py --notify); the backend loop sends its own.
     Sent from one background thread, in order — a slow network (e.g. a host whose IPv6 doesn't work, so every
     connection waits out the IPv6 attempt first) never holds up the trading cycle."""
-    global _tg_queue
     tok, chat = os.getenv("TELEGRAM_BOT_TOKEN", ""), os.getenv("TELEGRAM_CHAT_ID", "")
     if not (CONFIG.get("notify") and tok and chat): return
+    _tg_put((tok, chat, text))
+
+def _tg_put(item):
+    global _tg_queue
     if _tg_queue is None:
         import queue
         _tg_queue = queue.Queue()
         threading.Thread(target=_tg_worker, args=(_tg_queue,), daemon=True).start()
-    _tg_queue.put((tok, chat, text))
+    _tg_queue.put(item)
+
+def notify_trade(h):
+    """One closed trade (a state["history"] row) as a Telegram card: win, loss, stop or target, every strategy."""
+    tok, chat = os.getenv("TELEGRAM_BOT_TOKEN", ""), os.getenv("TELEGRAM_CHAT_ID", "")
+    if not (CONFIG.get("notify") and tok and chat): return
+    try:
+        import trade_card
+        env = "paper" if CONFIG.get("paper_trading") else ("live" if binance_env() == "live" else "demo")
+        card = trade_card.build(h, strategy=_current_strategy_name(), env=env, leverage=CONFIG.get("leverage", 2))
+    except Exception as e:
+        log(f"trade card: {e}")
+        notify(f"🔒 قفل {h.get('symbol')} — {h.get('reason', '')}\nPnL {float(h.get('pnl') or 0):+.2f}$"); return
+    _tg_put(("card", tok, chat, card))
+
+def _alert_closed_trades(s):
+    """Every row added to the trade history since the last save gets its card. The count is saved with the state, so
+    a restart neither repeats nor skips one; the first save after an upgrade starts from the history as it is."""
+    hist = s.get("history")
+    if not isinstance(hist, list): return
+    done = s.get("alerted_closes")
+    if not isinstance(done, int) or not 0 <= done <= len(hist): done = len(hist)
+    for h in hist[done:]: notify_trade(h)
+    s["alerted_closes"] = len(hist)
 
 def write_public_status(state, analyses, symbols_allowed):
     """Read-only snapshot for the bot's public page (deploy/vps/page): trades and results only — no keys, no config secrets."""
@@ -347,7 +387,6 @@ def _listing_close(ex, state, sym, price, reason):
     st = state["stats"]; st["trades"] += 1; st["pnl"] += pnl; st["wins" if pnl > 0 else "losses"] += 1
     save_state(state)
     log(f"🔒 قفل شورت {sym} — {reason} @ {price:.6g} PnL {pnl:+.4f} (funding {funding:+.4f})")
-    notify(f"🔒 قفل شورت {sym.split(':')[0]} — {reason}\nدخول {pos['entry']:.6g} → خروج {price:.6g}\nPnL {pnl:+.2f}$ (funding {funding:+.2f}$) · Paper")
     return pnl
 
 def run_once_listing(ex):
@@ -499,7 +538,6 @@ def run_once_momentum(ex):
             if hit:
                 pnl = _paper_close(ex, state, sym, price, f"وقف {pos['sl']:.6g}"); save_state(state)
                 log(f"🔒 وقف {pos['side']} {sym} @ {price:.6g} PnL {pnl:+.4f}")
-                notify(f"🔒 مومنتم: وقف {'لونج' if pos['side'] == 'long' else 'شورت'} {sym.split(':')[0]} @ {price:.6g}\nPnL {pnl:+.2f}$ · Paper")
         except Exception as e: log(f"مومنتم {sym}: {e}")
     # weekly rebalance, at the first cycle after the daily close (00:00 UTC) once 7 days have passed
     today = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -1157,6 +1195,7 @@ def load_state():
     return {"positions":{},"last_trade":{},"stats":{"trades":0,"wins":0,"losses":0,"pnl":0},"history":[],"pending_orders":{},"recovery_required":{}}
 
 def save_state(s):
+    _alert_closed_trades(s)
     tmp = STATE_PATH.with_suffix(STATE_PATH.suffix + ".tmp")
     tmp.write_text(json.dumps(s, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(STATE_PATH)
@@ -2135,7 +2174,6 @@ def check_sl_tp(state, prices, ex=None):
             if CONFIG["paper_trading"]:
                 pnl=(price-entry)*qty if pos.get("side","long")=="long" else (entry-price)*qty; pnl_pct=(pnl/(entry*qty)*100) if entry*qty else 0
                 log(f"🔒 اغلاق {symbol} {reason} @ {price:.4f} PnL {pnl:+.4f} ({pnl_pct:+.2f}%)")
-                notify(f"🔒 قفل {symbol} — {reason}\nدخول {entry:.6g} → خروج {price:.6g}\nPnL {pnl:+.2f}$ (Paper)")
                 state["history"].append({"symbol":symbol,"side":pos.get("side","long"),"entry":entry,"exit":price,"qty":qty,"pnl":pnl,"pnl_pct":pnl_pct,"reason":reason,"time":datetime.now(timezone.utc).isoformat(),"type":"paper","opened":pos.get("time"),"rank":pos.get("rank")})
             else:
                 res=close_live_position(ex or get_exchange(auth=True)[0], symbol, pos, price)
@@ -2145,7 +2183,6 @@ def check_sl_tp(state, prices, ex=None):
                     raise RuntimeError("missing contract_size for live PnL")
                 pnl = futures_net_pnl(entry, res["price"], res["qty"], cs, pos.get("side", "long"), fee_rate=_fee_rate(pos, required=True), funding_pnl=_funding_pnl(pos, required=True))
                 log(f"🔒 اغلاق حقيقي {symbol} @ {res['price']:.4f} PnL {pnl:+.4f}")
-                notify(f"🔒 قفل {symbol} — {reason}\nدخول {entry:.6g} → خروج {res['price']:.6g}\nPnL {pnl:+.2f}$ (حقيقي)")
                 state["history"].append({"symbol":symbol,"side":pos.get("side","long"),"entry":entry,"exit":res["price"],"qty":res["qty"],"pnl":pnl,"pnl_pct":(res["price"]/entry-1)*100,"reason":reason,"time":datetime.now(timezone.utc).isoformat(),"type":"live"})
             state["stats"]["trades"]+=1; state["stats"]["pnl"]+=float(pnl)
             if pnl>0: state["stats"]["wins"]+=1
@@ -2322,7 +2359,6 @@ def reconcile_live(state, ex):
             by_hand = exit_px > float(pos.get("sl") or 0) * 1.01   # well above the stop: closed by hand in the Binance app
             why = "اتقفلت يدوي من Binance" if by_hand else "وقف الحماية اتنفذ على المنصة"
             log(f"🔒 {sym}: {why} @ {exit_px:.6g} PnL {pnl:+.2f}")
-            notify(f"🔒 قفل {sym} — {why}\nدخول {pos['entry']:.6g} → خروج {exit_px:.6g}\nPnL {pnl:+.2f}$ ({_live_label()})")
             ids = pos.get("oco_ids") or {}
             try:
                 cleanup_ok = _cancel_all_protective_orders(ex, sym, pos) if (ids.get("pos_id") or ids.get("sl") or ids.get("tp") or ids.get("sl_pending_cancel") or ids.get("sl_pending_cleanup")) else True
@@ -2526,7 +2562,6 @@ def process_manual_closes(state, ex, prices):
                 _release_position_risk(match, pos)
                 out.update(ok=True, msg="اتقفلت", price=r["price"], qty=r["qty"], pnl=round(pnl, 4))
                 log(f"🖐️ قفل يدوي {match} @ {r['price']:.6g} PnL {pnl:+.2f} (طلب {req.get('by', '?')})")
-                notify(f"🖐️ قفل يدوي من الموقع: {match}\nدخول {pos['entry']:.6g} → خروج {r['price']:.6g}\nPnL {pnl:+.2f}$ ({_live_label()})\nالمكان فضي — الاستراتيجية بتكمّل وتدخل على إشارتها الجاية")
         except Exception as e:
             out.update(ok=False, msg=f"القفل فشل: {e}")
             log(f"⚠️ قفل يدوي {sym} فشل: {e}"); notify(f"⚠️ القفل اليدوي لـ {sym} فشل: {e} — الوقف لسه على المنصة")
@@ -2595,7 +2630,6 @@ def process_paper_closes(state, ex, key):
                     out.update(ok=True, msg="اتقفلت", price=price, pnl=round(pnl, 4))
             if out.get("ok"):
                 log(f"🖐️ {key}: {reason} {sym} — {out.get('pnl'):+.4f}")
-                notify(f"🖐️ قفل يدوي من الموقع ({key}): {sym.split(':')[0].replace('/USDT', '')}\nPnL {out.get('pnl'):+.2f}$ · Paper")
         except Exception as e:
             out.update(ok=False, msg=f"القفل فشل: {e}"); log(f"⚠️ {key} قفل يدوي {sym}: {e}")
         try:
@@ -2674,7 +2708,6 @@ def try_enter_trend(symbol, analysis, state, ex):
             margin = pos["entry"] * qty
         mode = _live_label() if live else "Paper"
         log(f"📉 اغلاق {symbol} — الترند وقف @ {exit_px:.6g} PnL {pnl:+.4f}")
-        notify(f"📉 قفل {symbol} — الترند وقف\nدخول {pos['entry']:.6g} → خروج {exit_px:.6g}\nPnL {pnl:+.2f}$ ({mode})")
         state["history"].append({"symbol":symbol,"side":"long","entry":pos["entry"],"exit":exit_px,"qty":qty,"pnl":pnl,"pnl_pct":pnl/margin*100 if margin else 0,"reason":"الترند وقف","time":datetime.now(timezone.utc).isoformat(),"type":"live" if live else "paper","opened":pos.get("time"),"rank":pos.get("rank")})
         state["stats"]["trades"]+=1; state["stats"]["pnl"]+=float(pnl); state["stats"]["wins" if pnl>0 else "losses"]+=1
         state["positions"].pop(symbol,None); state["last_trade"][symbol]=datetime.now(timezone.utc).isoformat()
@@ -3599,7 +3632,6 @@ def _guard_stops(ex, state, prices, label):
                 if CONFIG.get("paper_trading"):
                     pnl = _paper_close(ex, state, sym, price, reason); save_state(state)
                     log(f"🔒 {label}: وقف {sym} @ {price:.6g} PnL {pnl:+.4f}")
-                    notify(f"🔒 {label}: وقف {sym.split(':')[0]} @ {price:.6g}\nPnL {pnl:+.2f}$ · Paper")
                 else:
                     _single_leg_live_exit(ex, state, sym, price, reason)
         except Exception as e: log(f"{label} {sym}: {e}")
