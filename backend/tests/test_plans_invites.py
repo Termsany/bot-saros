@@ -78,6 +78,26 @@ class HelperTests(unittest.TestCase):
         self.assertNotIn("abc<", body)
 
 
+class SendEmailTests(unittest.TestCase):
+    def test_resend_refusal_keeps_its_reason_not_the_key(self):
+        import httpx
+
+        def handler(request):
+            self.assertEqual(request.headers["Authorization"], "Bearer re_secret")
+            return httpx.Response(403, json={"statusCode": 403, "name": "validation_error", "message": "The da3m.io domain is not verified."})
+        with mock.patch.dict(os.environ, {"RESEND_API_KEY": "re_secret", "INVITE_FROM_EMAIL": "RAQM <raqm@da3m.io>"}):
+            out = asyncio.run(pi.send_email("a@b.com", "s", "<p>x</p>", transport=httpx.MockTransport(handler)))
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["error"], "resend http 403: The da3m.io domain is not verified.")
+        self.assertNotIn("re_secret", out["error"])
+
+    def test_resend_ok(self):
+        import httpx
+        with mock.patch.dict(os.environ, {"RESEND_API_KEY": "k", "INVITE_FROM_EMAIL": "RAQM <raqm@da3m.io>"}):
+            out = asyncio.run(pi.send_email("a@b.com", "s", "<p>x</p>", transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"id": "1"}))))
+        self.assertEqual(out, {"ok": True, "error": None})
+
+
 class EndpointTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
