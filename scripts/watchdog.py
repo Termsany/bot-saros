@@ -48,7 +48,8 @@ def problems(now, unit=unit, ipc=IPC, ledgers=LEDGERS):
                 age = (now - datetime.fromisoformat(st["updated"])).total_seconds()
             except Exception:
                 out[f"stale:{env}:{s}"] = (f"البوت {who} مش بيكتب حالته", 2); continue
-            if st.get("env") not in (None, env): continue
+            if st.get("env") not in (None, env):   # Demo and real money share a strategy's folder: the other one's leftover
+                out[f"stale:{env}:{s}"] = (f"البوت {who} لسه ما كتبش حالته (الملف من {st.get('env')})", 2); continue
             if age > STALE_S:
                 out[f"stale:{env}:{s}"] = (f"البوت {who} ما حدّثش حالته من {int(age // 60)} دقيقة", 2); continue
             for p in st.get("positions") or []:
@@ -84,6 +85,21 @@ def step(prev, seen):
     return state, msgs
 
 
+LIMIT = 3900                 # Telegram refuses a message over 4096 characters — with every position unprotected at once
+
+
+def chunks(lines, limit=LIMIT):
+    """The alert lines in messages Telegram accepts; a single line longer than the limit is cut."""
+    out, cur = [], ""
+    for line in lines:
+        line = line[:limit]
+        if cur and len(cur) + 1 + len(line) > limit:
+            out.append(cur); cur = line
+        else:
+            cur = f"{cur}\n{line}" if cur else line
+    return out + ([cur] if cur else [])
+
+
 def send(text):
     tok, chat = os.getenv("TELEGRAM_BOT_TOKEN", ""), os.getenv("TELEGRAM_CHAT_ID", "")
     if not (tok and chat):
@@ -93,12 +109,21 @@ def send(text):
                            headers={"Content-Type": "application/json"}), timeout=15)
 
 
+def checks(now):
+    """problems(), or one problem saying the watchdog itself can't look: a crash here used to mean silence."""
+    try:
+        return problems(now)
+    except Exception as e:
+        return {"watchdog": (f"المراقب نفسه مش قادر يفحص البوتات: {type(e).__name__}: {e}", 2)}
+
+
 def main():
     try: prev = json.loads(STATE.read_text(encoding="utf-8"))
     except Exception: prev = {}
-    state, msgs = step(prev, problems(datetime.now(timezone.utc)))
+    state, msgs = step(prev, checks(datetime.now(timezone.utc)))
     if msgs:
-        try: send("🐶 مراقب رقم\n" + "\n".join(msgs))
+        try:
+            for part in chunks(["🐶 مراقب رقم"] + msgs): send(part)
         except Exception as e:                                # not marked sent: tried again next run
             print(f"telegram: {e}"); state = {k: {**v, "sent": prev.get(k, {}).get("sent", False)} for k, v in state.items()}
             state.update({k: v for k, v in prev.items() if k not in state and v.get("sent")})

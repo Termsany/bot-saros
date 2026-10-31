@@ -69,6 +69,8 @@ Built: encrypted per-user key vault, audited consent record, `trend_daily` per-u
 sizing (fail-closed on missing equity), scheduler with per-user failure isolation, non-reentrant lock, restart
 reconciliation and kill-switch polling, `/settings/live` UI. **Not wired:** `backend/app/user_live_scheduler.py` is not
 started by any service, cron or startup path. It must not be until Phase 1 is complete for the strategies it runs.
+The server's live switch off or the operator's kill switch tripped stops per-user **entries** only: the tick still
+reconciles, polls each user's kill switch and runs exits (fixed 2026-10-31; before, the tick returned before any exit).
 
 ## Pre-production review (2026-10-29)
 
@@ -122,7 +124,8 @@ Open items from the review:
 - ~~the equity freshness check is a no-op~~ — fixed: a missing/stale/future equity timestamp is refused (gate) and trips
   the kill switch (equity update). Every live entry and the per-user tick now carry the observation time;
 - ~~live activation readiness is self-declared and the risk allocation is not enforced as a cap~~ — fixed: readiness
-  is derived server-side from `readiness_evidence.json` (verified provenance) and the server live switch; allocation is
+  is derived server-side from `readiness_evidence.json` and the server live switch (its `verified: true` is the file
+  vouching for itself: anyone who can write the API folder can set it, so it is a checklist, not access control); allocation is
   split server-side and enforced by the risk gate as each strategy's open-risk cap (a share of the account's aggregate
   risk budget). The legacy generic entry path also checks the activation gate now. **With a capital plan set** (owner,
   2026-10-30/31) the risk-share cap is not applied; instead each strategy switched on for the account gets an even
