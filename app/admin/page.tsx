@@ -2,6 +2,8 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react"
 import { Activity, BarChart3, Bot, CircleDollarSign, ClipboardList, Gauge, History, LockKeyhole, Settings2, ShieldAlert, ShieldCheck, Users as UsersIcon, WalletCards } from "lucide-react"
 import { Logo } from "@/components/Logo"
+import { AppShell } from "@/components/AppShell"
+import { PageHeader, Pill } from "@/components/ui"
 import { LiveStrategies } from "@/components/LiveStrategies"
 import { TIERS } from "@/lib/strategies"
 import { apiIsAdmin } from "@/lib/api"
@@ -11,7 +13,7 @@ type Json = Record<string, any>
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
 const AUTO_REFRESH_MS = 30000
 
-const sections: [string, string, React.ComponentType<{ size?: number; strokeWidth?: number }>][] = [
+const sections: [string, string, React.ComponentType<{ size?: number; strokeWidth?: number; className?: string }>][] = [
   ["overview", "نظرة عامة", Gauge],
   ["users", "المستخدمون والباقات", UsersIcon],
   ["finance", "المالية", CircleDollarSign],
@@ -40,9 +42,9 @@ const NO_SERVICE_IDS = ["default"]
 const ALL_STRATEGY_IDS = [...REAL_BOT_IDS, ...NO_SERVICE_IDS]
 
 const STATUS_META: Record<string, [string, string]> = {
-  running: ["يعمل", "bg-emerald-500/15 text-emerald-300 border-emerald-500/40"],
+  running: ["يعمل", "bg-emerald-500/15 text-profit border-emerald-500/40"],
   stale: ["بيانات قديمة", "bg-yellow-500/15 text-yellow-300 border-yellow-500/40"],
-  unavailable: ["غير متاح", "bg-red-500/15 text-red-300 border-red-500/40"],
+  unavailable: ["غير متاح", "bg-loss/15 text-loss border-loss/40"],
   no_service: ["لا توجد خدمة", "bg-neutral-500/15 text-neutral-300 border-neutral-500/40"],
 }
 
@@ -62,7 +64,7 @@ function timeAgo(iso?: string | null): string {
   return `منذ ${Math.floor(diff / 86400)} يوم`
 }
 
-function pnlColor(v: number): string { return v >= 0 ? "text-emerald-400" : "text-red-400" }
+function pnlColor(v: number): string { return v >= 0 ? "text-profit" : "text-loss" }
 function fmtNum(v: any, digits = 2): string {
   const n = Number(v)
   return Number.isFinite(n) ? n.toFixed(digits) : "—"
@@ -193,7 +195,7 @@ function LiveBotCard({ id, entry }: { id: string; entry: Json | undefined }) {
           {status === "no_service" ? (
             <p className="text-xs text-muted">لا توجد خدمة تشغيل حقيقية (systemd) لهذه الاستراتيجية على الـ VPS — لا تتوفر بيانات مباشرة.</p>
           ) : status === "unavailable" ? (
-            <p className="text-xs text-red-300">تعذر الوصول إلى ملف الحالة العام لهذا البوت الآن{e.error ? ` (${e.error})` : ""}. لا تُعرض بيانات ملفّقة.</p>
+            <p className="text-xs text-loss">تعذر الوصول إلى ملف الحالة العام لهذا البوت الآن{e.error ? ` (${e.error})` : ""}. لا تُعرض بيانات ملفّقة.</p>
           ) : (
             <>
               <div className="grid md:grid-cols-4 gap-2">
@@ -366,48 +368,32 @@ export default function AdminPage() {
   return (
     <>
     <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} items={paletteItems} />
-    <div dir="rtl" className="min-h-screen bg-void text-ink p-4 lg:p-8">
-      <div className="max-w-[1480px] mx-auto space-y-5">
-        <header className="rounded-2xl border border-line bg-surface p-4 sm:p-5">
-          <div className="flex flex-wrap gap-4 justify-between items-center">
-            <div className="flex items-center gap-3">
-              <Logo size="sm" />
-              <div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <h1 className="text-xl font-black">مركز تحكم الإدارة</h1>
-                  <span className="rounded-full border border-corona/40 bg-corona/10 px-2 py-0.5 text-[10px] font-bold text-corona">ADMIN ONLY</span>
-                </div>
-                <p className="text-xs text-muted mt-1">تشغيل ومراقبة آمنة · بيانات حقيقية · التداول الحقيقي مقفول</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <GlobalHealthDot severity={globalSeverity} />
-              <button onClick={() => setPaletteOpen(true)} className="rounded-xl border border-line bg-surface2 px-3 py-2 text-[11px] text-muted hover:border-corona/50">بحث سريع <span className="font-mono mx-1" dir="ltr">Ctrl+K</span></button>
-              <div className="rounded-xl border border-line bg-surface2 px-3 py-2 text-[11px] text-muted flex items-center gap-2">
-                <span className="inline-block w-2 h-2 rounded-full bg-emerald-400" />
-                <span>آخر تحديث</span><b className="font-mono tabular text-ink">{lastRefreshed ? lastRefreshed.toLocaleTimeString("ar-EG") : "—"}</b>
-              </div>
-              <label className="rounded-xl border border-line bg-surface2 px-3 py-2 text-[11px] text-muted flex items-center gap-2 cursor-pointer">
-                <input type="checkbox" checked={autoRefresh} onChange={e => setAutoRefresh(e.target.checked)} /> تحديث تلقائي
-              </label>
-              <a href="/dashboard" className="px-3 py-2 rounded-xl border border-line text-xs hover:border-corona/50">المنصة</a>
-              <button onClick={() => void load()} disabled={busy} className="px-3 py-2 rounded-xl bg-corona text-void text-xs font-bold disabled:opacity-50">تحديث الآن</button>
-            </div>
-          </div>
-        </header>
-        {error && <div className="mb-4 rounded-xl border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-300">{error}</div>}
-        <nav className="rounded-2xl border border-line bg-surface p-2">
+    <AppShell active="/admin">
+      <div className="space-y-5">
+        <PageHeader title="مركز تحكم الإدارة" subtitle="تشغيل ومراقبة آمنة · بيانات حقيقية · التداول الحقيقي مقفول" alerts={false}
+          status={<>
+            <GlobalHealthDot severity={globalSeverity} />
+            <Pill tone="profit"><span className="h-2 w-2 rounded-full bg-profit" />آخر تحديث <b className="font-mono tabular">{lastRefreshed ? lastRefreshed.toLocaleTimeString("en-GB") : "—"}</b></Pill>
+            <label className="flex cursor-pointer items-center gap-2 rounded-full border border-line bg-surface px-3 py-1 text-[12px] text-muted">
+              <input type="checkbox" checked={autoRefresh} onChange={e => setAutoRefresh(e.target.checked)} className="accent-corona" /> تحديث تلقائي
+            </label>
+            <button onClick={() => setPaletteOpen(true)} className="rounded-full border border-line bg-surface px-3 py-1 text-[12px] text-muted hover:border-corona/50">بحث سريع <span className="mx-1 font-mono" dir="ltr">Ctrl+K</span></button>
+            <button onClick={() => void load()} disabled={busy} className="rounded-xl bg-corona px-4 py-2 text-sm font-semibold text-void disabled:opacity-50">حدّث دلوقتي</button>
+          </>} />
+        {error && <div className="mb-4 rounded-xl border border-loss/40 bg-loss/10 p-3 text-sm text-loss">{error}</div>}
+        <nav className="rounded-xl border border-line bg-surface p-1" aria-label="أقسام الإدارة">
           <div className="flex gap-1 overflow-x-auto">
             {sections.map(([id, label, Icon]) => (
-              <button key={id} onClick={() => selectSection(id)} className={`flex items-center gap-2 whitespace-nowrap px-3 py-2.5 rounded-xl text-xs transition ${section === id ? "bg-corona text-void font-bold shadow-sm" : "text-muted hover:bg-surface2 hover:text-ink"}`}>
-                <Icon size={15} strokeWidth={2} />{label}
+              <button key={id} onClick={() => selectSection(id)} aria-current={section === id ? "page" : undefined}
+                className={`flex items-center gap-2 whitespace-nowrap rounded-[9px] px-3.5 py-2 text-[13px] transition ${section === id ? "bg-surface2 font-semibold text-ink" : "text-muted hover:bg-surface2/60 hover:text-ink"}`}>
+                <Icon size={15} strokeWidth={1.8} className={section === id ? "text-corona" : ""} />{label}
               </button>
             ))}
           </div>
         </nav>
         <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted">
           <span>{loading ? "جاري تحديث بيانات المركز…" : lastRefreshed ? `آخر مزامنة كاملة: ${lastRefreshed.toLocaleTimeString("ar-EG")}` : "بانتظار أول مزامنة"}</span>
-          {currentSectionErrors.length > 0 && <button onClick={() => void load()} className="text-red-300 hover:text-red-200">إعادة المحاولة</button>}
+          {currentSectionErrors.length > 0 && <button onClick={() => void load()} className="text-loss hover:text-red-200">إعادة المحاولة</button>}
         </div>
         {currentSectionErrors.length > 0 && <div className="rounded-xl border border-amber-400/30 bg-amber-400/10 p-3 text-xs text-amber-200">هذا القسم لم يستقبل تحديثًا جديدًا: {currentSectionErrors.join(" · ")}. البيانات السابقة، إن وُجدت، ما زالت معروضة.</div>}
 
@@ -436,7 +422,7 @@ export default function AdminPage() {
                 الهوية (البريد، تاريخ التسجيل، الحظر) من Supabase Auth Admin API، والباقة من جدول profiles، وإعدادات البوت (رأس المال/الاستراتيجية) من قاعدة البيانات المحلية لهذه اللوحة. لا علاقة بهذه القائمة ببوتات VPS السبعة (خدمات مشتركة وليست لكل مستخدم).
               </p>
               {data.users && !data.users.available && (
-                <div className="rounded-xl border border-red-400/30 bg-red-400/10 p-3 text-xs text-red-200 mt-2">
+                <div className="rounded-xl border border-loss/30 bg-loss/10 p-3 text-xs text-red-200 mt-2">
                   تعذر الوصول إلى Supabase الآن{data.users.error ? ` (${data.users.error})` : ""}. لا تُعرض بيانات ملفّقة — أعد المحاولة بعد قليل.
                 </div>
               )}
@@ -467,7 +453,7 @@ export default function AdminPage() {
                 لا يوجد اتصال حقيقي بـ Stripe هنا.
               </p>
               {data.finance && !data.finance.available && (
-                <div className="rounded-xl border border-red-400/30 bg-red-400/10 p-3 text-xs text-red-200 mt-2">
+                <div className="rounded-xl border border-loss/30 bg-loss/10 p-3 text-xs text-red-200 mt-2">
                   تعذر الوصول إلى Supabase الآن{data.finance.error ? ` (${data.finance.error})` : ""}. لا تُعرض أرقام ملفّقة.
                 </div>
               )}
@@ -489,7 +475,7 @@ export default function AdminPage() {
                         <span className="text-[10px] text-muted font-mono" dir="ltr">{t.price}/شهر</span>
                       </div>
                       <div className="mt-2 text-xs text-muted">مستخدمون: <b className="text-ink">{row?.users ?? 0}</b></div>
-                      <div className="mt-1 text-xs text-muted">الإيراد: <b className="text-emerald-400 font-mono" dir="ltr">${row?.revenue_usd ?? 0}</b></div>
+                      <div className="mt-1 text-xs text-muted">الإيراد: <b className="text-profit font-mono" dir="ltr">${row?.revenue_usd ?? 0}</b></div>
                     </div>
                   )
                 })}
@@ -576,7 +562,7 @@ export default function AdminPage() {
               <Panel title="حدود المخاطر الحالية">
                 <KeyValueGrid value={risk.limits || {}} empty="لا توجد حدود متاحة" />
                 <div className="mt-4 flex flex-wrap gap-2">
-                  <button disabled={busy} onClick={() => confirmAction("تأكيد تغيير Kill switch؟", () => action("/api/admin/risk/kill-switch", "POST", { action: risk.kill_switch?.tripped ? "reset" : "trip", reason: "operator action", confirm: true }))} className="rounded-xl border border-red-400/50 bg-red-500/10 px-3 py-2 text-xs text-red-300 disabled:opacity-50">{risk.kill_switch?.tripped ? "إعادة ضبط Kill switch" : "تفعيل Kill switch"}</button>
+                  <button disabled={busy} onClick={() => confirmAction("تأكيد تغيير Kill switch؟", () => action("/api/admin/risk/kill-switch", "POST", { action: risk.kill_switch?.tripped ? "reset" : "trip", reason: "operator action", confirm: true }))} className="rounded-xl border border-loss/50 bg-loss/10 px-3 py-2 text-xs text-loss disabled:opacity-50">{risk.kill_switch?.tripped ? "إعادة ضبط Kill switch" : "تفعيل Kill switch"}</button>
                   <button disabled={busy} onClick={() => confirmAction("تأكيد تغيير إيقاف الإدخالات؟", () => action("/api/admin/controls/entry-pause", "POST", { paused: !o.entry_paused?.paused, reason: "operator action", confirm: true }))} className="rounded-xl border border-line px-3 py-2 text-xs disabled:opacity-50">{o.entry_paused?.paused ? "استئناف الإدخالات" : "إيقاف الإدخالات"}</button>
                 </div>
               </Panel>
@@ -624,8 +610,8 @@ export default function AdminPage() {
               <Card title="Risk reservations" value={String(Object.keys(recovery.risk_reservations || {}).length)} />
             </div>
             <Panel title="حالات تحتاج مراجعة">
-              {Object.entries(recovery.recovery_required || {}).map(([symbol, item]: [string, any]) => <div key={symbol} className="rounded-xl border border-red-400/30 bg-red-400/10 p-3 text-xs text-red-200"><b>{symbol}</b><span className="mx-2">·</span>{item?.reason || "مراجعة مطلوبة"}</div>)}
-              {!Object.keys(recovery.recovery_required || {}).length && <div className="rounded-xl border border-emerald-400/20 bg-emerald-400/5 p-4 text-xs text-emerald-300">لا توجد حالات Recovery معلقة.</div>}
+              {Object.entries(recovery.recovery_required || {}).map(([symbol, item]: [string, any]) => <div key={symbol} className="rounded-xl border border-loss/30 bg-loss/10 p-3 text-xs text-red-200"><b>{symbol}</b><span className="mx-2">·</span>{item?.reason || "مراجعة مطلوبة"}</div>)}
+              {!Object.keys(recovery.recovery_required || {}).length && <div className="rounded-xl border border-profit/20 bg-profit/5 p-4 text-xs text-profit">لا توجد حالات Recovery معلقة.</div>}
             </Panel>
             <Panel title="تفاصيل Reconciliation وRisk reservations"><KeyValueGrid value={{ reconciliation: recovery.reconciliation || {}, risk_reservations: recovery.risk_reservations || {} }} empty="لا توجد بيانات" /></Panel>
           </div>
@@ -659,14 +645,14 @@ export default function AdminPage() {
           </div>
         )}
       </div>
-    </div>
+    </AppShell>
     </>
   )
 }
 
 function Card({ title, value, tone = "neutral" }: { title: string; value: string; tone?: "profit" | "loss" | "neutral" }) {
-  const color = tone === "profit" ? "text-emerald-400" : tone === "loss" ? "text-red-400" : "text-ink"
-  return <div className="min-w-0 rounded-2xl border border-line bg-surface p-4 sm:p-5"><div className="text-xs text-muted">{title}</div><div className={`text-xl font-black mt-2 ${color}`}>{value}</div></div>
+  const color = tone === "profit" ? "text-profit" : tone === "loss" ? "text-loss" : "text-ink"
+  return <div className="min-w-0 rounded-2xl border border-line bg-surface px-5 py-[18px]"><div className="text-[13px] text-muted">{title}</div><div className={`mt-1.5 font-mono text-[22px] font-bold leading-tight tabular ${color}`}>{value}</div></div>
 }
 function KeyValueGrid({ value, empty }: { value: Json; empty: string }) {
   const entries = Object.entries(value || {})
@@ -675,12 +661,12 @@ function KeyValueGrid({ value, empty }: { value: Json; empty: string }) {
 }
 function CheckPill({ label, value }: { label: string; value: any }) {
   const ok = value === true
-  return <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-bold ${ok ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300" : "border-red-400/30 bg-red-400/10 text-red-300"}`}><span>{ok ? "✓" : "×"}</span>{label}</span>
+  return <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-bold ${ok ? "border-profit/30 bg-profit/10 text-profit" : "border-loss/30 bg-loss/10 text-loss"}`}><span>{ok ? "✓" : "×"}</span>{label}</span>
 }
 /** A small always-visible dot in the header summarizing worst-case operational state across the whole center. */
 function GlobalHealthDot({ severity }: { severity: "ok" | "warning" | "critical" }) {
-  const meta = { ok: ["bg-emerald-400", "سليم"], warning: ["bg-amber-400", "تحذير"], critical: ["bg-red-400", "حرج"] }[severity]
-  return <span className="flex items-center gap-1.5 rounded-xl border border-line bg-surface2 px-3 py-2 text-[11px] text-muted"><span className={`inline-block h-2 w-2 rounded-full ${meta[0]} ${severity !== "ok" ? "animate-pulse" : ""}`} />{meta[1]}</span>
+  const meta = { ok: ["bg-profit", "سليم"], warning: ["bg-amber-400", "تحذير"], critical: ["bg-loss", "حرج"] }[severity]
+  return <span className="flex items-center gap-1.5 rounded-full border border-line bg-surface px-3 py-1 text-[12px] text-muted"><span className={`inline-block h-2 w-2 rounded-full ${meta[0]} ${severity !== "ok" ? "animate-pulse" : ""}`} />{meta[1]}</span>
 }
 type CommandItem = { id: string; label: string; hint?: string; onSelect: () => void }
 /** Ctrl/Cmd+K palette: jump to any tab or strategy without hunting through nav. Pure client-side, no network calls. */
@@ -734,14 +720,14 @@ function AlertCenter({ alerts }: { alerts: any[] }) {
   const [filter, setFilter] = useState<"all" | "critical" | "warning">("all")
   const normalized = alerts.filter(Boolean).map(item => typeof item === "string" ? { message: item, severity: "warning" } : item)
   const visible = normalized.filter(item => filter === "all" || (item.severity === filter || (filter === "critical" && item.severity === "error")))
-  if (!normalized.length) return <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/5 p-4 text-xs text-emerald-300">لا توجد تنبيهات تشغيلية حالية.</div>
-  return <div className="space-y-3"><div className="flex flex-wrap items-center gap-2"><span className="text-[11px] text-muted">{normalized.length} تنبيه</span>{(["all", "critical", "warning"] as const).map(item => <button key={item} onClick={() => setFilter(item)} className={`rounded-full px-2.5 py-1 text-[10px] font-bold ${filter === item ? "bg-corona text-void" : "border border-line text-muted"}`}>{item === "all" ? "الكل" : item === "critical" ? "حرج" : "تحذير"}</button>)}</div>{visible.slice(0, 8).map((item, i) => <div key={i} className={`rounded-xl border p-3 text-xs ${item.severity === "error" || item.severity === "critical" ? "border-red-400/30 bg-red-400/10 text-red-200" : "border-amber-400/30 bg-amber-400/10 text-amber-200"}`}><b>{item.title || (item.severity === "error" ? "خطأ تشغيلي" : "تنبيه")}</b><span className="mx-2">·</span>{item.message || item.reason || JSON.stringify(item)}</div>)}{!visible.length && <div className="rounded-xl border border-dashed border-line p-4 text-center text-xs text-muted">لا توجد تنبيهات بهذا التصنيف.</div>}</div>
+  if (!normalized.length) return <div className="rounded-2xl border border-profit/20 bg-profit/5 p-4 text-xs text-profit">لا توجد تنبيهات تشغيلية حالية.</div>
+  return <div className="space-y-3"><div className="flex flex-wrap items-center gap-2"><span className="text-[11px] text-muted">{normalized.length} تنبيه</span>{(["all", "critical", "warning"] as const).map(item => <button key={item} onClick={() => setFilter(item)} className={`rounded-full px-2.5 py-1 text-[10px] font-bold ${filter === item ? "bg-corona text-void" : "border border-line text-muted"}`}>{item === "all" ? "الكل" : item === "critical" ? "حرج" : "تحذير"}</button>)}</div>{visible.slice(0, 8).map((item, i) => <div key={i} className={`rounded-xl border p-3 text-xs ${item.severity === "error" || item.severity === "critical" ? "border-loss/30 bg-loss/10 text-red-200" : "border-amber-400/30 bg-amber-400/10 text-amber-200"}`}><b>{item.title || (item.severity === "error" ? "خطأ تشغيلي" : "تنبيه")}</b><span className="mx-2">·</span>{item.message || item.reason || JSON.stringify(item)}</div>)}{!visible.length && <div className="rounded-xl border border-dashed border-line p-4 text-center text-xs text-muted">لا توجد تنبيهات بهذا التصنيف.</div>}</div>
 }
 function ReadinessMatrix({ strategies }: { strategies: Json }) {
   const [filter, setFilter] = useState<"all" | "ready" | "blocked">("all")
   const entries = Object.entries(strategies || {})
   const visible = entries.filter(([, item]: [string, any]) => filter === "all" || (filter === "ready" ? item.live_ready === true : item.live_ready !== true))
-  return <div className="space-y-3"><div className="flex flex-wrap items-center gap-2"><span className="text-[11px] text-muted">{entries.length} استراتيجية</span>{(["all", "ready", "blocked"] as const).map(item => <button key={item} onClick={() => setFilter(item)} className={`rounded-full px-2.5 py-1 text-[10px] font-bold ${filter === item ? "bg-corona text-void" : "border border-line text-muted"}`}>{item === "all" ? "الكل" : item === "ready" ? "جاهزة" : "مقفلة"}</button>)}</div>{visible.map(([id, item]: [string, any]) => <div key={id} className="rounded-2xl border border-line bg-surface2 p-4"><div className="flex flex-wrap items-center justify-between gap-2"><b>{STRATEGY_LABELS_AR[id] || id}</b><span className={`rounded-full px-2 py-1 text-[10px] font-bold ${item.live_ready ? "bg-emerald-400/10 text-emerald-300" : "bg-red-400/10 text-red-300"}`}>{item.live_ready ? "Live-ready" : "مقفل"}</span></div><div className="mt-3 flex flex-wrap gap-2"><CheckPill label="Adapter" value={item.adapter_implemented} /><CheckPill label="Recovery" value={item.recovery_tests} /><CheckPill label="Security" value={item.security_approved} /><CheckPill label="Testnet" value={item.testnet_validated} /></div>{Array.isArray(item.reasons) && item.reasons.length > 0 && <div className="mt-3 text-xs text-muted">السبب: {item.reasons.join(" · ")}</div>}</div>)}{!visible.length && <div className="rounded-xl border border-dashed border-line p-6 text-center text-xs text-muted">لا توجد نتائج بهذا التصنيف.</div>}</div>
+  return <div className="space-y-3"><div className="flex flex-wrap items-center gap-2"><span className="text-[11px] text-muted">{entries.length} استراتيجية</span>{(["all", "ready", "blocked"] as const).map(item => <button key={item} onClick={() => setFilter(item)} className={`rounded-full px-2.5 py-1 text-[10px] font-bold ${filter === item ? "bg-corona text-void" : "border border-line text-muted"}`}>{item === "all" ? "الكل" : item === "ready" ? "جاهزة" : "مقفلة"}</button>)}</div>{visible.map(([id, item]: [string, any]) => <div key={id} className="rounded-2xl border border-line bg-surface2 p-4"><div className="flex flex-wrap items-center justify-between gap-2"><b>{STRATEGY_LABELS_AR[id] || id}</b><span className={`rounded-full px-2 py-1 text-[10px] font-bold ${item.live_ready ? "bg-profit/10 text-profit" : "bg-loss/10 text-loss"}`}>{item.live_ready ? "Live-ready" : "مقفل"}</span></div><div className="mt-3 flex flex-wrap gap-2"><CheckPill label="Adapter" value={item.adapter_implemented} /><CheckPill label="Recovery" value={item.recovery_tests} /><CheckPill label="Security" value={item.security_approved} /><CheckPill label="Testnet" value={item.testnet_validated} /></div>{Array.isArray(item.reasons) && item.reasons.length > 0 && <div className="mt-3 text-xs text-muted">السبب: {item.reasons.join(" · ")}</div>}</div>)}{!visible.length && <div className="rounded-xl border border-dashed border-line p-6 text-center text-xs text-muted">لا توجد نتائج بهذا التصنيف.</div>}</div>
 }
 function AuditList({ items }: { items: Json[] }) {
   const [query, setQuery] = useState("")
@@ -823,8 +809,8 @@ function UsersTable({ users, busy, onToggleBan, onUpdateSettings }: { users: Jso
                   <td>{u.capital != null ? fmtNum(u.capital) : "—"}</td>
                   <td>{u.strategy || "—"}</td>
                   <td>{u.banned
-                    ? <span className="rounded-full border border-red-400/30 bg-red-400/10 px-2 py-0.5 text-[10px] font-bold text-red-300">محظور</span>
-                    : <span className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2 py-0.5 text-[10px] font-bold text-emerald-300">نشط</span>}</td>
+                    ? <span className="rounded-full border border-loss/30 bg-loss/10 px-2 py-0.5 text-[10px] font-bold text-loss">محظور</span>
+                    : <span className="rounded-full border border-profit/30 bg-profit/10 px-2 py-0.5 text-[10px] font-bold text-profit">نشط</span>}</td>
                   <td className="flex gap-1">
                     <button disabled={busy} onClick={() => onToggleBan(u.id, !u.banned)}
                       className="px-2 py-1 rounded-lg border border-line disabled:opacity-50">{u.banned ? "إلغاء الحظر" : "حظر"}</button>
@@ -853,7 +839,7 @@ function UnifiedTimeline({ events }: { events: TimelineEvent[] }) {
   const undated = events.filter(e => !e.at)
   const sorted = [...dated, ...undated]
   const visible = sorted.filter(e => kind === "all" || e.kind === kind)
-  const kindMeta: Record<string, [string, string]> = { audit: ["سجل تدقيق", "border-line bg-surface2 text-ink"], alert: ["تنبيه", "border-amber-400/30 bg-amber-400/10 text-amber-200"], recovery: ["Recovery", "border-red-400/30 bg-red-400/10 text-red-200"] }
+  const kindMeta: Record<string, [string, string]> = { audit: ["سجل تدقيق", "border-line bg-surface2 text-ink"], alert: ["تنبيه", "border-amber-400/30 bg-amber-400/10 text-amber-200"], recovery: ["Recovery", "border-loss/30 bg-loss/10 text-red-200"] }
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2"><span className="text-[11px] text-muted">{visible.length} حدث</span>
@@ -872,8 +858,8 @@ function UnifiedTimeline({ events }: { events: TimelineEvent[] }) {
 function HealthGrid({ components }: { components: Json }) {
   const entries = Object.entries(components || {})
   if (!entries.length) return <div className="rounded-xl border border-dashed border-line p-6 text-center text-xs text-muted">لا توجد بيانات صحة متاحة.</div>
-  return <div className="grid gap-3 sm:grid-cols-2">{entries.map(([name, value]) => { const healthy = ["healthy", "available", "locked", "ok", "running"].includes(String(value)); return <div key={name} className="rounded-2xl border border-line bg-surface2 p-4"><div className="flex items-center justify-between gap-2"><b className="text-sm">{name.replaceAll("_", " ")}</b><span className={`rounded-full px-2 py-1 text-[10px] font-bold ${healthy ? "bg-emerald-400/10 text-emerald-300" : "bg-red-400/10 text-red-300"}`}>{String(value)}</span></div><div className="mt-2 text-[11px] text-muted">آخر فحص من endpoint صحة النظام المصادق.</div></div>})}</div>
+  return <div className="grid gap-3 sm:grid-cols-2">{entries.map(([name, value]) => { const healthy = ["healthy", "available", "locked", "ok", "running"].includes(String(value)); return <div key={name} className="rounded-2xl border border-line bg-surface2 p-4"><div className="flex items-center justify-between gap-2"><b className="text-sm">{name.replaceAll("_", " ")}</b><span className={`rounded-full px-2 py-1 text-[10px] font-bold ${healthy ? "bg-profit/10 text-profit" : "bg-loss/10 text-loss"}`}>{String(value)}</span></div><div className="mt-2 text-[11px] text-muted">آخر فحص من endpoint صحة النظام المصادق.</div></div>})}</div>
 }
 function Panel({ title, children }: { title: string; children: any }) {
-  return <section className="rounded-2xl border border-line bg-surface p-4 sm:p-5 shadow-[0_8px_30px_rgba(0,0,0,0.12)]"><div className="mb-4 flex items-center justify-between gap-3 border-b border-line pb-3"><h2 className="font-black text-sm">{title}</h2><span className="h-1.5 w-1.5 rounded-full bg-corona" /></div>{children}</section>
+  return <section className="min-w-0 rounded-2xl border border-line bg-surface p-5"><h2 className="mb-4 text-[17px] font-bold leading-snug">{title}</h2>{children}</section>
 }

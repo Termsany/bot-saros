@@ -1,35 +1,27 @@
 "use client"
 import { Lock } from "lucide-react"
+import { Pill } from "@/components/ui"
 import { STRATEGIES, TIERS, minCapitalNote, pfTone, sharpeTone, unlockTier } from "@/lib/strategies"
 
-/** The four bot strategies with their tested numbers; locked ones show the plan that unlocks them. */
+/** The bot strategies with their tested numbers; locked ones show the plan that unlocks them. */
 export function StrategyCards({ tier }: { tier: string }){
   const maxCount = TIERS.find(t => t.id === tier)?.count ?? 1
   return (
-    <div className="space-y-2">
+    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
       {STRATEGIES.map((s, i) => {
         const locked = i >= maxCount
         return (
-          <div key={s.id} className={`rounded-xl border px-3.5 py-3 ${locked ? "border-line/70 opacity-60" : s.risk === "high" ? "border-loss/35" : "border-line"}`}>
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex min-w-0 items-center gap-2">
-                <span className="text-corona">{s.icon}</span>
-                <span className="truncate text-sm font-bold">{s.nameAr}</span>
-                {s.risk === "high" && <span className="shrink-0 rounded-full bg-loss/10 px-1.5 py-0.5 text-[10px] font-bold text-loss">HIGH RISK</span>}
-              </div>
-              {locked
-                ? <span className="flex shrink-0 items-center gap-1 rounded-full bg-corona/10 px-2 py-0.5 text-[10px] font-bold text-corona"><Lock size={11}/> {unlockTier(i).name}</span>
-                : <span className="shrink-0 text-[11px] text-muted">{s.sides}</span>}
+          <div key={s.id} className={`flex flex-col rounded-2xl border bg-surface2/40 p-4 ${locked ? "border-line/70 opacity-60" : s.risk === "high" ? "border-loss/35" : "border-line"}`}>
+            <div className="flex items-start justify-between gap-2">
+              <span className="text-[15px] font-bold leading-snug">{s.nameAr}</span>
+              {locked ? <Pill tone="corona"><Lock size={11}/> {unlockTier(i).name}</Pill>
+                : s.risk === "high" ? <Pill tone="loss">خطورة عالية</Pill> : <Pill>{s.sides}</Pill>}
             </div>
-            <p className="mt-1 text-xs leading-5 text-muted">{s.desc}</p>
-            <div className="mt-1.5 flex items-center justify-between gap-2 rounded-lg bg-surface2/60 px-2.5 py-1.5" title={minCapitalNote(s)}>
-              <span className="text-[11px] text-muted">أقل رأس مال</span>
-              <span className="font-mono text-sm font-bold text-corona" dir="ltr">${s.minCapital.toLocaleString("en-US")}</span>
-            </div>
-            <div className="mt-1.5 font-mono text-[11px] text-muted tabular" dir="ltr" style={{ textAlign: "right" }}>
-              <span className={`font-bold ${pfTone(s.pf)}`}>PF {s.pf.toFixed(2)}</span>
-              <span className="mx-1.5 text-faint">·</span>WR {s.winRate}%
-              <span className="mx-1.5 text-faint">·</span>Sharpe <span className={`font-bold ${sharpeTone(s.sharpeOut)}`}>{s.sharpeOut.toFixed(2)}</span> (2024+)
+            <p className="mt-1.5 flex-1 text-[13px] leading-6 text-muted">{s.desc}</p>
+            <div className="mt-3 grid grid-cols-3 gap-2 border-t border-line pt-3 text-center">
+              <div title={minCapitalNote(s)}><div className="font-mono text-sm font-bold text-corona tabular" dir="ltr">${s.minCapital.toLocaleString("en-US")}</div><div className="text-[11px] text-faint">أقل رأس مال</div></div>
+              <div><div className={`font-mono text-sm font-bold tabular ${pfTone(s.pf)}`}>{s.pf.toFixed(2)}</div><div className="text-[11px] text-faint">PF</div></div>
+              <div><div className={`font-mono text-sm font-bold tabular ${sharpeTone(s.sharpeOut)}`}>{s.sharpeOut.toFixed(2)}</div><div className="text-[11px] text-faint">Sharpe 2024+</div></div>
             </div>
           </div>
         )

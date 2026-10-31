@@ -4,7 +4,8 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import { Bar, BarChart, CartesianGrid, ComposedChart, Line, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
 import { AppShell } from "@/components/AppShell"
 import { Kpi } from "@/components/Kpi"
-import { Bell, RefreshCw } from "lucide-react"
+import { Card, CardHeader, Dot, PageHeader, Pill } from "@/components/ui"
+import { RefreshCw } from "lucide-react"
 import { StrategyCards } from "@/components/StrategyCards"
 import { LiveBots } from "@/components/LiveBots"
 import { MyAccount } from "@/components/MyAccount"
@@ -141,20 +142,13 @@ export default function Dashboard(){
           </div>
         )}
 
-        {/* top bar */}
-        <header className="flex flex-wrap items-center justify-between gap-4">
-          <div>
-            <h1 className="text-[26px] font-bold">لوحة التحكم</h1>
-            <p className="text-[13px] text-muted">{loaded ? `${total.running} من ${LIVE_BOTS.length} بوتات شغالة دلوقتي على السيرفر` : "بيحمّل البوتات…"} · الشارت: {NAMES[symbol]||symbol} على فريم {tf}</p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2 sm:gap-2.5" dir="ltr">
-            <span className="flex items-center gap-1.5 rounded-full border border-line bg-surface px-3 py-1.5 font-mono text-[11px] font-bold text-profit"><i className="h-1.5 w-1.5 animate-pulse rounded-full bg-profit"/> LIVE · BINANCE</span>
-            <span className="hidden rounded-full border border-line bg-surface px-3 py-1.5 font-mono text-[11px] font-bold text-muted tabular sm:inline">UTC {now ? now.toISOString().slice(11,19) : "--:--:--"}</span>
-            <span className="rounded-full border border-line bg-surface px-3 py-1.5 font-mono text-[11px] font-bold text-corona">PAPER</span>
-            <span className="grid h-9 w-9 place-items-center rounded-[10px] border border-line bg-surface text-muted"><Bell size={17} strokeWidth={1.8}/></span>
+        <PageHeader title="لوحة التحكم"
+          subtitle={`${loaded ? `${total.running} من ${LIVE_BOTS.length} بوتات شغالة دلوقتي على السيرفر` : "بيحمّل البوتات…"} · الشارت: ${NAMES[symbol]||symbol} على فريم ${tf}`}
+          status={<>
+            <Pill tone="signal">PAPER · فلوس وهمية</Pill>
+            <Pill tone={candles.length ? "profit" : "neutral"}><Dot tone={candles.length ? "profit" : "neutral"} pulse={!!candles.length}/>{lastUpdated ? `متصل · آخر تحديث ${lastUpdated.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}` : "بيتصل…"}</Pill>
             <span className="grid h-9 w-9 place-items-center rounded-full border border-umbra/60 bg-umbra/20 text-sm font-bold">{initial || "؟"}</span>
-          </div>
-        </header>
+          </>}/>
 
         {/* KPIs — the four bots together */}
         <section className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
@@ -164,16 +158,16 @@ export default function Dashboard(){
           <Kpi label="الصفقات المفتوحة" value={`${total.open}`} chip={`${total.running}/${LIVE_BOTS.length} شغالة`} tone="neutral" sub={`على الـ ${LIVE_BOTS.length} بوتات`}/>
         </section>
 
-        {/* chart (right) + strategies (left) */}
-        <section className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
-          <div className="min-w-0 rounded-2xl border border-line bg-surface p-4 sm:p-5">
+        {/* chart (right in RTL) + bots (left) */}
+        <section className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_372px]">
+          <Card className="sm:p-5">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex min-w-0 flex-wrap items-center gap-2 sm:gap-3">
-                <select value={symbol} onChange={e=>setSymbol(e.target.value)} aria-label="العملة" className="rounded-lg border border-line bg-surface2 px-2.5 py-1.5 font-display text-base font-bold outline-none focus:border-corona/50" dir="ltr">
+                <select value={symbol} onChange={e=>setSymbol(e.target.value)} aria-label="العملة" className="rounded-lg border border-line bg-surface2 px-2.5 py-1.5 text-[17px] font-bold outline-none focus:border-corona/50" dir="ltr">
                   {PAIRS.map(p=><option key={p} value={p}>{p}</option>)}
                 </select>
-                <span className="font-mono text-xl font-bold tabular" dir="ltr">{current ? fmt(current.close) : "—"}</span>
-                {current && <span className={`rounded-md px-2 py-0.5 font-mono text-[11px] font-bold ${change>=0?"bg-profit/10 text-profit":"bg-loss/10 text-loss"}`} dir="ltr">{change>=0?"▲":"▼"} {Math.abs(change).toFixed(2)}%</span>}
+                <span className="font-mono text-[22px] font-bold tabular" dir="ltr">{current ? fmt(current.close) : "—"}</span>
+                {current && <Pill tone={change>=0 ? "profit" : "loss"}><span className="font-mono" dir="ltr">{change>=0?"+":"−"}{Math.abs(change).toFixed(2)}%</span></Pill>}
               </div>
               <div className="flex items-center gap-2" dir="ltr">
                 <div className="flex gap-0.5 rounded-[10px] bg-surface2 p-[3px]">
@@ -218,17 +212,37 @@ export default function Dashboard(){
               <span className="font-mono font-bold text-corona" dir="ltr">— EMA 10</span>
               {symbolTrades.length > 0 && <span className="font-semibold text-corona">● {symbolTrades.length} صفقة للبوتات على {symbol}</span>}
             </div>
-          </div>
+          </Card>
 
-          <div id="strategies" className="scroll-mt-6 rounded-2xl border border-line bg-surface p-5">
-            <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-base font-bold">الاستراتيجيات</h2>
-              <span className="font-mono text-[11px] text-muted">{STRATEGIES.length} بوتات</span>
+          <Card className="flex flex-col">
+            <CardHeader title="البوتات" action={<Pill tone={total.running ? "profit" : "neutral"}>{total.running} شغالة</Pill>}/>
+            <div className="flex-1 space-y-1.5">
+              {!loaded && <div className="rounded-xl bg-surface2/50 px-3 py-6 text-center text-xs text-faint">بيحمّل البوتات…</div>}
+              {[...bots].sort((a, b) => Number(b.fresh && b.ok) - Number(a.fresh && a.ok) || b.open - a.open).map(b => {
+                const pnl = b.realized + b.unrealized, live = b.ok && b.fresh
+                return (
+                  <a key={b.strategy.id} href="#live-bots" className="flex items-center justify-between gap-3 rounded-xl bg-surface2/55 px-3 py-2.5 transition hover:bg-surface2">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2"><Dot tone={live ? "profit" : "neutral"}/><span className="truncate text-[15px] font-semibold">{b.strategy.nameAr}</span></div>
+                      <div className="mt-0.5 text-[12px] text-muted">{!live ? "مش بيكتب حالته" : b.open ? `${b.open} مفتوحة` : "مفيش صفقات مفتوحة"}</div>
+                    </div>
+                    <div className="shrink-0 text-left">
+                      <div className={`font-mono text-[15px] font-medium tabular ${pnl > 0 ? "text-profit" : pnl < 0 ? "text-loss" : "text-muted"}`} dir="ltr">{signed(pnl)}</div>
+                      <div className="text-[11px] text-faint">الإجمالي</div>
+                    </div>
+                  </a>
+                )
+              })}
             </div>
-            <StrategyCards tier={tier}/>
-            <p className="mt-3 text-[11px] leading-5 text-faint">الأرقام من اختبار على كل عملات Binance من 2019 (والمشطوبة كمان)، هامش $20 × 2، شامل الرسوم والـ funding. نتايج سابقة، مش ضمان.</p>
-          </div>
+            <a href="#live-bots" className="mt-3 text-center text-[13px] font-semibold text-corona">تفاصيل كل بوت ←</a>
+          </Card>
         </section>
+
+        <Card id="strategies" className="scroll-mt-6">
+          <CardHeader title="الاستراتيجيات" sub="الأرقام من اختبار على كل عملات Binance من 2019 (والمشطوبة كمان)، هامش $20 × 2، شامل الرسوم والـ funding. نتايج سابقة، مش ضمان."
+            action={<span className="font-mono text-[12px] text-muted">{STRATEGIES.length} بوتات</span>}/>
+          <StrategyCards tier={tier}/>
+        </Card>
 
         {tierReady && <MyAccount tier={tier} bots={bots}/>}
 

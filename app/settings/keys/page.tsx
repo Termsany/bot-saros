@@ -1,8 +1,8 @@
 "use client"
 import { useEffect, useState } from "react"
-import { BRAND } from "@/lib/brand"
-import { Logo } from "@/components/Logo"
-import { ShieldCheck, Eye, EyeOff, Trash2, Check, AlertTriangle, Key } from "lucide-react"
+import { AppShell } from "@/components/AppShell"
+import { Card, PageHeader, Pill, btn, field } from "@/components/ui"
+import { ShieldCheck, Eye, EyeOff, Trash2 } from "lucide-react"
 import { authHeaders } from "@/lib/supabase"
 
 const EXCHANGES = [
@@ -69,110 +69,76 @@ export default function KeysPage(){
     loadStatus()
   }
 
+  const connected = EXCHANGES.filter(ex => status[ex.id]?.configured).length
   return (
-    <div className="min-h-screen bg-void text-ink">
-      <header className="flex h-16 items-center justify-between border-b border-line bg-surface/90 backdrop-blur px-5 lg:px-8 sticky top-0 z-30">
-        <Logo />
-        <div className="flex items-center gap-2">
-          <a href="/dashboard" className="px-4 py-2 rounded bg-corona text-void text-xs font-bold">المنصة</a>
-          <a href="/" className="text-xs text-muted hover:text-white">الرئيسية</a>
-        </div>
-      </header>
+    <AppShell active="/settings/keys">
+      <PageHeader title="مفاتيح المنصات" subtitle="متشفرة على السيرفر · محدش يقدر يشوفها بعد ما تتحفظ، ولا انت"
+        status={<Pill tone={connected ? "profit" : "neutral"}>{connected} من {EXCHANGES.length} متصلة</Pill>}/>
 
-      <div className="mx-auto max-w-[1100px] px-5 lg:px-8 py-8">
-        <div className="flex items-center gap-3">
-          <div className="h-9 w-9 grid place-items-center rounded-xl bg-corona/10 border border-corona/20"><Key size={16} className="text-corona"/></div>
-          <div>
-            <h1 className="text-lg font-black">مفاتيح المنصات — 4 منصات حقيقية</h1>
-            <p className="font-mono text-xs text-faint">Binance · Bybit · OKX · MEXC — كل منصة Toggle وحدها Paper → LIVE</p>
-          </div>
-        </div>
+      {msg && (
+        <div className={`rounded-xl border p-3 text-sm ${msg.type==="success" ? "border-profit/30 bg-profit/[0.06] text-profit" : "border-loss/30 bg-loss/[0.06] text-loss"}`}>{msg.text}</div>
+      )}
 
-        <div className="mt-4 rounded-xl border border-corona/20 bg-corona/[0.06] p-3 flex gap-3">
-          <AlertTriangle size={16} className="text-corona shrink-0 mt-0.5"/>
-          <div className="text-xs leading-relaxed">
-            <b className="text-corona">تحذير:</b> فعّل <b>Futures فقط</b> + بدون <b>Withdrawal</b> أبداً + ضيف <b>IP Whitelist</b>. البوت <b>Paper افتراضياً</b> — اقلب لـ LIVE يدوياً بعد الاختبار.
-          </div>
-        </div>
-
-        {msg && (
-          <div className={`mt-4 rounded-xl border p-3 text-xs ${msg.type==="success" ? "border-profit/30 bg-profit/[0.06] text-profit" : "border-loss/30 bg-loss/[0.06] text-loss"}`}>
-            {msg.text}
-          </div>
-        )}
-
-        <div className="grid md:grid-cols-2 gap-4 mt-6">
+      <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
+        <div className="grid gap-5 md:grid-cols-2">
           {EXCHANGES.map(ex=>{
             const st = status[ex.id] || { configured: false, paper: true }
             const form = getForm(ex.id)
             return (
-              <div key={ex.id} className={`rounded-xl border p-4 ${st.configured ? (st.paper ? "border-corona/30 bg-surface" : "border-profit/30 bg-surface") : "border-line bg-surface"}`}>
-                <div className="flex justify-between items-start">
-                  <div className="flex items-center gap-2">
-                    <div className="h-8 w-8 rounded-lg grid place-items-center text-xs font-black" style={{background: ex.color+"18", border:`1px solid ${ex.color}30`, color: ex.id==="okx" ? "#fff" : ex.color}}>{ex.name[0]}</div>
-                    <div><div className="text-sm font-bold">{ex.name}</div><div className="font-mono text-[11px] text-faint">{ex.desc}</div></div>
+              <Card key={ex.id} className={st.configured ? (st.paper ? "border-corona/40" : "border-profit/50") : ""}>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="grid h-[34px] w-[34px] place-items-center rounded-[10px] bg-surface2 text-sm font-bold text-corona">{ex.name[0]}</div>
+                    <div><div className="text-[17px] font-bold">{ex.name}</div><div className="text-[12px] text-muted">{ex.desc}</div></div>
                   </div>
-                  <div className="flex items-center gap-1.5">
-                    {st.configured ? (
-                      <>
-                        <span className={`h-2 w-2 rounded-full ${st.paper?"bg-corona":"bg-profit animate-pulse"}`}/>
-                        <span className={`text-[11px] font-bold font-mono ${st.paper?"text-corona":"text-profit"}`}>{st.paper ? "Paper" : "LIVE"}</span>
-                      </>
-                    ) : <span className="text-[11px] text-faint font-mono">غير مربوط</span>}
-                  </div>
+                  {st.configured
+                    ? <Pill tone={st.paper ? "corona" : "profit"}>● {st.paper ? "متصل · Paper" : "متصل · LIVE"}</Pill>
+                    : <Pill>مش متصل</Pill>}
                 </div>
 
                 {st.configured && (
-                  <div className="mt-3 flex gap-2">
-                    <button onClick={()=>togglePaper(ex.id, !st.paper)} className={`flex-1 py-2 rounded-lg text-xs font-bold ${st.paper ? "bg-profit text-void hover:bg-profit/85" : "bg-corona text-void hover:bg-corona-deep"}`}>
+                  <div className="mt-4 flex gap-2">
+                    <button onClick={()=>togglePaper(ex.id, !st.paper)} className={`${st.paper ? btn.secondary : btn.primary} flex-1`}>
                       {st.paper ? "فعّل LIVE" : "ارجع Paper"}
                     </button>
-                    <button onClick={()=>remove(ex.id)} className="px-3 py-2 rounded-lg border border-line bg-surface text-xs hover:bg-line"><Trash2 size={12}/></button>
+                    <button onClick={()=>remove(ex.id)} aria-label={`امسح مفاتيح ${ex.name}`} className={btn.ghost}><Trash2 size={15}/></button>
                   </div>
                 )}
 
-                <div className="mt-4 space-y-2">
-                  <input value={form.apiKey} onChange={e=>setForm(ex.id, {apiKey: e.target.value})}
-                    placeholder="API Key" className="w-full bg-surface border border-line rounded-lg px-3 py-2.5 text-xs font-mono focus:border-corona/40 outline-none" />
+                <div className="mt-4 space-y-2.5">
+                  <input value={form.apiKey} onChange={e=>setForm(ex.id, {apiKey: e.target.value})} placeholder="API key" aria-label={`${ex.name} API key`} className={`${field} font-mono`} dir="ltr"/>
                   <div className="relative">
-                    <input value={form.secret} onChange={e=>setForm(ex.id, {secret: e.target.value})}
-                      type={form.show ? "text" : "password"} placeholder="Secret"
-                      className="w-full bg-surface border border-line rounded-lg px-3 py-2.5 pr-9 text-xs font-mono focus:border-corona/40 outline-none" />
-                    <button onClick={()=>setForm(ex.id, {show: !form.show})} className="absolute right-2 top-1/2 -translate-y-1/2 text-faint hover:text-white">
-                      {form.show ? <EyeOff size={14}/> : <Eye size={14}/>}
+                    <input value={form.secret} onChange={e=>setForm(ex.id, {secret: e.target.value})} type={form.show ? "text" : "password"} placeholder="Secret" aria-label={`${ex.name} secret`} className={`${field} pr-10 font-mono`} dir="ltr"/>
+                    <button onClick={()=>setForm(ex.id, {show: !form.show})} aria-label={form.show ? "اخفي" : "اظهر"} className="absolute right-3 top-1/2 -translate-y-1/2 text-faint hover:text-ink">
+                      {form.show ? <EyeOff size={15}/> : <Eye size={15}/>}
                     </button>
                   </div>
                   {ex.id==="okx" && (
-                    <input value={form.passphrase} onChange={e=>setForm(ex.id, {passphrase: e.target.value})}
-                      type={form.show ? "text" : "password"} placeholder="Passphrase (OKX فقط)"
-                      className="w-full bg-surface border border-line rounded-lg px-3 py-2.5 text-xs font-mono focus:border-corona/40 outline-none" />
+                    <input value={form.passphrase} onChange={e=>setForm(ex.id, {passphrase: e.target.value})} type={form.show ? "text" : "password"} placeholder="Passphrase (OKX بس)" aria-label="OKX passphrase" className={`${field} font-mono`} dir="ltr"/>
                   )}
-                  <button onClick={()=>save(ex.id)} disabled={saving===ex.id}
-                    className={`w-full py-2.5 rounded-lg text-xs font-bold flex items-center justify-center gap-2 ${saving===ex.id ? "bg-line text-faint" : "bg-line hover:bg-surface2 border border-line text-white"}`}>
-                    {saving===ex.id ? "جاري الحفظ..." : <><ShieldCheck size={12}/> حفظ مشفر</>}
+                  <button onClick={()=>save(ex.id)} disabled={saving===ex.id} className={`${btn.secondary} w-full`}>
+                    {saving===ex.id ? "بيحفظ…" : <><ShieldCheck size={15}/> احفظ متشفّر</>}
                   </button>
                 </div>
-                <div className="mt-2 font-mono text-[10px] text-faint">مشفر بـ Fernet — لا يظهر أبداً في الشات أو الـ Logs</div>
-              </div>
+              </Card>
             )
           })}
         </div>
 
-        <div className="mt-6 rounded-xl border border-line bg-surface p-4">
-          <h3 className="text-xs font-bold flex items-center gap-2"><ShieldCheck size={12} className="text-corona"/> الأمان</h3>
-          <ul className="mt-2 space-y-1 font-mono text-xs text-muted">
-            <li>• المفاتيح مشفرة بـ <b className="text-white">Fernet (AES-128)</b> ومحفوظة في <code className="bg-surface px-1 rounded">vault.json</code> بـ <code>600</code></li>
-            <li>• لا تُرسل أبداً للفرونت — <code>GET /api/keys/status</code> يرجع <b className="text-white">true/false</b> فقط</li>
-            <li>• لا تكتب مفاتيحك في الشات العام — استخدم هذه الصفحة فقط</li>
-            <li>• ابدأ بـ <b className="text-corona">Paper</b> لكل المنصات، وقلّب واحدة واحدة لـ LIVE بعد الاختبار</li>
-          </ul>
-        </div>
+        <Card>
+          <h2 className="mb-4 text-[17px] font-bold">قبل ما تعمل المفتاح</h2>
+          <div className="space-y-4">
+            {[["اقفل صلاحية السحب", "البوت مش محتاجها، ومن غيرها محدش يقدر ياخد فلوسك"], ["فعّل Futures بس", "ده كل اللي البوت بيستخدمه"],
+              ["اربط المفتاح بـ IP السيرفر", "لو المفتاح اتسرق ما يشتغلش من أي مكان تاني"], ["ابدأ بـ Paper", "وقلّب منصة واحدة لـ LIVE بعد ما تختبر"]].map(([l, h]) => (
+              <div key={l} className="flex gap-2.5">
+                <span className="mt-0.5 grid h-[22px] w-[22px] shrink-0 place-items-center rounded-full bg-profit/15 text-[11px] text-profit">✓</span>
+                <div><div className="text-[14px] font-semibold">{l}</div><div className="text-[12px] leading-5 text-muted">{h}</div></div>
+              </div>
+            ))}
+          </div>
+          <p className="mt-5 rounded-xl bg-surface2 p-3 text-[12px] leading-6 text-muted">المفاتيح متشفرة بـ Fernet على السيرفر، ومش بتتبعت للمتصفح تاني: الصفحة دي بتعرف بس إذا كان فيه مفتاح ولا لأ.</p>
+        </Card>
       </div>
-
-      <footer className="mx-auto max-w-[1100px] px-5 lg:px-8 border-t border-line mt-6 py-6 flex justify-between font-mono text-[11px] text-faint">
-        <span>{BRAND.name} © 2026 — Multi-Exchange Vault</span>
-        <span>ENGINE <b className="text-profit">● OPERATIONAL</b></span>
-      </footer>
-    </div>
+    </AppShell>
   )
 }
