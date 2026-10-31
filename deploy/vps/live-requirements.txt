@@ -4,3 +4,5 @@ ccxt==4.5.89
 pandas==3.0.6
 numpy==2.5.4
 python-dotenv==1.2.4
+# the Telegram trade card only (trade_card.py, imported inside the Telegram thread); without it the text is sent
+pillow==13.0.0
