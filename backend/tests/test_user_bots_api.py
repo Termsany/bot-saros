@@ -52,6 +52,13 @@ class UserBotsApiTests(ApiAuthTests):
         self.assertEqual(self.ask(tok="new-token").status_code, 403)               # email not confirmed
         self.assertEqual(self.c.post("/api/user/bots", json=ASK).status_code, 401)
 
+    def test_strategy_policy_recommends_three_but_charges_slots_by_strategy(self):
+        self.assertEqual(self.ub.strategy_policy(["trend_daily", "vol_breakout", "rsi2_pullback"]),
+                         {"accepted": True, "recommended": 3, "slots": 3, "reason": "ok"})
+        self.assertEqual(self.ub.strategy_policy(["trend_daily", "vol_breakout"])["recommended"], 3)
+        self.assertEqual(self.ub.strategy_policy(["momentum_ls"])["slots"], 10)
+        self.assertFalse(self.ub.strategy_policy(["momentum_ls"], available_slots=9)["accepted"])
+
     def test_the_page_shows_the_provisioners_answer_and_the_bots(self):
         self.ask()
         (self.ipc / U1 / "trend_daily").mkdir(parents=True)

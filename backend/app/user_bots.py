@@ -13,13 +13,30 @@ DESIRED = Path(os.getenv("RAQM_USERS_DESIRED", "/opt/raqm-users/desired"))
 IPC_ROOT = Path(os.getenv("RAQM_USERS_IPC", "/opt/raqm-users/ipc"))
 
 ENVS_ALLOWED = ("demo",)      # real money for users is refused (P2.2); the provisioner checks it again as root
-MAX_USERS, MAX_STRATEGIES = 4, 2
+MAX_USERS, MAX_STRATEGIES = 4, 10
 STRATEGIES = ("trend_daily", "vol_breakout", "rsi2_pullback", "trend_breakout", "listing_short", "momentum_ls", "ratio_trend")
+STRATEGY_SLOTS = {s: 1 for s in STRATEGIES}
+STRATEGY_SLOTS["momentum_ls"] = 10
+DEFAULT_RECOMMENDED_STRATEGIES = 3
 UID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 # the per-user bounds of the existing consent record (user_live_activation.py)
 BOUNDS = {"leverage": (1, 5), "risk_per_trade_pct": (0.01, 1.0), "max_aggregate_risk_pct": (0.01, 3.0),
           "capital_usdt": (0.0, 1_000_000.0), "capital_margin_override_usdt": (0.0, 100_000.0)}
 STALE_S = 300
+
+
+def ipc_instance(uid, strategy):
+    return IPC_ROOT / f"{uid}--{strategy}"
+
+
+def strategy_policy(strategies, *, available_slots=10):
+    """Pure account policy: recommend three single-leg strategies, charge basket slots, fail closed."""
+    if not isinstance(strategies, list) or len(set(strategies)) != len(strategies) or any(s not in STRATEGIES for s in strategies):
+        return {"accepted": False, "recommended": DEFAULT_RECOMMENDED_STRATEGIES, "slots": 0, "reason": "invalid strategies"}
+    slots = sum(STRATEGY_SLOTS[s] for s in strategies)
+    if isinstance(available_slots, bool) or not isinstance(available_slots, int) or available_slots < 0 or slots > available_slots:
+        return {"accepted": False, "recommended": DEFAULT_RECOMMENDED_STRATEGIES, "slots": slots, "reason": "insufficient strategy slots"}
+    return {"accepted": True, "recommended": DEFAULT_RECOMMENDED_STRATEGIES, "slots": slots, "reason": "ok"}
 
 
 def validate(uid, doc):
@@ -45,6 +62,9 @@ def validate(uid, doc):
         raise ValueError("risk per trade above the aggregate limit")
     if clean["capital_margin_override_usdt"] > clean["capital_usdt"]:
         raise ValueError("margin above the capital")
+    available_slots = min(10, int(clean["max_aggregate_risk_pct"] / clean["risk_per_trade_pct"]))
+    if not strategy_policy(strategies, available_slots=available_slots)["accepted"]:
+        raise ValueError("strategy slots exceed account risk capacity")
     return clean
 
 
@@ -96,7 +116,7 @@ def status(uid, ipc=None, now=None):
     base = ipc / uid
     bots = {}
     for s in STRATEGIES:
-        st = _json(base / s / "live_status.json")
+        st = _json(ipc_instance(uid, s) / "live_status.json") or _json(base / s / "live_status.json")
         if st is None:
             continue
         try:

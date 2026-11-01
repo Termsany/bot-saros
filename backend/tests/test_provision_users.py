@@ -34,6 +34,11 @@ class ValidateTests(unittest.TestCase):
     def test_the_strategies_are_the_bots(self):
         self.assertEqual(set(pu.STRATEGIES), botmod.LIVE_READY_STRATEGIES)
 
+    def test_strategy_policy_is_account_based_and_fail_closed(self):
+        self.assertEqual(pu.strategy_policy(["trend_daily", "vol_breakout", "rsi2_pullback"])["slots"], 3)
+        self.assertEqual(pu.strategy_policy(["momentum_ls"])["slots"], 10)
+        self.assertFalse(pu.strategy_policy(["momentum_ls"], available_slots=9)["accepted"])
+
     def test_desired_files_are_read_as_hostile(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
             d = Path(d)
@@ -100,7 +105,7 @@ class DropinTests(unittest.TestCase):
         t = pu.dropin(U1, "trend_daily", pu.validate(U1, doc(U1)))
         for want in (f"User={pu.os_user(U1)}", "Environment=BINANCE_ENV=demo", "--expect-env demo", "--strategy trend_daily",
                      f"LoadCredential=binance:{pu.CRED_ROOT / U1 / 'binance'}", f"RAQM_RISK_DIR={pu.DATA_ROOT / U1 / 'risk'}",
-                     f"RAQM_IPC_DIR={pu.IPC_ROOT / U1 / 'trend_daily'}", "--universe 10", "--leverage 2", "ExecStart=\n"):
+                     f"RAQM_IPC_DIR={pu.IPC_ROOT / (U1 + '--trend_daily')}", "--universe 10", "--leverage 2", "ExecStart=\n"):
             self.assertIn(want, t)
         self.assertNotIn("/opt/raqm-risk", t.replace("/opt/raqm-users/ipc", ""))      # never the owner's ledgers
         self.assertEqual(len(pu.os_user(U1)), 22)
@@ -110,6 +115,11 @@ class DropinTests(unittest.TestCase):
         self.assertIn("User=nobody", t); self.assertIn("ExecStart=/bin/false", t)
         self.assertIn("ConditionPathExists=/etc/systemd/system/raqm-user@%i.service.d/user.conf", t)
         self.assertFalse([l for l in t.splitlines() if l.startswith("EnvironmentFile")]); self.assertIn("BINANCE_API_KEY", t.split("UnsetEnvironment=")[1].splitlines()[0])
+
+    def test_template_fences_an_instance_ipc_path_only(self):
+        t = (ROOT / "deploy" / "vps" / "raqm-user@.service").read_text(encoding="utf-8")
+        self.assertIn("ReadWritePaths=/opt/raqm-users/ipc/%i", t)
+        self.assertNotIn("-/opt/raqm-users/ipc", t)
 
 
 class FakeSystem:
@@ -242,7 +252,7 @@ class ReviewFindingsTests(unittest.TestCase):
 
     def test_the_request_folders_are_made_by_root_with_the_apis_group(self):
         src = (ROOT / "scripts" / "provision_users.py").read_text(encoding="utf-8")
-        self.assertIn('for p in (IPC_ROOT / uid / s, IPC_ROOT / uid / s / "commands", IPC_ROOT / uid / s / "results")', src)
+        self.assertIn('for p in (ipc_instance(uid, s), ipc_instance(uid, s) / "commands", ipc_instance(uid, s) / "results")', src)
         self.assertNotIn("os.makedirs(", src)                                       # not as the user (setgid was lost)
         self.assertIn('"/usr/bin/env", "-i"', src)
 
