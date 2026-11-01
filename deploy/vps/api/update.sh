@@ -12,12 +12,14 @@ cd "$APP"
 # flag can be switched back off while that bot keeps trading on its activation record.
 # Deploy by hand after reviewing:  sudo raqm-api-update --manual <full 40-char sha of the reviewed commit>
 real_money_bot() {
-    for f in /etc/systemd/system/raqm-*.service; do
+    # drop-ins too: a user's bot (raqm-user@<uid>--<strategy>) has its real ExecStart in the provisioner's drop-in
+    for f in /etc/systemd/system/raqm-*.service /etc/systemd/system/raqm-*.service.d/*.conf; do
         [ -f "$f" ] || continue
         # Scope BOTH checks to the ExecStart= line only: a whole-file grep for '--expect-env demo' also
         # matches the string anywhere else (e.g. a comment left over from copying raqm-trend-demo.service
         # to make a new real-money unit), wrongly treating a genuine real-money bot as not one.
-        line=$(grep -E '^ExecStart=' "$f" | head -1)
+        # The last non-empty one: a drop-in clears the template's with an empty ExecStart= first.
+        line=$(grep -E '^ExecStart=.' "$f" | tail -1)
         echo "$line" | grep -qE -- '--live' && ! echo "$line" | grep -qE -- '--expect-env demo' && return 0
     done
     return 1

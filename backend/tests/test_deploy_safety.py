@@ -103,6 +103,16 @@ class RealMoneyBotDetectionTests(unittest.TestCase):
             r = self._real_money_bot(Path(d).as_posix() + "/*.service")
         self.assertNotEqual(r.returncode, 0)
 
+    def test_a_user_bot_on_real_money_in_a_drop_in_is_found(self):
+        # Phase 2: raqm-user@.service runs nothing itself; the provisioner's drop-in holds the real command
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
+            (Path(d) / "raqm-user@.service").write_text("[Service]\nExecStart=/bin/false\n", encoding="utf-8")
+            dd = Path(d) / "raqm-user@u--trend_daily.service.d"; dd.mkdir()
+            (dd / "user.conf").write_text("[Service]\nExecStart=\nExecStart=/opt/raqm-users/code/venv/bin/python bot.py --live --expect-env live\n", encoding="utf-8")
+            self.assertEqual(self._real_money_bot(Path(d).as_posix() + "/raqm-*.service").returncode, 0)
+            (dd / "user.conf").write_text("[Service]\nExecStart=\nExecStart=/opt/raqm-users/code/venv/bin/python bot.py --live --expect-env demo\n", encoding="utf-8")
+            self.assertNotEqual(self._real_money_bot(Path(d).as_posix() + "/raqm-*.service").returncode, 0)
+
     def test_no_live_flag_is_not_real_money(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
             unit = Path(d) / "raqm-paper.service"
