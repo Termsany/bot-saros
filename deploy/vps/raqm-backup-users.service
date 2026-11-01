@@ -1,0 +1,20 @@
+# Daily backup of the users' bots' ledgers and state to the owner's Telegram chat (scripts/backup.py --users),
+# Phase 2. Root, because each user's part is built AS that user (runuser): root never opens their files. Their keys
+# are not included. Sends nothing while there is no user.
+[Unit]
+Description=Raqm daily backup of the users' bots (Telegram)
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+NoNewPrivileges=false
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+# each user's SQLite ledger is in WAL mode: even the owner's read-only copy needs to write next to it
+ReadWritePaths=/var/lib/raqm-users
+WorkingDirectory=/opt/raqm-live
+EnvironmentFile=-/opt/raqm-live/.env.telegram
+UnsetEnvironment=PYTHONPATH PYTHONHOME PYTHONSTARTUP PYTHONUSERBASE PYTHONINSPECT
+ExecStart=/opt/raqm-live/venv/bin/python -E -s scripts/backup.py --users

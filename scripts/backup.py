@@ -9,7 +9,7 @@ not included. Run daily by raqm-backup.timer as raqmlive; a failure says so in t
 
   sudo -u raqmlive sh -c 'set -a; . /opt/raqm-live/.env.telegram; set +a; cd /opt/raqm-live && venv/bin/python -E -s scripts/backup.py'
 """
-import io, json, os, sqlite3, tarfile, tempfile, urllib.request, uuid
+import io, json, os, sqlite3, sys, tarfile, tempfile, urllib.request, uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -42,6 +42,29 @@ def build(now, sources=SOURCES):
     return buf.getvalue(), n
 
 
+USERS_DATA = Path("/var/lib/raqm-users")     # Phase 2 (docs/phase2-design.md): one folder per user, theirs alone
+USERS_CODE = Path("/opt/raqm-users/code")
+
+
+def users_archive(now, data_root=USERS_DATA, dump=None):
+    """(archive bytes, user count) of every user's ledger and bot state, for raqm-backup-users (root). Each user's own
+    archive is built AS that user (runuser), so their SQLite ledger is copied by its owner with the backup API and root
+    never opens anything inside their folders; root only bundles the bytes. Their key credentials are not included."""
+    import re, subprocess
+    dump = dump or (lambda uid, d: subprocess.run(
+        ["runuser", "-u", "ru" + uid.replace("-", "")[:20], "--", str(USERS_CODE / "venv/bin/python"), "-E", "-s",
+         str(USERS_CODE / "scripts/backup.py"), "--dump", str(d)], capture_output=True, check=True, timeout=300).stdout)
+    buf, n = io.BytesIO(), 0
+    with tarfile.open(fileobj=buf, mode="w") as tar:
+        for d in sorted(data_root.iterdir()) if data_root.is_dir() else []:
+            if not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", d.name) or d.is_symlink():
+                continue
+            blob = dump(d.name, d)
+            info = tarfile.TarInfo(f"raqm-users-backup-{now:%Y%m%d}/{d.name}.tar.gz"); info.size = len(blob)
+            tar.addfile(info, io.BytesIO(blob)); n += 1
+    return buf.getvalue(), n
+
+
 def _post(method, fields, files=None):
     tok = os.getenv("TELEGRAM_BOT_TOKEN", "")
     boundary = uuid.uuid4().hex; body = io.BytesIO()
@@ -59,16 +82,25 @@ def _post(method, fields, files=None):
 
 
 def main():
-    now = datetime.now(timezone.utc); chat = os.getenv("TELEGRAM_CHAT_ID", "")
+    argv = sys.argv[1:]
+    now = datetime.now(timezone.utc)
+    if argv[:1] == ["--dump"]:            # as one user, from users_archive(): their own folders, to stdout
+        d = Path(argv[1])
+        sys.stdout.buffer.write(build(now, {"risk": d / "risk", "state": d / "state"})[0]); return
+    users = argv[:1] == ["--users"]
+    chat = os.getenv("TELEGRAM_CHAT_ID", "")
     if not (os.getenv("TELEGRAM_BOT_TOKEN") and chat):
         raise SystemExit("backup: TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID not set")
     try:
-        data, n = build(now)
+        data, n = users_archive(now) if users else build(now)
+        if users and not n:
+            return                         # no user yet: nothing to send
         if len(data) > LIMIT:
             raise RuntimeError(f"archive {len(data) // 1048576} MB is over Telegram's limit")
+        what = "بوتات المستخدمين" if users else "يومية"
         _post("sendDocument", {"chat_id": chat, "disable_notification": "true",
-                               "caption": f"💾 نسخة احتياطية يومية — {n} ملف · {len(data) / 1048576:.1f} MB"},
-              {"document": (f"raqm-backup-{now:%Y%m%d}.tar.gz", data)})
+                               "caption": f"💾 نسخة احتياطية {what} — {n} {'مستخدم' if users else 'ملف'} · {len(data) / 1048576:.1f} MB"},
+              {"document": (f"raqm-{'users-' if users else ''}backup-{now:%Y%m%d}.tar.gz", data)})
     except Exception as e:
         _post("sendMessage", {"chat_id": chat, "text": f"🚨 النسخة الاحتياطية اليومية ما اتعملتش: {type(e).__name__}: {e}"})
         raise

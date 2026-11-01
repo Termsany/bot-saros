@@ -33,7 +33,41 @@ def unit(env, strategy):
     return run("is-enabled") == "enabled", run("is-active") == "active"
 
 
-def problems(now, unit=unit, ipc=IPC, ledgers=LEDGERS):
+def check_bot(out, now, key, who, env, active, status_path):
+    """One bot's problems into `out`; returns its status (None when it isn't running or writing one)."""
+    if not active:
+        out[f"down:{key}"] = (f"البوت {who} واقف", 2); return None
+    try:
+        st = json.loads(_read_status(status_path))
+        age = (now - datetime.fromisoformat(st["updated"])).total_seconds()
+    except Exception:
+        out[f"stale:{key}"] = (f"البوت {who} مش بيكتب حالته", 2); return None
+    if env and st.get("env") not in (None, env):   # Demo and real money share a strategy's folder: the other one's leftover
+        out[f"stale:{key}"] = (f"البوت {who} لسه ما كتبش حالته (الملف من {st.get('env')})", 2); return None
+    if age > STALE_S:
+        out[f"stale:{key}"] = (f"البوت {who} ما حدّثش حالته من {int(age // 60)} دقيقة", 2); return None
+    for p in st.get("positions") or []:
+        if p.get("unprotected") or p.get("sl_unverified"):
+            why = "من غير وقف خسارة على Binance" if p.get("unprotected") else "مش متأكدين إن وقف الخسارة على Binance"
+            out[f"stop:{key}:{p.get('symbol')}"] = (f"{p.get('symbol')} في {who} {why}", 1)
+    if st.get("review"):
+        out[f"review:{key}"] = (f"{who} محتاج مراجعة: " + " · ".join(f"{k.split(':')[0]} ({(v or {}).get('reason')})" for k, v in st["review"].items()), 1)
+    block = st.get("entry_block") or ""
+    if block and "kill switch" not in block:          # the kill switch has its own alert, once per account
+        out[f"block:{key}"] = (f"الدخول متوقف في {who}: {block}", 2)
+    return st
+
+
+def _read_status(path, limit=1 << 20):
+    """A bot's status file, not followed through a symlink (the users' watchdog reads other accounts' folders)."""
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        return os.read(fd, limit).decode("utf-8")
+    finally:
+        os.close(fd)
+
+
+def problems(now, unit=unit, ipc=IPC, ledgers=LEDGERS, failed=None):
     """Every problem seen now: {key: (text, checks in a row before alerting)}."""
     out = {}
     for env in ("demo", "live"):
@@ -41,27 +75,8 @@ def problems(now, unit=unit, ipc=IPC, ledgers=LEDGERS):
         for s in STRATEGIES:
             enabled, active = unit(env, s)
             if not enabled: continue
-            watched = True; who = f"{s} ({ENV_NAME[env]})"
-            if not active:
-                out[f"down:{env}:{s}"] = (f"البوت {who} واقف", 2); continue
-            try:
-                st = json.loads((ipc / s / "live_status.json").read_text(encoding="utf-8"))
-                age = (now - datetime.fromisoformat(st["updated"])).total_seconds()
-            except Exception:
-                out[f"stale:{env}:{s}"] = (f"البوت {who} مش بيكتب حالته", 2); continue
-            if st.get("env") not in (None, env):   # Demo and real money share a strategy's folder: the other one's leftover
-                out[f"stale:{env}:{s}"] = (f"البوت {who} لسه ما كتبش حالته (الملف من {st.get('env')})", 2); continue
-            if age > STALE_S:
-                out[f"stale:{env}:{s}"] = (f"البوت {who} ما حدّثش حالته من {int(age // 60)} دقيقة", 2); continue
-            for p in st.get("positions") or []:
-                if p.get("unprotected") or p.get("sl_unverified"):
-                    why = "من غير وقف خسارة على Binance" if p.get("unprotected") else "مش متأكدين إن وقف الخسارة على Binance"
-                    out[f"stop:{env}:{s}:{p.get('symbol')}"] = (f"{p.get('symbol')} في {who} {why}", 1)
-            if st.get("review"):
-                out[f"review:{env}:{s}"] = (f"{who} محتاج مراجعة: " + " · ".join(f"{k.split(':')[0]} ({(v or {}).get('reason')})" for k, v in st["review"].items()), 1)
-            block = st.get("entry_block") or ""
-            if block and "kill switch" not in block:          # the kill switch has its own alert, once per account
-                out[f"block:{env}:{s}"] = (f"الدخول متوقف في {who}: {block}", 2)
+            watched = True
+            check_bot(out, now, f"{env}:{s}", f"{s} ({ENV_NAME[env]})", env, active, ipc / s / "live_status.json")
         if watched:
             try:
                 ks = riskmgr.load_risk_state(ledgers[env] / "risk_state.json")["kill_switch"]
@@ -69,6 +84,47 @@ def problems(now, unit=unit, ipc=IPC, ledgers=LEDGERS):
                     out[f"kill:{env}"] = (f"قفل الطوارئ اشتغل على حساب {ENV_NAME[env]} — مفيش دخول جديد لأي استراتيجية: {ks.get('reason')}", 1)
             except Exception as e:
                 out[f"ledger:{env}"] = (f"ملف المخاطر بتاع {ENV_NAME[env]} مش بيتقري: {e}", 2)
+    if (failed or _unit_failed)("raqm-watchdog-users.service"):      # the users' watchdog can't report its own crash
+        out["watchdog-users"] = ("مراقب بوتات المستخدمين نفسه واقع (raqm-watchdog-users)", 2)
+    return out
+
+
+def _unit_failed(name):
+    try:
+        return subprocess.run(["systemctl", "is-failed", "--quiet", name], capture_output=True).returncode == 0
+    except Exception:
+        return False
+
+
+# ── users' bots (Phase 2, docs/phase2-design.md): run as root with only CAP_DAC_READ_SEARCH (raqm-watchdog-users), so
+# it can read every user's status and write nothing of theirs. Their kill switch shows in their status (entry_block).
+USER_UNITS = Path("/etc/systemd/system")
+USER_IPC = Path("/opt/raqm-users/ipc")
+USER_STATE = Path("/var/lib/raqm-watchdog-users/state.json")
+
+
+def user_bots(unit_dir=USER_UNITS):
+    """[(uid, strategy)] of the users' bots the provisioner set up (one drop-in each)."""
+    out = []
+    for f in sorted(unit_dir.glob("raqm-user@*--*.service.d/user.conf")):
+        uid, _, s = f.parent.name[len("raqm-user@"):-len(".service.d")].partition("--")
+        if len(uid) == 36 and s in STRATEGIES:
+            out.append((uid, s))
+    return out
+
+
+def _user_active(uid, s):
+    r = subprocess.run(["systemctl", "is-active", f"raqm-user@{uid}--{s}.service"], capture_output=True, text=True)
+    return r.stdout.strip() == "active"
+
+
+def user_problems(now, bots=None, active=_user_active, ipc=USER_IPC):
+    out = {}
+    for uid, s in (user_bots() if bots is None else bots):
+        who = f"{s} (مستخدم {uid[:8]})"
+        st = check_bot(out, now, f"user:{uid}:{s}", who, None, active(uid, s), ipc / uid / s / "live_status.json")
+        if st and "kill switch" in (st.get("entry_block") or ""):
+            out[f"kill:user:{uid}"] = (f"قفل الطوارئ اشتغل على حساب المستخدم {uid[:8]}: {st['entry_block']}", 1)
     return out
 
 
@@ -110,10 +166,10 @@ def send(text):
                            headers={"Content-Type": "application/json"}), timeout=15)
 
 
-def checks(now):
+def checks(now, users=False):
     """problems(), or one problem saying the watchdog itself can't look: a crash here used to mean silence."""
     try:
-        return problems(now)
+        return user_problems(now) if users else problems(now)
     except Exception as e:
         return {"watchdog": (f"المراقب نفسه مش قادر يفحص البوتات: {type(e).__name__}: {e}", 2)}
 
@@ -130,18 +186,21 @@ def heartbeat(now, state, path=HEARTBEAT):
         print(f"heartbeat: {e}")
 
 
-def main():
-    try: prev = json.loads(STATE.read_text(encoding="utf-8"))
+def main(argv=None):
+    users = "--users" in (sys.argv[1:] if argv is None else argv)   # the users' bots, from raqm-watchdog-users
+    path = USER_STATE if users else STATE
+    try: prev = json.loads(path.read_text(encoding="utf-8"))
     except Exception: prev = {}
-    state, msgs = step(prev, checks(datetime.now(timezone.utc)))
+    state, msgs = step(prev, checks(datetime.now(timezone.utc), users))
     if msgs:
         try:
-            for part in chunks(["🐶 مراقب رقم"] + msgs): send(part)
+            for part in chunks(["🐶 مراقب رقم" + (" — بوتات المستخدمين" if users else "")] + msgs): send(part)
         except Exception as e:                                # not marked sent: tried again next run
             print(f"telegram: {e}"); state = {k: {**v, "sent": prev.get(k, {}).get("sent", False)} for k, v in state.items()}
             state.update({k: v for k, v in prev.items() if k not in state and v.get("sent")})
-    tmp = STATE.with_suffix(".tmp"); tmp.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8"); tmp.replace(STATE)
-    heartbeat(datetime.now(timezone.utc), state)
+    tmp = path.with_suffix(".tmp"); tmp.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8"); tmp.replace(path)
+    if not users:                 # the owner's watchdog watches the users' one (problems: watchdog-users)
+        heartbeat(datetime.now(timezone.utc), state)
 
 
 if __name__ == "__main__":
