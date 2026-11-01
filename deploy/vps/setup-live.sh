@@ -52,6 +52,8 @@ install -d -o root -g root -m 755 /opt/raqm-users "$U" "$U/backend" "$U/backend/
 for f in bot.py strategies_trend.py strategies_advanced.py strategies_wave.py trade_card.py DEPLOYED_COMMIT; do install -m 644 -o root -g root "$L/$f" "$U/$f"; done
 for f in "$L"/backend/app/*.py; do install -m 644 -o root -g root "$f" "$U/backend/app/"; done
 for f in "$L"/assets/fonts/*; do install -m 644 -o root -g root "$f" "$U/assets/fonts/"; done
+install -d -o root -g root -m 755 "$U/scripts"
+install -m 644 -o root -g root "$L/scripts/backup.py" "$U/scripts/backup.py"   # each user's part of the users' backup, run as them
 [ -x "$U/venv/bin/python" ] || python3 -m venv "$U/venv"
 "$U/venv/bin/pip" install -q --only-binary=:all: -r "$T/deploy/vps/live-requirements.txt"
 # keys: only the key lines, never the whole file. /opt/raqm-bot is writable by the paper user: a whole-file copy
@@ -123,9 +125,15 @@ install -d -o root -g root -m 755 /opt/raqm-users /opt/raqm-users/ipc /var/lib/r
 install -d -o root -g root -m 700 /var/lib/raqm-users-applied
 install -d -o root -g raqmapi -m 2770 /opt/raqm-users/desired      # the API writes users' desired state here
 install -d -o root -g root -m 700 /etc/raqm-users                   # allow.list (the owner) and users' key credentials
+# the users' bots' alerts and daily backup (P2.5): on from the start, they do nothing while there is no user
+for u in raqm-watchdog-users.service raqm-watchdog-users.timer raqm-backup-users.service raqm-backup-users.timer; do
+    install -m 644 -o root -g root "$T/deploy/vps/$u" "/etc/systemd/system/$u"
+done
 systemctl daemon-reload
 systemctl enable --now raqm-watchdog.timer >/dev/null 2>&1 || echo "warning: raqm-watchdog.timer not enabled" >&2
 systemctl enable --now raqm-backup.timer >/dev/null 2>&1 || echo "warning: raqm-backup.timer not enabled" >&2
+systemctl enable --now raqm-watchdog-users.timer >/dev/null 2>&1 || echo "warning: raqm-watchdog-users.timer not enabled" >&2
+systemctl enable --now raqm-backup-users.timer >/dev/null 2>&1 || echo "warning: raqm-backup-users.timer not enabled" >&2
 # new group lists reach a process only when it starts: the API (try-restart: only if running). The live bots are not
 # restarted here — one stopped in the middle of an order goes to review; restart them as a deliberate step:
 #   systemctl restart 'raqm-demo@*' / 'raqm-live@*'
