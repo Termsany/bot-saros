@@ -1,5 +1,6 @@
 """Problem alerts (scripts/watchdog.py, owner 2026-10-30): one message when a problem starts, one when it clears."""
 import json, sys, tempfile, unittest
+from unittest import mock
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent.parent
@@ -80,13 +81,50 @@ class WatchdogTests(unittest.TestCase):
         self.assertEqual(wd.chunks([]), [])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class WatchdogUnitTests(unittest.TestCase):
     def test_the_unit_lets_it_open_the_risk_ledgers(self):
         # ProtectSystem=strict made /opt read-only: SQLite couldn't open the ledger, a false "ledger unreadable" alert
         unit = (ROOT / "deploy" / "vps" / "raqm-watchdog.service").read_text(encoding="utf-8")
         paths = " ".join(l.split("=", 1)[1] for l in unit.splitlines() if l.startswith("ReadWritePaths="))
         for d in wd.LEDGERS.values(): self.assertIn(f"-{d.as_posix()}", paths.split())
+
+
+class HeartbeatTests(unittest.TestCase):
+    """An uptime check outside the server (owner, 2026-11-01): the watchdog can't report the VPS or itself being down."""
+    def setUp(self):
+        self.td = tempfile.TemporaryDirectory(ignore_cleanup_errors=True); self.d = Path(self.td.name)
+    def tearDown(self): self.td.cleanup()
+
+    def test_the_heartbeat_has_the_time_and_only_a_count(self):
+        wd.heartbeat(NOW, {"down:demo:x": {"count": 2, "text": "t", "sent": True}, "stale:demo:y": {"count": 1, "text": "t"}},
+                     path=self.d / "hb.json")
+        self.assertEqual(json.loads((self.d / "hb.json").read_text(encoding="utf-8")), {"at": NOW.isoformat(), "problems": 1})
+
+    def test_a_heartbeat_failure_does_not_stop_the_watchdog(self):
+        wd.heartbeat(NOW, {}, path=self.d / "missing" / "hb.json")   # folder absent: prints, no exception
+
+    def api(self, hb=None):
+        sys.path.insert(0, str(ROOT / "backend"))
+        import app.main as m
+        from fastapi.testclient import TestClient
+        if hb is not None:
+            (self.d / "watchdog_heartbeat.json").write_text(json.dumps(hb), encoding="utf-8")
+        with mock.patch.object(m, "IPC_DIR", self.d):
+            return TestClient(m.app).get("/api/health/bots")
+
+    def test_the_api_says_ok_while_the_heartbeat_is_fresh(self):
+        r = self.api({"at": datetime.now(timezone.utc).isoformat(), "problems": 2})
+        self.assertEqual(r.status_code, 200); self.assertEqual((r.json()["ok"], r.json()["problems"]), (True, 2))
+
+    def test_a_stale_or_missing_heartbeat_is_503(self):
+        self.assertEqual(self.api().status_code, 503)
+        self.assertEqual(self.api({"at": (datetime.now(timezone.utc) - timedelta(minutes=16)).isoformat()}).status_code, 503)
+        self.assertEqual(self.api({"at": "garbage"}).status_code, 503)
+
+    def test_the_unit_lets_it_write_the_heartbeat(self):
+        unit = (ROOT / "deploy" / "vps" / "raqm-watchdog.service").read_text(encoding="utf-8")
+        self.assertIn(f"-{wd.IPC.as_posix()}", " ".join(l.split("=", 1)[1] for l in unit.splitlines() if l.startswith("ReadWritePaths=")).split())
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -80,7 +80,7 @@ class ApiAuthTests(unittest.TestCase):
         # /api/plans: the plan prices the pricing page shows; /api/invites/{id}: an invitation's offer for its page
         # (the email masked, the id an unguessable secret) — accepting it needs login
         public = {"/api/health", "/api/chart", "/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc",
-                  "/api/plans", "/api/invites/{invite_id}"}
+                  "/api/plans", "/api/invites/{invite_id}", "/api/health/bots"}
         checked = 0
         for r in app.routes:
             if not hasattr(r, "methods") or r.path in public:
