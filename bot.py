@@ -169,12 +169,30 @@ def _estimate_trade_risk_usdt(margin_usdt, leverage, entry_price, sl_price):
     except (TypeError, ValueError):
         return None
 
+KEYS_CREDENTIAL = "binance"   # a user's bot (docs/phase2-design.md): systemd LoadCredential=binance:/etc/raqm-users/<uid>/binance
+
+def _binance_keys():
+    """(api key, secret). A service given a credential directory (a user's bot) reads its keys from the credential
+    only — BINANCE_API_KEY=... and BINANCE_SECRET=... lines — and never falls back to the environment, so it can't
+    trade on keys it was not given. Without one (the owner's bots): the environment, as before."""
+    cred = os.getenv("CREDENTIALS_DIRECTORY", "").strip()
+    if not cred:
+        return os.getenv("BINANCE_API_KEY", "").strip(), os.getenv("BINANCE_SECRET", "").strip()
+    vals = {}
+    try:
+        for line in (Path(cred) / KEYS_CREDENTIAL).read_text(encoding="utf-8").splitlines():
+            k, sep, v = line.partition("=")
+            if sep and k.strip() in ("BINANCE_API_KEY", "BINANCE_SECRET"): vals[k.strip()] = v.strip().strip('"').strip("'")
+    except OSError:
+        return "", ""
+    return vals.get("BINANCE_API_KEY", ""), vals.get("BINANCE_SECRET", "")
+
 def get_exchange(auth=False):
     mtype = "future" if CONFIG.get("market","future")=="future" else "spot"
     # ccxt: defaultType future = USDT-M perpetual
     kwargs = {"enableRateLimit": True, "options": {"defaultType": mtype}}
     if auth:
-        ak = os.getenv("BINANCE_API_KEY","").strip(); sc = os.getenv("BINANCE_SECRET","").strip()
+        ak, sc = _binance_keys()
         if not ak or not sc: return None, "ضع مفاتيح Binance في .env"
         kwargs["apiKey"]=ak; kwargs["secret"]=sc
         ex = ccxt.binanceusdm(kwargs) if mtype == "future" else ccxt.binance(kwargs)
