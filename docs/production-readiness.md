@@ -71,14 +71,14 @@ Fake-exchange tests passed for all of these; only the real exchange showed them.
 - The dashboard loop never runs real orders (`/api/bot/start`, the restart resume and `bot_loop` all refuse).
 - `ALLOW_LIVE_TRADING` is off on the VPS (checked 2026-10-29); `raqm-trend-demo.service` is installed but disabled.
 
-## Per-user live trading (Phase 2, PR #12)
+## Per-user live trading (Phase 2)
 
-Built: encrypted per-user key vault, audited consent record, `trend_daily` per-user execution with percent-of-equity
-sizing (fail-closed on missing equity), scheduler with per-user failure isolation, non-reentrant lock, restart
-reconciliation and kill-switch polling, `/settings/live` UI. **Not wired:** `backend/app/user_live_scheduler.py` is not
-started by any service, cron or startup path. It must not be until Phase 1 is complete for the strategies it runs.
-The server's live switch off or the operator's kill switch tripped stops per-user **entries** only: the tick still
-reconciles, polls each user's kill switch and runs exits (fixed 2026-10-31; before, the tick returned before any exit).
+[phase2-design.md](phase2-design.md): users run on the owner's order path — `bot.py --live` per user and strategy
+(`raqm-user@<uid>--<strategy>`), set up by a root provisioner from the user's desired state, Demo only for now.
+PR #12's separate per-user execution path (`user_live_trading.py`, `user_live_scheduler.py`,
+`user_exchange_manager.py`) was reviewed on 2026-11-01, found to miss most of the Demo-run and review fixes, and
+removed (P2.6, never wired to anything). Kept from it: the encrypted per-user key vault and the audited consent
+record, which the provisioner reads.
 
 ## Pre-production review (2026-10-29)
 
@@ -190,7 +190,7 @@ and 50 by the aggregate risk; each of the 7 strategies gets 8 slots.
 `215596c` (PR #63) runs on the VPS: the 7 paper bots, the API, the real-orders copy in `/opt/raqm-live`, the 7
 `raqm-demo@<strategy>` bots and `raqm-watchdog.timer`. No `raqm-live@` unit exists; `ALLOW_LIVE_TRADING` is off;
 `readiness_evidence.json` is absent, so live activation is refused; `user_live_scheduler.py` is still not started by
-anything.
+anything (removed since, P2.6).
 
 ## Deployment (2026-10-29)
 
