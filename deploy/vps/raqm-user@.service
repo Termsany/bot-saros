@@ -1,0 +1,34 @@
+# One user's strategy (docs/phase2-design.md): bot.py --live, the owner's order path. Instance <uid>--<strategy>.
+# Only scripts/provision_users.py starts these; it writes each instance's drop-in (user, keys credential, folders,
+# environment, arguments). Without the drop-in nothing runs: the condition below fails, and the fallbacks here are
+# an unprivileged user and a command that exits.
+[Unit]
+Description=Raqm user bot %i (Binance, docs/phase2-design.md)
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/systemd/system/raqm-user@%i.service.d/user.conf
+
+[Service]
+User=nobody
+Group=nogroup
+# the users' copy of the owner's code at the same commit (setup-live.sh): the owner's /opt/raqm-live is its group's only
+WorkingDirectory=/opt/raqm-users/code
+ExecStart=/bin/false
+# no EnvironmentFile: neither the owner's keys nor the owner's Telegram reach a user's bot
+UnsetEnvironment=PYTHONPATH PYTHONHOME PYTHONSTARTUP PYTHONUSERBASE PYTHONINSPECT BINANCE_API_KEY BINANCE_SECRET
+Restart=always
+RestartSec=60
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryMax=300M
+
+[Install]
+WantedBy=multi-user.target

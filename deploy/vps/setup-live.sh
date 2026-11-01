@@ -40,10 +40,20 @@ install -m 644 -o root -g root "$T/scripts/demo_e2e.py" "$L/scripts/demo_e2e.py"
 install -m 644 -o root -g root "$T/scripts/live_report.py" "$L/scripts/live_report.py"   # the daily report (read only)
 install -m 644 -o root -g root "$T/scripts/watchdog.py" "$L/scripts/watchdog.py"         # problem alerts (read only)
 install -m 644 -o root -g root "$T/scripts/backup.py" "$L/scripts/backup.py"             # daily backup to Telegram (read only)
+install -m 644 -o root -g root "$T/scripts/provision_users.py" "$L/scripts/provision_users.py"   # Phase 2 users' bots (root)
 echo "$SHA" > "$L/DEPLOYED_COMMIT"
 # packages: only what the bot imports, pinned, from wheels (deploy/vps/live-requirements.txt)
 [ -x "$L/venv/bin/python" ] || python3 -m venv "$L/venv"
 "$L/venv/bin/pip" install -q --only-binary=:all: -r "$T/deploy/vps/live-requirements.txt"
+# Phase 2 (docs/phase2-design.md): the same code for users' bots, readable by every user's OS account — the owner's
+# copy above is the owner's group only, and its state folder sits inside it. Root's, copied from the copy just made.
+U=/opt/raqm-users/code
+install -d -o root -g root -m 755 /opt/raqm-users "$U" "$U/backend" "$U/backend/app" "$U/assets" "$U/assets/fonts"
+for f in bot.py strategies_trend.py strategies_advanced.py strategies_wave.py trade_card.py DEPLOYED_COMMIT; do install -m 644 -o root -g root "$L/$f" "$U/$f"; done
+for f in "$L"/backend/app/*.py; do install -m 644 -o root -g root "$f" "$U/backend/app/"; done
+for f in "$L"/assets/fonts/*; do install -m 644 -o root -g root "$f" "$U/assets/fonts/"; done
+[ -x "$U/venv/bin/python" ] || python3 -m venv "$U/venv"
+"$U/venv/bin/pip" install -q --only-binary=:all: -r "$T/deploy/vps/live-requirements.txt"
 # keys: only the key lines, never the whole file. /opt/raqm-bot is writable by the paper user: a whole-file copy
 # carried any line it planted (PYTHONPATH=/opt/raqm-bot -> its ccxt.py runs with the keys). Symlinks are refused.
 KEYS='^(BINANCE_API_KEY|BINANCE_SECRET|BINANCE_LIVE_ACCOUNT)='
@@ -104,6 +114,15 @@ install -m 644 -o root -g root "$T/deploy/vps/raqm-watchdog.timer" /etc/systemd/
 # the daily backup of the bots' records to Telegram (raqmlive, read only)
 install -m 644 -o root -g root "$T/deploy/vps/raqm-backup.service" /etc/systemd/system/raqm-backup.service
 install -m 644 -o root -g root "$T/deploy/vps/raqm-backup.timer" /etc/systemd/system/raqm-backup.timer
+# Phase 2 (docs/phase2-design.md): the users' bot template and the provisioner. The timer is NOT enabled here —
+# switching users' bots on is a deliberate step: systemctl enable --now raqm-users-provision.timer
+install -m 644 -o root -g root "$T/deploy/vps/raqm-user@.service" /etc/systemd/system/raqm-user@.service
+install -m 644 -o root -g root "$T/deploy/vps/raqm-users-provision.service" /etc/systemd/system/raqm-users-provision.service
+install -m 644 -o root -g root "$T/deploy/vps/raqm-users-provision.timer" /etc/systemd/system/raqm-users-provision.timer
+install -d -o root -g root -m 755 /opt/raqm-users /opt/raqm-users/ipc /var/lib/raqm-users
+install -d -o root -g root -m 700 /var/lib/raqm-users-applied
+install -d -o root -g raqmapi -m 2770 /opt/raqm-users/desired      # the API writes users' desired state here
+install -d -o root -g root -m 700 /etc/raqm-users                   # allow.list (the owner) and users' key credentials
 systemctl daemon-reload
 systemctl enable --now raqm-watchdog.timer >/dev/null 2>&1 || echo "warning: raqm-watchdog.timer not enabled" >&2
 systemctl enable --now raqm-backup.timer >/dev/null 2>&1 || echo "warning: raqm-backup.timer not enabled" >&2

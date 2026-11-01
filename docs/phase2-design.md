@@ -40,7 +40,7 @@ tested on Demo is what users run. The old per-user execution modules are removed
                          raqm-user@<uid>--<strategy>.service   (bot.py --live, OS user ru-<n>)
                            keys: systemd credential, readable by that service only
                            ledger: /var/lib/raqm-users/<uid>/risk     state: /var/lib/raqm-users/<uid>/state
-                           status / close requests: /opt/raqm-ipc-users/<uid>/<strategy>  (read by the API)
+                           status / close requests: /opt/raqm-users/ipc/<uid>/<strategy>  (read by the API)
 ```
 
 ### 1. The site and the API (no trading)

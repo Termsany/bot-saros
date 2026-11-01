@@ -1,0 +1,11 @@
+# Phase 2 provisioner (scripts/provision_users.py): applies each user's desired state. Root: it creates OS users,
+# writes systemd credentials and units. Demo only in code (P2.2).
+[Unit]
+Description=Raqm: apply users' desired state (user bots, Demo only)
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/raqm-live
+ExecStart=/opt/raqm-live/venv/bin/python -E -s /opt/raqm-live/scripts/provision_users.py
+UnsetEnvironment=PYTHONPATH PYTHONHOME PYTHONSTARTUP PYTHONUSERBASE PYTHONINSPECT
