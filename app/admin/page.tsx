@@ -5,6 +5,7 @@ import { Logo } from "@/components/Logo"
 import { AppShell } from "@/components/AppShell"
 import { CardHeader, Dot, PageHeader, Pill, Toggle, btn, field, label, type Tone } from "@/components/ui"
 import { LiveStrategies } from "@/components/LiveStrategies"
+import { AdminUserBots } from "@/components/AdminUserBots"
 import { AdminOverview } from "@/components/AdminOverview"
 import { AdminInvites, PlanPrices } from "@/components/AdminInvites"
 import { TIERS } from "@/lib/strategies"
@@ -498,7 +499,7 @@ export default function AdminPage() {
           </div>
         )}
 
-        {section === "real" && <LiveStrategies />}
+        {section === "real" && <><LiveStrategies /><div className="mt-5"><AdminUserBots /></div></>}
 
         {section === "live" && (
           <div className="space-y-5">
