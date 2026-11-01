@@ -81,6 +81,13 @@ export async function apiLiveStatus(): Promise<any|null>{
     const r=await fetch(`${API}/api/live/status`, { headers, cache: "no-store" }); return r.ok ? r.json() : null
   }catch{ return null }
 }
+/** The Demo measurement: each strategy's own closed Demo trades against the backtest baseline (app/demo_measure.py). */
+export async function apiLiveMeasurement(): Promise<any|null>{
+  try{
+    const headers = await signedInHeaders(); if(!headers) return null
+    const r=await fetch(`${API}/api/live/measurement`, { headers, cache: "no-store" }); return r.ok ? r.json() : null
+  }catch{ return null }
+}
 export async function apiLiveStrategies(env: "live"|"demo" = "live"): Promise<any|null>{
   try{
     const headers = await signedInHeaders(); if(!headers) return null
