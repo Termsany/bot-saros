@@ -1189,6 +1189,25 @@ async def live_status(user: dict = Depends(require_admin)):
     out = {s: _live_status_of(s) for s in LIVE_STRATEGIES}
     return {"running": any(v.get("running") for v in out.values()), "strategies": out}
 
+from app import demo_measure
+
+@app.get("/api/live/measurement")
+async def live_measurement(user: dict = Depends(require_admin)):
+    """The Demo measurement: each strategy's own closed Demo trades (RAQM_IPC_DIR/<strategy>/closed.json, written by
+    the bot) against the backtest baseline (lib/demo-baseline.json), with its sample and status (app/demo_measure.py)."""
+    closed = {}
+    for s in LIVE_STRATEGIES:
+        try:
+            doc = json.loads((IPC_DIR / s / "closed.json").read_text(encoding="utf-8"))
+            if doc.get("env") == "demo": closed[s] = doc.get("closed") or []
+        except Exception:
+            pass
+    try:
+        baseline = json.loads((BOT_DIR / "lib" / "demo-baseline.json").read_text(encoding="utf-8"))
+    except Exception:
+        baseline = None
+    return {**demo_measure.measure(closed, baseline), "baseline_available": baseline is not None}
+
 
 @app.get("/api/live/strategies")
 async def live_strategies(env: str = "live", user: dict = Depends(require_admin)):

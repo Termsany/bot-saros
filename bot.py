@@ -2682,6 +2682,20 @@ def write_live_status(state, prices, analyses=None):
             "review": state.get("recovery_required") or {}, "entry_block": _ENTRY_BLOCK["reason"], "manual_hold": list(state.get("manual_hold", {})),
             "last_block": dict(_LAST_BLOCK) or None})
     except Exception as e: log(f"live status: {e}")
+    _write_closed(d, state)
+
+_CLOSED_WRITTEN = {"n": None}   # how many closed trades closed.json holds: rewritten only when a trade closes
+
+def _write_closed(d, state):
+    """Every closed real-orders trade of this bot for the admin page's Demo-vs-baseline table (backend/app/demo_measure.py):
+    live_status.json keeps only the last 30. Rewritten when the count changes, and on the bot's first cycle."""
+    rows = [h for h in state.get("history", []) if h.get("type") == "live"]
+    if _CLOSED_WRITTEN["n"] == len(rows): return
+    try:
+        _write_json_atomic(d / "closed.json", {"updated": datetime.now(timezone.utc).isoformat(), "env": binance_env(),
+            "closed": [{k: h.get(k) for k in ("symbol", "side", "opened", "time", "pnl", "pnl_pct", "reason", "by")} for h in rows]})
+        _CLOSED_WRITTEN["n"] = len(rows)
+    except Exception as e: log(f"closed trades: {e}")
 
 def try_enter_trend(symbol, analysis, state, ex):
     """Daily trend: buy at market when the last closed daily candle turns the trend on; sell when it turns off.

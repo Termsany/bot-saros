@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useState } from "react"
 import { apiLiveStatus, apiLiveStrategies, apiSetCapital, apiSetLiveStrategies } from "@/lib/api"
 import { LivePositions } from "@/components/LivePositions"
+import { DemoMeasurement } from "@/components/DemoMeasurement"
 import { Card, CardHeader, Pill, Toggle, btn, field, label, type Tone } from "@/components/ui"
 
 const usd = (v: number) => `${v < 0 ? "−" : ""}$${Math.abs(v).toLocaleString("en-US", { maximumFractionDigits: 2 })}`
@@ -182,6 +183,8 @@ export function LiveStrategiesView({ env, onEnv, cfg, status, chosen, onToggle, 
         </Card>
         <CapitalPanel env={env} cfg={cfg} reload={reload} />
       </div>
+
+      {env === "demo" && <DemoMeasurement labels={LABELS} />}
 
       {withBots.length > 0 && <h2 className="pt-1 text-[17px] font-bold">الصفقات المفتوحة على Binance</h2>}
       {withBots.map(r => <LivePositions key={r.id} strategy={r.id} label={LABELS[r.id] || r.id} st={status.strategies[r.id]} reload={reload} />)}
