@@ -26,8 +26,9 @@ def _valid_v2_provenance(provenance):
         and isinstance(provenance["evidence_id"], str) and bool(provenance["evidence_id"].strip())
         and all(isinstance(provenance[k], str) and bool(provenance[k].strip()) for k in ("producer", "owner"))
         and isinstance(review, dict) and set(review) == {"reviewers", "open_findings"}
-        and isinstance(review["reviewers"], list) and len(set(review["reviewers"])) >= 2
-        and all(isinstance(r, str) and r.strip() for r in review["reviewers"])
+        and isinstance(review["reviewers"], list)
+                and all(isinstance(r, str) and r.strip() for r in review["reviewers"])
+                and len(set(review["reviewers"])) >= 2
         and review["open_findings"] == 0
     )
 

@@ -31,7 +31,8 @@ def ipc_instance(uid, strategy):
 
 def strategy_policy(strategies, *, available_slots=10):
     """Pure account policy: recommend three single-leg strategies, charge basket slots, fail closed."""
-    if not isinstance(strategies, list) or len(set(strategies)) != len(strategies) or any(s not in STRATEGIES for s in strategies):
+    if (not isinstance(strategies, list) or not all(isinstance(s, str) for s in strategies)
+            or len(set(strategies)) != len(strategies) or any(s not in STRATEGIES for s in strategies)):
         return {"accepted": False, "recommended": DEFAULT_RECOMMENDED_STRATEGIES, "slots": 0, "reason": "invalid strategies"}
     slots = sum(STRATEGY_SLOTS[s] for s in strategies)
     if isinstance(available_slots, bool) or not isinstance(available_slots, int) or available_slots < 0 or slots > available_slots:
@@ -47,7 +48,8 @@ def validate(uid, doc):
     if env not in ENVS_ALLOWED:
         raise ValueError(f"environment {env!r} not allowed")
     strategies = doc.get("strategies") or []
-    if not isinstance(strategies, list) or len(set(strategies)) != len(strategies) or any(s not in STRATEGIES for s in strategies):
+    if (not isinstance(strategies, list) or not all(isinstance(s, str) for s in strategies)
+            or len(set(strategies)) != len(strategies) or any(s not in STRATEGIES for s in strategies)):
         raise ValueError("strategies")
     if len(strategies) > MAX_STRATEGIES:
         raise ValueError(f"more than {MAX_STRATEGIES} strategies")
