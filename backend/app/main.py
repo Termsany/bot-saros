@@ -1959,6 +1959,22 @@ class UserLiveEnableReq(_BM2):
     leverage: Optional[int] = None
     risk_per_trade_pct: Optional[float] = None
     max_aggregate_risk_pct: Optional[float] = None
+    environment: str = "live"      # "demo": Binance Demo (play money), allowed while the server's real-money switch is off
+
+class UserBotsReq(_BM2):
+    """A user's desired bots (Phase 2): checked again by app/user_bots.validate here and by the root provisioner."""
+    env: str = "demo"
+    enabled: bool
+    strategies: List[str] = Field(max_length=7)
+    leverage: int
+    risk_per_trade_pct: float
+    max_aggregate_risk_pct: float
+    capital_usdt: float = 0
+    capital_margin_override_usdt: float = 0
+
+class UserBotCloseReq(_BM2):
+    strategy: str = Field(pattern=r"^[a-z0-9_]{1,30}$")
+    symbol: str
 
 @app.get("/api/user/keys/status")
 async def user_keys_status(user: dict = Depends(require_user)):
@@ -1992,12 +2008,15 @@ async def user_live_status(user: dict = Depends(require_user)):
         return {"enabled": False}
     return {"enabled": bool(rec["enabled"]), "exchange": rec["exchange"], "leverage": rec["leverage"],
             "risk_per_trade_pct": rec["risk_per_trade_pct"], "max_aggregate_risk_pct": rec["max_aggregate_risk_pct"],
-            "consented_at": rec["consented_at"]}
+            "consented_at": rec["consented_at"], "environment": rec.get("environment") or "live"}
 
 @app.post("/api/user/live/enable")
 async def user_live_enable(req: UserLiveEnableReq, request: Request, user: dict = Depends(require_user)):
     _require_confirmed(user)
-    if not live_trading_allowed():   # per-user live trading obeys the server's real-money switch like everything else
+    if req.environment not in ("demo", "live"):
+        raise HTTPException(400, "environment must be demo or live")
+    # real money obeys the server's switch like everything else; a Demo consent trades play money only
+    if req.environment == "live" and not live_trading_allowed():
         raise HTTPException(403, "live trading is off on this server")
     from app.user_keys_vault import has_live_configured_keys
     from app.user_live_activation import enable_user_live
@@ -2008,7 +2027,7 @@ async def user_live_enable(req: UserLiveEnableReq, request: Request, user: dict 
         enable_user_live(USER_LIVE_ACTIVATION_PATH, user_id=user["id"], exchange=ex, confirm=req.confirm,
                           actor=str(user.get("email") or user["id"]), ip=(request.client.host if request.client else None),
                           leverage=req.leverage, risk_per_trade_pct=req.risk_per_trade_pct,
-                          max_aggregate_risk_pct=req.max_aggregate_risk_pct)
+                          max_aggregate_risk_pct=req.max_aggregate_risk_pct, environment=req.environment)
     except (PermissionError, ValueError) as e:
         raise HTTPException(400, str(e))
     from app.user_keys_vault import set_user_paper
@@ -2020,6 +2039,76 @@ async def user_live_disable(user: dict = Depends(require_user)):
     from app.user_live_activation import disable_user_live
     disable_user_live(USER_LIVE_ACTIVATION_PATH, user_id=user["id"], reason="user disabled")
     return {"ok": True}
+
+# ── A user's own bots (Phase 2, docs/phase2-design.md): the API writes what the user asks for and reads their bots'
+# status; the root provisioner decides and runs them (the owner's approval, consent, keys, cap — Demo only). The user
+# id is always the session's: a user reaches only their own desired state and their own bots' folders.
+from app import user_bots
+
+@app.get("/api/user/bots")
+async def user_bots_get(user: dict = Depends(require_user)):
+    return {"desired": user_bots.read_desired(user["id"]), **user_bots.status(user["id"]),
+            "rules": {"envs": list(user_bots.ENVS_ALLOWED), "max_strategies": user_bots.MAX_STRATEGIES,
+                      "strategies": list(user_bots.STRATEGIES), "bounds": user_bots.BOUNDS}}
+
+@app.post("/api/user/bots")
+async def user_bots_set(req: UserBotsReq, user: dict = Depends(require_user)):
+    _require_confirmed(user)
+    rate_limit(user["id"], "user_bots", 10, 60)
+    try:
+        return {"ok": True, "desired": user_bots.write_desired(user["id"], req.model_dump())}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+@app.post("/api/user/bots/close")
+async def user_bots_close(req: UserBotCloseReq, user: dict = Depends(require_user)):
+    """Close one of the user's own positions: a request in that bot's folder, run within a minute (only closes)."""
+    rate_limit(user["id"], "user_bots_close", 10, 60)
+    if req.strategy not in user_bots.STRATEGIES:
+        raise HTTPException(400, "unknown strategy")
+    sym = req.symbol.strip().upper()
+    if not LIVE_SYMBOL_RE.match(sym):
+        raise HTTPException(400, "bad symbol")
+    st = user_bots.status(user["id"])["bots"].get(req.strategy) or {}
+    if not st.get("running"):
+        raise HTTPException(409, "this bot isn't running — close it in Binance")
+    if sym.split(":")[0] not in {p.get("symbol") for p in st.get("positions") or []}:
+        raise HTTPException(404, "no open position on that coin")
+    rid = uuid.uuid4().hex
+    base = user_bots.IPC_ROOT / user["id"]
+    _drop_request(base / req.strategy / "commands", base, rid,
+                  {"id": rid, "symbol": sym, "at_epoch": _time.time(), "by": user.get("email")})
+    return {"ok": True, "id": rid}
+
+@app.get("/api/user/bots/close/{strategy}/{rid}")
+async def user_bots_close_result(strategy: str, rid: str, user: dict = Depends(require_user)):
+    if strategy not in user_bots.STRATEGIES or not re.fullmatch(r"[0-9a-f]{32}", rid):
+        raise HTTPException(400, "bad request")
+    d = user_bots.IPC_ROOT / user["id"] / strategy
+    f = d / "results" / f"{rid}.json"
+    if not f.exists():
+        return {"done": False, "pending": (d / "commands" / f"close-{rid}.json").exists()}
+    return {"done": True, **json.loads(f.read_text(encoding="utf-8"))}
+
+@app.get("/api/admin/user-bots")
+async def admin_user_bots(user: dict = Depends(require_admin)):
+    """Every user who asked for bots: what they asked, the provisioner's answer, their bots' positions and problems."""
+    out = []
+    try:
+        files = sorted(user_bots.DESIRED.glob("*.json"))
+    except OSError:
+        files = []
+    for f in files:
+        uid = f.stem
+        if not user_bots.UID_RE.match(uid):
+            continue
+        st = user_bots.status(uid)
+        bots = {s: {"running": b.get("running"), "positions": len(b.get("positions") or []),
+                    "entry_block": b.get("entry_block") or "", "review": bool(b.get("review")),
+                    "unprotected": any(p.get("unprotected") or p.get("sl_unverified") for p in b.get("positions") or [])}
+                for s, b in st["bots"].items()}
+        out.append({"user_id": uid, "desired": user_bots.read_desired(uid), "provision": st["provision"], "bots": bots})
+    return {"users": out, "max_users": user_bots.MAX_USERS}
 
 @app.get("/api/trades")
 async def api_trades(limit: int = 50, user: dict = Depends(require_admin)):

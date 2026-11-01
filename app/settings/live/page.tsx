@@ -5,6 +5,7 @@ import { Card, CardHeader, PageHeader, Pill, btn, field, label } from "@/compone
 import { ShieldCheck, Eye, EyeOff, Power, CheckCircle2 } from "lucide-react"
 import { authHeaders } from "@/lib/supabase"
 import { CONSENT_TEXT } from "@/lib/liveConsent"
+import { UserBots } from "@/components/UserBots"
 
 const EXCHANGES = [
   { id: "binance", name: "Binance" },
@@ -14,7 +15,7 @@ const EXCHANGES = [
 ] as const
 
 type KeyStatus = { configured: boolean; paper: boolean }
-type LiveStatus = { enabled: boolean; exchange?: string; leverage?: number; risk_per_trade_pct?: number; max_aggregate_risk_pct?: number; consented_at?: string }
+type LiveStatus = { enabled: boolean; exchange?: string; leverage?: number; risk_per_trade_pct?: number; max_aggregate_risk_pct?: number; consented_at?: string; environment?: string }
 
 /**
  * User-facing live-trading settings — require_user, NOT admin. Every call here
@@ -92,11 +93,12 @@ export default function UserLiveSettingsPage() {
     try {
       const r = await fetch(`${API}/api/user/live/enable`, {
         method: "POST", headers: await authHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify({ exchange, confirm: confirmText, leverage, risk_per_trade_pct: riskPerTrade, max_aggregate_risk_pct: maxRisk }),
+        // users trade on Binance Demo only for now (docs/phase2-design.md): the consent is recorded for Demo
+        body: JSON.stringify({ exchange, confirm: confirmText, leverage, risk_per_trade_pct: riskPerTrade, max_aggregate_risk_pct: maxRisk, environment: "demo" }),
       })
       const j = await r.json().catch(() => ({}))
       if (r.ok) {
-        setMsg({ type: "success", text: "تم تفعيل LIVE على مسؤوليتك الخاصة" })
+        setMsg({ type: "success", text: "تم تسجيل موافقتك على Binance Demo — اختار البوتات تحت" })
         setConfirmText(""); setAgreeChecked(false)
         loadStatus()
       } else {
@@ -138,7 +140,7 @@ export default function UserLiveSettingsPage() {
   return (
     <AppShell active="/settings/live">
       <PageHeader title="التداول الحقيقي على حسابك" subtitle="حسابك، مفاتيحك، قرارك · مستقل تمامًا عن حساب الإدارة"
-        status={<Pill tone={liveStatus.enabled ? "profit" : "neutral"}>{liveStatus.enabled ? `● LIVE على ${liveStatus.exchange}` : "مش مفعّل"}</Pill>}/>
+        status={<Pill tone={liveStatus.enabled ? "profit" : "neutral"}>{liveStatus.enabled ? `● ${liveStatus.environment === "demo" ? "Demo" : "LIVE"} على ${liveStatus.exchange}` : "مش مفعّل"}</Pill>}/>
 
       <ol className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {steps.map(([t, h, s], i) => (
@@ -199,8 +201,8 @@ export default function UserLiveSettingsPage() {
             <CardHeader title="3 · الموافقة والتفعيل" sub="على مسؤوليتك الخاصة"/>
             {liveStatus.enabled ? (
               <div className="space-y-3">
-                <div className="flex items-center gap-2 text-sm text-profit"><CheckCircle2 size={16}/> LIVE مفعّل على {liveStatus.exchange} · x{liveStatus.leverage} · {liveStatus.risk_per_trade_pct}% للصفقة · أقصى {liveStatus.max_aggregate_risk_pct}%</div>
-                <button onClick={disableLive} disabled={busy} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-loss px-4 py-2.5 text-sm font-semibold text-void"><Power size={15}/> وقّف التداول الحقيقي دلوقتي</button>
+                <div className="flex items-center gap-2 text-sm text-profit"><CheckCircle2 size={16}/> موافق على {liveStatus.exchange}{liveStatus.environment === "demo" ? " Demo" : ""} · x{liveStatus.leverage} · {liveStatus.risk_per_trade_pct}% للصفقة · أقصى {liveStatus.max_aggregate_risk_pct}%</div>
+                <button onClick={disableLive} disabled={busy} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-loss px-4 py-2.5 text-sm font-semibold text-void"><Power size={15}/> اسحب موافقتك (الدخول بيقف)</button>
               </div>
             ) : (
               <div className="space-y-3">
@@ -212,11 +214,13 @@ export default function UserLiveSettingsPage() {
                   <input type="checkbox" checked={agreeChecked} onChange={e => setAgreeChecked(e.target.checked)} className="h-4 w-4 accent-corona"/>
                   قريت وفاهم المخاطر بالكامل
                 </label>
-                <button onClick={enableLive} disabled={busy || !consentReady || !!riskError || !keysReady} className={`${btn.primary} w-full`}>فعّل LIVE على {exName}</button>
+                <button onClick={enableLive} disabled={busy || !consentReady || !!riskError || !keysReady} className={`${btn.primary} w-full`}>وافق على {exName} Demo (فلوس وهمية)</button>
                 {!keysReady && <p className="text-[12px] text-faint">احفظ مفاتيح {exName} الأول.</p>}
               </div>
             )}
           </Card>
+
+          <UserBots consent={liveStatus} />
         </div>
 
         <Card>
@@ -237,7 +241,7 @@ export default function UserLiveSettingsPage() {
               <Pill tone={liveStatus.enabled ? "profit" : "neutral"}>{liveStatus.enabled ? "شغال" : "مش مفعّل"}</Pill>
             </div>
           </div>
-          <p className="mt-4 rounded-xl border border-loss/40 bg-loss/[0.06] p-3 text-[12px] leading-6 text-muted"><b className="text-loss">لو التداول الحقيقي مقفول على السيرفر</b> هيترفض التفعيل حتى لو كمّلت الخطوات. تقدر تجهّز مفاتيحك وحدودك من دلوقتي.</p>
+          <p className="mt-4 rounded-xl border border-corona/40 bg-corona/[0.06] p-3 text-[12px] leading-6 text-muted"><b className="text-corona">دلوقتي على Binance Demo بس</b> (فلوس وهمية): اعمل مفاتيح من وضع Demo Trading في Binance. الفلوس الحقيقية مقفولة لحد ما الاستراتيجيات تخلص قياسها.</p>
         </Card>
       </div>
     </AppShell>

@@ -45,18 +45,27 @@ def _connect(path):
         consent_text TEXT NOT NULL, consented_at TEXT NOT NULL, actor TEXT NOT NULL, ip TEXT,
         disabled_at TEXT, disabled_reason TEXT
     )""")
+    # which money the consent is for (Phase 2): records from before it was recorded were real-money ones
+    if "environment" not in {r[1] for r in con.execute("PRAGMA table_info(user_live_activation)")}:
+        con.execute("ALTER TABLE user_live_activation ADD COLUMN environment TEXT NOT NULL DEFAULT 'live'")
     return con
 
 
+ENVIRONMENTS = ("demo", "live")
+
+
 def enable_user_live(path, *, user_id, exchange, confirm, actor, ip=None,
-                      leverage=None, risk_per_trade_pct=None, max_aggregate_risk_pct=None):
-    """Record an audited per-user consent to go LIVE on `exchange` with their own keys.
+                      leverage=None, risk_per_trade_pct=None, max_aggregate_risk_pct=None, environment="live"):
+    """Record an audited per-user consent to trade on `exchange` with their own keys — on Binance Demo (play money)
+    or real money (`environment`). A Demo consent never counts for real money.
 
     `confirm` must exactly equal CONSENT_TEXT: this is the explicit confirmation step,
     not a bare boolean checkbox, so the audit trail proves what the user agreed to.
     """
     if not user_id or not exchange:
         raise ValueError("user_id and exchange are required")
+    if environment not in ENVIRONMENTS:
+        raise ValueError("environment must be demo or live")
     if confirm != CONSENT_TEXT:
         raise PermissionError("explicit consent text does not match — live trading was not enabled")
     lev = int(leverage) if leverage is not None else DEFAULT_LEVERAGE
@@ -75,14 +84,14 @@ def enable_user_live(path, *, user_id, exchange, confirm, actor, ip=None,
         con.execute("BEGIN IMMEDIATE")
         con.execute("""INSERT INTO user_live_activation
             (user_id, exchange, enabled, leverage, risk_per_trade_pct, max_aggregate_risk_pct,
-             consent_text, consented_at, actor, ip, disabled_at, disabled_reason)
-            VALUES(?,?,1,?,?,?,?,?,?,?,NULL,NULL)
+             consent_text, consented_at, actor, ip, disabled_at, disabled_reason, environment)
+            VALUES(?,?,1,?,?,?,?,?,?,?,NULL,NULL,?)
             ON CONFLICT(user_id) DO UPDATE SET
               exchange=excluded.exchange, enabled=1, leverage=excluded.leverage,
               risk_per_trade_pct=excluded.risk_per_trade_pct, max_aggregate_risk_pct=excluded.max_aggregate_risk_pct,
               consent_text=excluded.consent_text, consented_at=excluded.consented_at,
-              actor=excluded.actor, ip=excluded.ip, disabled_at=NULL, disabled_reason=NULL
-            """, (user_id, exchange, lev, rpt, agg, confirm, _now(), actor, ip))
+              actor=excluded.actor, ip=excluded.ip, disabled_at=NULL, disabled_reason=NULL, environment=excluded.environment
+            """, (user_id, exchange, lev, rpt, agg, confirm, _now(), actor, ip, environment))
         con.execute("COMMIT")
     except Exception:
         con.execute("ROLLBACK")

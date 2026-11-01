@@ -31,7 +31,8 @@ install -d -o root -g root -m 755 "$L/assets" "$L/assets/fonts"
 for f in "$T"/assets/fonts/*; do install -m 644 -o root -g root "$f" "$L/assets/fonts/"; done
 install -d -o root -g root -m 755 "$L/backend" "$L/backend/app"
 # every backend module bot.py imports (stdlib only): order placement, multi-leg engine, execution checks, risk ledger, activation
-for m in __init__ oco multi_leg_execution execution_safety risk_manager live_activation; do
+# (+ user_bots: the users' rules the provisioner shares with the API)
+for m in __init__ oco multi_leg_execution execution_safety risk_manager live_activation user_bots; do
     install -m 644 -o root -g root "$T/backend/app/$m.py" "$L/backend/app/$m.py"
 done
 # Phase 1 harness (scripts/demo_e2e.py): runs as raqmlive from this root-owned copy, refuses anything but Demo

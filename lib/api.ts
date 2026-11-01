@@ -116,6 +116,31 @@ export async function apiLiveCloseResult(strategy: string, id: string): Promise<
   const r=await fetch(`${API}/api/live/close/${strategy}/${id}`, { headers: await authHeaders(), cache: "no-store" })
   return r.ok ? r.json() : { done: false }
 }
+// ── a user's own bots (Phase 2): what they ask for, their bots' status, closing — always the signed-in user's own
+export async function apiUserBots(): Promise<any|null>{
+  try{
+    const headers = await signedInHeaders(); if(!headers) return null
+    const r=await fetch(`${API}/api/user/bots`, { headers, cache: "no-store" }); return r.ok ? r.json() : null
+  }catch{ return null }
+}
+export async function apiSetUserBots(body: any): Promise<any>{
+  const r=await fetch(`${API}/api/user/bots`, { method:"POST", headers: await authHeaders(JSON_CT), body: JSON.stringify(body) })
+  const d = await r.json().catch(()=>({}))
+  if(!r.ok) throw new Error(d.detail || "ما اتحفظش")
+  return d
+}
+export async function apiUserBotClose(strategy: string, symbol: string): Promise<{ id: string }>{
+  const r=await fetch(`${API}/api/user/bots/close`, { method:"POST", headers: await authHeaders(JSON_CT), body: JSON.stringify({ strategy, symbol }) })
+  const d = await r.json().catch(()=>({}))
+  if(!r.ok) throw new Error(d.detail || "الطلب ما اتبعتش")
+  return d
+}
+export async function apiAdminUserBots(): Promise<any|null>{
+  try{
+    const headers = await signedInHeaders(); if(!headers) return null
+    const r=await fetch(`${API}/api/admin/user-bots`, { headers, cache: "no-store" }); return r.ok ? r.json() : null
+  }catch{ return null }
+}
 export function chartUrl(file:string){ return `${API}/api/chart?file=${encodeURIComponent(file)}` }
 /** The chart needs the user's login (it's theirs only) — an <img src> can't send it, so fetch it and show a local copy. */
 export async function apiChartObjectUrl(file:string): Promise<string|null>{

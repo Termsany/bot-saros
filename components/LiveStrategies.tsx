@@ -103,7 +103,7 @@ function CapitalPanel({ env, cfg, reload }: { env: "demo"|"live", cfg: any, relo
 // trades a strategy opens at once: a momentum basket is 5 long + 5 short (bot.MOM), a ratio pair 2 legs
 const OPENS_AT_ONCE: Record<string, number> = { momentum_ls: 10, ratio_trend: 2 }
 
-const LABELS: Record<string, string> = {
+export const LABELS: Record<string, string> = {
   trend_daily: "ترند يومي", vol_breakout: "اختراق التقلب", rsi2_pullback: "RSI2 الارتداد", trend_breakout: "اختراق الترند",
   listing_short: "شورت العملات الجديدة", momentum_ls: "مومنتم لونج/شورت", ratio_trend: "ترند النسبة",
 }
