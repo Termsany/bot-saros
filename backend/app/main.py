@@ -4,7 +4,7 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 from typing import List, Optional
 import sys, re, uuid
@@ -220,6 +220,23 @@ def _scrub(text: str) -> str:
 @app.get("/api/health")
 async def health():
     return {"ok": True, "name": "Raqm", "version": "2.0.0"}
+
+# Public, for an uptime check outside the server (owner, 2026-11-01): the watchdog on the VPS (scripts/watchdog.py)
+# writes a heartbeat every 5 minutes; 503 when it is missing or older than 15 — the timer stopped or the bots' side of
+# the server is stuck. The VPS itself down shows as no answer at all. Only an age and a count, nothing about trades.
+HEARTBEAT_MAX_AGE_S = 900
+
+@app.get("/api/health/bots")
+async def health_bots():
+    try:
+        hb = json.loads((IPC_DIR / "watchdog_heartbeat.json").read_text(encoding="utf-8"))
+        age = (datetime.now(timezone.utc) - datetime.fromisoformat(hb["at"])).total_seconds()
+        problems = int(hb.get("problems") or 0)
+    except Exception:
+        return JSONResponse({"ok": False, "reason": "no watchdog heartbeat"}, status_code=503)
+    if not 0 <= age <= HEARTBEAT_MAX_AGE_S:
+        return JSONResponse({"ok": False, "reason": "watchdog heartbeat stale", "age_s": int(age)}, status_code=503)
+    return {"ok": True, "age_s": int(age), "problems": problems}
 
 # ── Backtest: proxy to backtest.py (same logic, now via API + DB)
 class BacktestReq(BaseModel):

@@ -21,6 +21,7 @@ STRATEGIES = ("trend_daily", "vol_breakout", "rsi2_pullback", "trend_breakout", 
 LEDGERS = {"demo": Path("/opt/raqm-risk-demo"), "live": Path("/opt/raqm-risk")}
 IPC = Path(os.getenv("RAQM_IPC_ROOT", "/opt/raqm-ipc"))
 STATE = ROOT / "state" / "watchdog.json"
+HEARTBEAT = IPC / "watchdog_heartbeat.json"   # read by the API's public /api/health/bots, for a check from outside the server
 STALE_S = 300            # the bots write their status every minute
 ENV_NAME = {"demo": "Demo", "live": "فلوس حقيقية"}
 
@@ -117,6 +118,18 @@ def checks(now):
         return {"watchdog": (f"المراقب نفسه مش قادر يفحص البوتات: {type(e).__name__}: {e}", 2)}
 
 
+def heartbeat(now, state, path=HEARTBEAT):
+    """When this run finished and how many problems are alerted, no details: the API serves it to an uptime check
+    outside the server, which alerts when it goes stale (the VPS down, the timer stopped) — the case this watchdog,
+    running on the same server, can't report. Best effort: a failure here must not stop the alerts."""
+    try:
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"at": now.isoformat(), "problems": sum(1 for v in state.values() if v.get("sent"))}), encoding="utf-8")
+        os.chmod(tmp, 0o640); tmp.replace(path)
+    except Exception as e:
+        print(f"heartbeat: {e}")
+
+
 def main():
     try: prev = json.loads(STATE.read_text(encoding="utf-8"))
     except Exception: prev = {}
@@ -128,6 +141,7 @@ def main():
             print(f"telegram: {e}"); state = {k: {**v, "sent": prev.get(k, {}).get("sent", False)} for k, v in state.items()}
             state.update({k: v for k, v in prev.items() if k not in state and v.get("sent")})
     tmp = STATE.with_suffix(".tmp"); tmp.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8"); tmp.replace(STATE)
+    heartbeat(datetime.now(timezone.utc), state)
 
 
 if __name__ == "__main__":
