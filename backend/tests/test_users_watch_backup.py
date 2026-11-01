@@ -98,3 +98,21 @@ class UsersBackupTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UsersBackupReviewTests(unittest.TestCase):
+    """P2.7 review: one user's part failing doesn't lose the others; the user's process gets no environment."""
+    def test_one_failing_user_still_sends_the_rest(self):
+        U2 = "22222222-2222-4222-8222-222222222222"
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
+            d = Path(d); (d / U1).mkdir(); (d / U2).mkdir()
+            def dump(uid, p):
+                if uid == U1: raise RuntimeError("no such user")
+                return b"ok"
+            with self.assertRaises(backup.PartialBackup) as cm:
+                backup.users_archive(NOW, data_root=d, dump=dump)
+        self.assertEqual(cm.exception.n, 1); self.assertIn(U1[:8], str(cm.exception))
+
+    def test_the_dump_runs_with_an_empty_environment(self):
+        src = (ROOT / "scripts" / "backup.py").read_text(encoding="utf-8")
+        self.assertIn('"/usr/bin/env", "-i", "PATH=/usr/bin:/bin"', src)

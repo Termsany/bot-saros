@@ -93,6 +93,33 @@ class UserBotsApiTests(ApiAuthTests):
         r = self.c.get("/api/admin/user-bots", headers=self.h("admin-token")).json()
         self.assertEqual([(u["user_id"], u["provision"]["state"]) for u in r["users"]], [(U1, "running")])
 
+    # P2.7 review
+    def test_a_status_file_that_is_a_link_is_not_read(self):
+        other = self.ipc / "owner_status.json"
+        other.write_text(json.dumps({"updated": datetime.now(timezone.utc).isoformat(), "positions": [{"symbol": "BTC/USDT"}]}), encoding="utf-8")
+        (self.ipc / U1 / "trend_daily").mkdir(parents=True)
+        try:
+            (self.ipc / U1 / "trend_daily" / "live_status.json").symlink_to(other)
+        except OSError:
+            self.skipTest("symlinks not available here")
+        self.assertEqual(self.c.get("/api/user/bots", headers=self.h("u1-token")).json()["bots"], {})
+
+    def test_a_demo_consent_leaves_the_keys_marked_as_they_were(self):
+        from app.user_keys_vault import save_user_keys, user_key_status
+        from app.user_live_activation import CONSENT_TEXT
+        save_user_keys(U1, "binance", "k", "s")
+        before = user_key_status(U1)["binance"]["paper"]
+        self.c.post("/api/user/live/enable", headers=self.h("u1-token"), json={"exchange": "binance", "confirm": CONSENT_TEXT, "environment": "demo"})
+        self.assertEqual(user_key_status(U1)["binance"]["paper"], before)
+
+    @unittest.skipUnless(os.name == "posix", "file modes")
+    def test_a_users_close_request_is_readable_by_their_bot(self):
+        d = self.ipc / U1 / "trend_daily"; (d / "commands").mkdir(parents=True)
+        (d / "live_status.json").write_text(json.dumps({"updated": datetime.now(timezone.utc).isoformat(), "positions": [{"symbol": "SOL/USDT"}]}), encoding="utf-8")
+        rid = self.c.post("/api/user/bots/close", headers=self.h("u1-token"), json={"strategy": "trend_daily", "symbol": "SOL/USDT"}).json()["id"]
+        self.assertTrue(os.stat(d / "commands" / f"close-{rid}.json").st_mode & 0o004)
+
+
 
 if __name__ == "__main__":
     unittest.main()

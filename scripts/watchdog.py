@@ -59,9 +59,13 @@ def check_bot(out, now, key, who, env, active, status_path):
 
 
 def _read_status(path, limit=1 << 20):
-    """A bot's status file, not followed through a symlink (the users' watchdog reads other accounts' folders)."""
-    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    """A bot's status file, not followed through a symlink (the users' watchdog reads other accounts' folders), and
+    opened non-blocking with a regular-file check: a FIFO in its place must not hang the watchdog."""
+    import stat
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
     try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError("not a regular file")
         return os.read(fd, limit).decode("utf-8")
     finally:
         os.close(fd)

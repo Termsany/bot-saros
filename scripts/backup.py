@@ -19,14 +19,14 @@ SKIP = (".tmp", "-journal", "-wal", "-shm")
 LIMIT = 45 * 1024 * 1024     # Telegram takes files up to 50 MB from a bot
 
 
-def build(now, sources=SOURCES):
+def build(now, sources=SOURCES, skip=SKIP):
     """(archive bytes, file count). Every regular file under each source, SQLite through its backup API."""
     buf, n = io.BytesIO(), 0
     with tarfile.open(fileobj=buf, mode="w:gz") as tar, tempfile.TemporaryDirectory() as td:
         for name, root in sources.items():
             if not root.is_dir():
                 continue
-            for f in sorted(p for p in root.rglob("*") if p.is_file() and not p.name.endswith(SKIP)):
+            for f in sorted(p for p in root.rglob("*") if p.is_file() and not p.is_symlink() and not p.name.endswith(skip)):
                 arc = f"raqm-backup-{now:%Y%m%d}/{name}/{f.relative_to(root).as_posix()}"
                 if f.suffix in (".sqlite3", ".db"):
                     copy = Path(td) / uuid.uuid4().hex
@@ -51,18 +51,31 @@ def users_archive(now, data_root=USERS_DATA, dump=None):
     archive is built AS that user (runuser), so their SQLite ledger is copied by its owner with the backup API and root
     never opens anything inside their folders; root only bundles the bytes. Their key credentials are not included."""
     import re, subprocess
+    # `env -i`: the user's process gets an empty environment — root's has the owner's Telegram token
     dump = dump or (lambda uid, d: subprocess.run(
-        ["runuser", "-u", "ru" + uid.replace("-", "")[:20], "--", str(USERS_CODE / "venv/bin/python"), "-E", "-s",
-         str(USERS_CODE / "scripts/backup.py"), "--dump", str(d)], capture_output=True, check=True, timeout=300).stdout)
-    buf, n = io.BytesIO(), 0
+        ["runuser", "-u", "ru" + uid.replace("-", "")[:20], "--", "/usr/bin/env", "-i", "PATH=/usr/bin:/bin",
+         str(USERS_CODE / "venv/bin/python"), "-E", "-s", str(USERS_CODE / "scripts/backup.py"), "--dump", str(d)],
+        capture_output=True, check=True, timeout=300).stdout)
+    buf, n, failed = io.BytesIO(), 0, []
     with tarfile.open(fileobj=buf, mode="w") as tar:
         for d in sorted(data_root.iterdir()) if data_root.is_dir() else []:
             if not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", d.name) or d.is_symlink():
                 continue
-            blob = dump(d.name, d)
+            try:
+                blob = dump(d.name, d)
+            except Exception as e:                # one user's part failing doesn't lose everyone else's backup
+                failed.append(f"{d.name[:8]}: {type(e).__name__}"); continue
             info = tarfile.TarInfo(f"raqm-users-backup-{now:%Y%m%d}/{d.name}.tar.gz"); info.size = len(blob)
             tar.addfile(info, io.BytesIO(blob)); n += 1
+    if failed:
+        raise PartialBackup(buf.getvalue(), n, failed)
     return buf.getvalue(), n
+
+
+class PartialBackup(Exception):
+    """Some users' parts failed: the rest is still sent, and the chat is told whose failed."""
+    def __init__(self, data, n, failed):
+        super().__init__(", ".join(failed)); self.data, self.n, self.failed = data, n, failed
 
 
 def _post(method, fields, files=None):
@@ -85,14 +98,18 @@ def main():
     argv = sys.argv[1:]
     now = datetime.now(timezone.utc)
     if argv[:1] == ["--dump"]:            # as one user, from users_archive(): their own folders, to stdout
-        d = Path(argv[1])
-        sys.stdout.buffer.write(build(now, {"risk": d / "risk", "state": d / "state"})[0]); return
+        d = Path(argv[1])          # the logs stay out: never rotated, they would outgrow Telegram's limit
+        sys.stdout.buffer.write(build(now, {"risk": d / "risk", "state": d / "state"}, skip=SKIP + (".log",))[0]); return
     users = argv[:1] == ["--users"]
     chat = os.getenv("TELEGRAM_CHAT_ID", "")
     if not (os.getenv("TELEGRAM_BOT_TOKEN") and chat):
         raise SystemExit("backup: TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID not set")
+    partial = None
     try:
-        data, n = users_archive(now) if users else build(now)
+        try:
+            data, n = users_archive(now) if users else build(now)
+        except PartialBackup as e:
+            data, n, partial = e.data, e.n, e
         if users and not n:
             return                         # no user yet: nothing to send
         if len(data) > LIMIT:
@@ -101,6 +118,8 @@ def main():
         _post("sendDocument", {"chat_id": chat, "disable_notification": "true",
                                "caption": f"💾 نسخة احتياطية {what} — {n} {'مستخدم' if users else 'ملف'} · {len(data) / 1048576:.1f} MB"},
               {"document": (f"raqm-{'users-' if users else ''}backup-{now:%Y%m%d}.tar.gz", data)})
+        if partial:
+            _post("sendMessage", {"chat_id": chat, "text": f"🚨 نسخة بعض المستخدمين ما اتعملتش: {partial}"})
     except Exception as e:
         _post("sendMessage", {"chat_id": chat, "text": f"🚨 النسخة الاحتياطية اليومية ما اتعملتش: {type(e).__name__}: {e}"})
         raise

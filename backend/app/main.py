@@ -918,15 +918,17 @@ class PaperCloseReq(BaseModel):
     bot: str
     symbol: str = Field(max_length=60)
 
-def _drop_request(d: Path, root: Path, rid: str, cmd: dict):
+def _drop_request(d: Path, root: Path, rid: str, cmd: dict, mode: int = 0o660):
     """A close request file in `d`: the folder must really be inside `root` (no link swapped in for it — a paper
     bot's commands/ pointing at the real-money bot's folder would turn a paper close into a real one), and the file
-    is created new (O_EXCL, O_NOFOLLOW) then renamed in, so nothing planted there is written through."""
+    is created new (O_EXCL, O_NOFOLLOW) then renamed in, so nothing planted there is written through.
+    `mode` 0644 for a user's bot: it isn't in the API's group, and the folder lets in only the two of them."""
     real, base = os.path.realpath(d), os.path.realpath(root)
     if os.path.islink(d) or os.path.commonpath([real, base]) != base or real != os.path.normpath(os.path.join(base, os.path.relpath(d, root))):
         raise HTTPException(500, "request folder is not where it should be — refused")
     tmp = os.path.join(real, f".close-{rid}.tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o660)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), mode)
+    if hasattr(os, "fchmod"): os.fchmod(fd, mode)     # the umask must not take the bot's read bit away
     with os.fdopen(fd, "w", encoding="utf-8") as fh: fh.write(json.dumps(cmd))
     os.replace(tmp, os.path.join(real, f"close-{rid}.json"))   # the bot only picks up close-*.json
 
@@ -2030,8 +2032,9 @@ async def user_live_enable(req: UserLiveEnableReq, request: Request, user: dict 
                           max_aggregate_risk_pct=req.max_aggregate_risk_pct, environment=req.environment)
     except (PermissionError, ValueError) as e:
         raise HTTPException(400, str(e))
-    from app.user_keys_vault import set_user_paper
-    set_user_paper(user["id"], ex, False)  # the per-user vault entry itself switches to LIVE too
+    if req.environment == "live":          # a Demo consent leaves the keys marked as they were
+        from app.user_keys_vault import set_user_paper
+        set_user_paper(user["id"], ex, False)  # the per-user vault entry itself switches to LIVE too
     return {"ok": True}
 
 @app.post("/api/user/live/disable")
@@ -2077,7 +2080,7 @@ async def user_bots_close(req: UserBotCloseReq, user: dict = Depends(require_use
     rid = uuid.uuid4().hex
     base = user_bots.IPC_ROOT / user["id"]
     _drop_request(base / req.strategy / "commands", base, rid,
-                  {"id": rid, "symbol": sym, "at_epoch": _time.time(), "by": user.get("email")})
+                  {"id": rid, "symbol": sym, "at_epoch": _time.time(), "by": user.get("email")}, mode=0o644)
     return {"ok": True, "id": rid}
 
 @app.get("/api/user/bots/close/{strategy}/{rid}")
@@ -2085,10 +2088,10 @@ async def user_bots_close_result(strategy: str, rid: str, user: dict = Depends(r
     if strategy not in user_bots.STRATEGIES or not re.fullmatch(r"[0-9a-f]{32}", rid):
         raise HTTPException(400, "bad request")
     d = user_bots.IPC_ROOT / user["id"] / strategy
-    f = d / "results" / f"{rid}.json"
-    if not f.exists():
+    res = user_bots.read_json(d / "results" / f"{rid}.json")      # the user's bot wrote it: no link followed
+    if res is None:
         return {"done": False, "pending": (d / "commands" / f"close-{rid}.json").exists()}
-    return {"done": True, **json.loads(f.read_text(encoding="utf-8"))}
+    return {"done": True, **(res if isinstance(res, dict) else {})}
 
 @app.get("/api/admin/user-bots")
 async def admin_user_bots(user: dict = Depends(require_admin)):

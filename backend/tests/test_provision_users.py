@@ -47,7 +47,7 @@ class ValidateTests(unittest.TestCase):
 class PlanTests(unittest.TestCase):
     def plan(self, desired=None, allow=(U1,), consent=(U1,), keys=(U1,), running=None, flat=lambda u, s: True):
         desired = {u: pu.validate(u, d) for u, d in (desired or {U1: doc(U1)}).items()}
-        return pu.plan(desired, list(allow), set(consent), {u: ("k", "s") for u in keys}, running or {}, flat)
+        return pu.plan(desired, list(allow), {u: "demo" for u in consent}, {u: ("k", "s") for u in keys}, running or {}, flat)
 
     def kinds(self, actions):     # what is done to the machine (each user's page answer is checked on its own)
         return [(a[0],) + tuple(x for x in a[1:3] if isinstance(x, str)) for a in actions if a[0] != "answer"]
@@ -91,7 +91,7 @@ class PlanTests(unittest.TestCase):
         self.assertIn(("stop", U1, "vol_breakout"), [a[:3] for a in acts]); self.assertNotIn("wipe_keys", [a[0] for a in acts])
 
     def test_a_user_whose_desired_file_disappears_or_turns_invalid_is_wound_down(self):
-        self.assertEqual(self.kinds(pu.plan({}, [U1], {U1}, {U1: ("k", "s")}, {U1: {"trend_daily"}}, lambda u, s: False)),
+        self.assertEqual(self.kinds(pu.plan({}, [U1], {U1: "demo"}, {U1: ("k", "s")}, {U1: {"trend_daily"}}, lambda u, s: False)),
                          [("no_entries", U1)])
 
 
@@ -127,7 +127,7 @@ class ApplyTests(unittest.TestCase):
     def setUp(self):
         self.d = pu.validate(U1, doc(U1)); self.fs = FakeSystem(); self.logs = []
     def run_once(self, flat=True, running=None):
-        acts = pu.plan({U1: self.d}, [U1], {U1}, {U1: ("key-1", "secret-1")}, running or {}, lambda u, s: flat)
+        acts = pu.plan({U1: self.d}, [U1], {U1: "demo"}, {U1: ("key-1", "secret-1")}, running or {}, lambda u, s: flat)
         pu.apply(acts, {U1: ("key-1", "secret-1")}, self.fs, log=self.logs.append)
 
     def test_first_run_writes_keys_0600_and_starts_the_service(self):
@@ -183,3 +183,80 @@ class ReadTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReviewFindingsTests(unittest.TestCase):
+    """P2.7 independent review (2026-11-01): each finding reproduced here before it was fixed."""
+    class StatefulSystem(FakeSystem):
+        """Keeps the user's yes/no per strategy like the real ledger, so wind-down and coming back can be checked."""
+        def __init__(self): super().__init__(); self.chosen = {}
+        def set_limits(self, uid, d): self.limits.append(uid); self.chosen[uid] = list(d["strategies"])
+        def no_entries(self, uid): self.calls.append(("no_entries", uid)); self.chosen[uid] = []
+
+    def run_once(self, fs, d, wanted=True, flat=True, running=None):
+        desired = {U1: pu.validate(U1, d)}
+        acts = pu.plan(desired, [U1], {U1: "demo"} if wanted else {}, {U1: ("k", "s")}, running or {}, lambda u, s: flat)
+        pu.apply(acts, {U1: ("k", "s")}, fs, log=lambda m: None)
+
+    def test_off_then_on_with_the_same_settings_trades_again(self):
+        fs = self.StatefulSystem(); d = doc(U1)
+        self.run_once(fs, d); self.assertEqual(fs.chosen[U1], ["trend_daily"])
+        self.run_once(fs, d, wanted=False, flat=False, running={U1: {"trend_daily"}}); self.assertEqual(fs.chosen[U1], [])
+        self.run_once(fs, d, wanted=False, flat=False, running={U1: {"trend_daily"}})
+        self.assertEqual([c for c in fs.calls if c[0] == "no_entries"], [("no_entries", U1)])   # once, not every minute
+        self.run_once(fs, d, running={U1: {"trend_daily"}}); self.assertEqual(fs.chosen[U1], ["trend_daily"])
+
+    def test_a_consent_db_that_cant_be_read_skips_the_run_instead_of_winding_everyone_down(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
+            self.assertEqual(pu.read_consent(Path(d) / "absent.sqlite3"), {})        # no record yet: nobody
+            (Path(d) / "broken.sqlite3").write_text("not a database", encoding="utf-8")
+            with self.assertRaises(Exception): pu.read_consent(Path(d) / "broken.sqlite3")
+            (Path(d) / ".env").write_text("OTHER=1\n", encoding="utf-8")
+            with self.assertRaises(RuntimeError): pu.read_keys([U1], vault=Path(d) / "v.json", api_env=Path(d) / ".env")
+
+    def test_a_demo_consent_never_counts_for_real_money(self):
+        self.assertTrue(pu.consent_ok({U1: "demo"}, U1, "demo")); self.assertTrue(pu.consent_ok({U1: "live"}, U1, "demo"))
+        self.assertFalse(pu.consent_ok({U1: "demo"}, U1, "live")); self.assertFalse(pu.consent_ok({}, U1, "demo"))
+
+    def test_a_running_user_keeps_their_place_when_someone_higher_on_the_list_arrives(self):
+        users = [f"{i}{i}{i}{i}{i}{i}{i}{i}-1111-4111-8111-111111111111" for i in range(1, 6)]
+        desired = {u: pu.validate(u, doc(u)) for u in users}
+        running = {u: {"trend_daily"} for u in users[1:]}                          # 4 running, the first one arrives
+        acts = pu.plan(desired, users, {u: "demo" for u in users}, {u: ("k", "s") for u in users}, running, lambda u, s: False)
+        self.assertNotIn("no_entries", [a[0] for a in acts])
+        self.assertEqual(next(a[2]["state"] for a in acts if a[0] == "answer" and a[1] == users[0]), "no_place")
+
+    def test_a_user_whose_setup_failed_gets_no_bot_started(self):
+        class Boom(FakeSystem):
+            def set_limits(self, uid, d): raise RuntimeError("ledger")
+        fs = Boom(); self.run_once(fs, doc(U1))
+        self.assertFalse([c for c in fs.calls if c[:2] == ("systemctl", "restart")])
+
+    def test_keys_that_would_break_the_credential_lines_are_not_used(self):
+        from cryptography.fernet import Fernet
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
+            d = Path(d); key = Fernet.generate_key()
+            (d / ".env").write_text(f"VAULT_MASTER_KEY={key.decode()}\n", encoding="utf-8")
+            (d / "v.json").write_bytes(Fernet(key).encrypt(json.dumps({U1: {"binance": {"apiKey": "a\nBINANCE_SECRET=x", "secret": "b"}}}).encode()))
+            self.assertEqual(pu.read_keys([U1], vault=d / "v.json", api_env=d / ".env"), {})
+
+    def test_the_request_folders_are_made_by_root_with_the_apis_group(self):
+        src = (ROOT / "scripts" / "provision_users.py").read_text(encoding="utf-8")
+        self.assertIn('for p in (IPC_ROOT / uid / s, IPC_ROOT / uid / s / "commands", IPC_ROOT / uid / s / "results")', src)
+        self.assertNotIn("os.makedirs(", src)                                       # not as the user (setgid was lost)
+        self.assertIn('"/usr/bin/env", "-i"', src)
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "needs FIFOs")
+    def test_a_fifo_in_place_of_a_file_does_not_hang_root(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
+            f = Path(d) / "x.json"; os.mkfifo(f)
+            with self.assertRaises(ValueError): pu._read_small(f)
+            self.assertFalse(pu.is_flat(f))
+
+    def test_the_units_time_out_and_the_users_bots_are_fenced_off(self):
+        V = ROOT / "deploy" / "vps"
+        for u in ("raqm-users-provision.service", "raqm-watchdog-users.service", "raqm-backup-users.service"):
+            self.assertIn("TimeoutStartSec=", (V / u).read_text(encoding="utf-8"), u)
+        t = (V / "raqm-user@.service").read_text(encoding="utf-8")
+        for want in ("ProtectProc=invisible", "CapabilityBoundingSet=\n", "-/opt/raqm-live", "-/opt/raqm-api", "-/opt/raqm-risk "):
+            self.assertIn(want, t)

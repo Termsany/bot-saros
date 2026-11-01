@@ -6,6 +6,7 @@ After=network-online.target
 
 [Service]
 Type=oneshot
+TimeoutStartSec=300
 WorkingDirectory=/opt/raqm-live
 ExecStart=/opt/raqm-live/venv/bin/python -E -s /opt/raqm-live/scripts/provision_users.py
 UnsetEnvironment=PYTHONPATH PYTHONHOME PYTHONSTARTUP PYTHONUSERBASE PYTHONINSPECT
