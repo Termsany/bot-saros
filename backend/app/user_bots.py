@@ -29,6 +29,19 @@ def ipc_instance(uid, strategy, root=None):
     return (root or IPC_ROOT) / f"{uid}--{strategy}"
 
 
+def close_ipc(uid, strategy, root=None):
+    """Resolve the user's close IPC folder, supporting instance and legacy layouts consistently."""
+    root = root or IPC_ROOT
+    candidates = (ipc_instance(uid, strategy, root), root / uid / strategy)
+    for folder in candidates:
+        if (folder / "commands").is_dir():
+            return folder
+    for folder in candidates:
+        if (folder / "results").is_dir():
+            return folder
+    return candidates[0]
+
+
 def strategy_policy(strategies, *, available_slots=10):
     """Pure account policy: recommend three single-leg strategies, charge basket slots, fail closed."""
     if (not isinstance(strategies, list) or not all(isinstance(s, str) for s in strategies)

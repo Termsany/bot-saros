@@ -11,8 +11,9 @@ from backend.app import oco
 
 class BinanceLike:
     """Conditional orders as Binance USDT-M serves them through ccxt."""
-    def __init__(self, cid):
-        self.stops = {"1000000263046590": {"id": "1000000263046590", "clientOrderId": cid, "type": "STOP_MARKET"}}
+    def __init__(self, cid, *, status="open"):
+        # Binance's conditional-order view must expose a documented active status.
+        self.stops = {"1000000263046590": {"id": "1000000263046590", "clientOrderId": cid, "type": "STOP_MARKET", "status": status}}
         self.calls = []
 
     def fetch_open_orders(self, symbol, since=None, limit=None, params=None):
@@ -39,6 +40,14 @@ class ConditionalCancelTests(unittest.TestCase):
         ex = BinanceLike("manual-order-from-the-app")
         self.assertTrue(oco.cancel_oco_orders(ex, "DOGE/USDT:USDT", pos_id="raqm-other0000000"))
         self.assertEqual(len(ex.stops), 1)                     # a manual stop is never ours to cancel
+        self.assertEqual(ex.calls, [])
+
+    def test_missing_status_is_fail_closed_and_not_cancelled(self):
+        ex = BinanceLike(oco._oco_id("raqm-diag12345678", "sl"), status="")
+        ex.stops["1000000263046590"].pop("status")
+        self.assertFalse(oco._is_active_protection_order(ex.stops["1000000263046590"]))
+        self.assertTrue(oco.cancel_oco_orders(ex, "DOGE/USDT:USDT", pos_id="raqm-diag12345678"))
+        self.assertEqual(len(ex.stops), 1)
         self.assertEqual(ex.calls, [])
 
 

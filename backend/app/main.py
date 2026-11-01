@@ -2087,10 +2087,7 @@ async def user_bots_close(req: UserBotCloseReq, user: dict = Depends(require_use
     if sym.split(":")[0] not in {p.get("symbol") for p in st.get("positions") or []}:
         raise HTTPException(404, "no open position on that coin")
     rid = uuid.uuid4().hex
-    base = user_bots.ipc_instance(user["id"], req.strategy)
-    legacy_base = user_bots.IPC_ROOT / user["id"] / req.strategy
-    if not (base / "commands").is_dir() and (legacy_base / "commands").is_dir():
-        base = legacy_base
+    base = user_bots.close_ipc(user["id"], req.strategy)
     _drop_request(base / "commands", base, rid,
                   {"id": rid, "symbol": sym, "at_epoch": _time.time(), "by": user.get("email")}, mode=0o644)
     return {"ok": True, "id": rid}
@@ -2099,7 +2096,7 @@ async def user_bots_close(req: UserBotCloseReq, user: dict = Depends(require_use
 async def user_bots_close_result(strategy: str, rid: str, user: dict = Depends(require_user)):
     if strategy not in user_bots.STRATEGIES or not re.fullmatch(r"[0-9a-f]{32}", rid):
         raise HTTPException(400, "bad request")
-    d = user_bots.ipc_instance(user["id"], strategy)
+    d = user_bots.close_ipc(user["id"], strategy)
     res = user_bots.read_json(d / "results" / f"{rid}.json")      # the user's bot wrote it: no link followed
     if res is None:
         return {"done": False, "pending": (d / "commands" / f"close-{rid}.json").exists()}

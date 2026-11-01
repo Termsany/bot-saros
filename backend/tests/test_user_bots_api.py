@@ -137,6 +137,19 @@ class UserBotsApiTests(ApiAuthTests):
         rid = self.c.post("/api/user/bots/close", headers=self.h("u1-token"), json={"strategy": "trend_daily", "symbol": "SOL/USDT"}).json()["id"]
         self.assertTrue(os.stat(d / "commands" / f"close-{rid}.json").st_mode & 0o004)
 
+    def test_legacy_close_result_uses_the_same_per_user_ipc_layout(self):
+        d = self.ipc / U1 / "trend_daily"; (d / "commands").mkdir(parents=True)
+        (d / "live_status.json").write_text(json.dumps({"updated": datetime.now(timezone.utc).isoformat(), "positions": [{"symbol": "SOL/USDT"}]}), encoding="utf-8")
+        r = self.c.post("/api/user/bots/close", headers=self.h("u1-token"), json={"strategy": "trend_daily", "symbol": "SOL/USDT"})
+        self.assertEqual(r.status_code, 200)
+        rid = r.json()["id"]
+        self.assertEqual(self.c.get(f"/api/user/bots/close/trend_daily/{rid}", headers=self.h("u1-token")).json(), {"done": False, "pending": True})
+        (d / "commands" / f"close-{rid}.json").unlink()
+        (d / "results").mkdir()
+        (d / "results" / f"{rid}.json").write_text(json.dumps({"id": rid, "ok": True}), encoding="utf-8")
+        self.assertEqual(self.c.get(f"/api/user/bots/close/trend_daily/{rid}", headers=self.h("u1-token")).json(), {"done": True, "id": rid, "ok": True})
+        self.assertEqual(self.c.get(f"/api/user/bots/close/trend_daily/{rid}", headers=self.h("u2-token")).json(), {"done": False, "pending": False})
+
 
 
 if __name__ == "__main__":
