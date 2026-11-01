@@ -39,6 +39,7 @@ install -d -o root -g root -m 755 "$L/scripts"
 install -m 644 -o root -g root "$T/scripts/demo_e2e.py" "$L/scripts/demo_e2e.py"
 install -m 644 -o root -g root "$T/scripts/live_report.py" "$L/scripts/live_report.py"   # the daily report (read only)
 install -m 644 -o root -g root "$T/scripts/watchdog.py" "$L/scripts/watchdog.py"         # problem alerts (read only)
+install -m 644 -o root -g root "$T/scripts/backup.py" "$L/scripts/backup.py"             # daily backup to Telegram (read only)
 echo "$SHA" > "$L/DEPLOYED_COMMIT"
 # packages: only what the bot imports, pinned, from wheels (deploy/vps/live-requirements.txt)
 [ -x "$L/venv/bin/python" ] || python3 -m venv "$L/venv"
@@ -100,8 +101,12 @@ install -m 644 -o root -g root "$T/deploy/vps/raqm-demo@.service" /etc/systemd/s
 # problem alerts on Telegram every 5 minutes (raqmlive, read only)
 install -m 644 -o root -g root "$T/deploy/vps/raqm-watchdog.service" /etc/systemd/system/raqm-watchdog.service
 install -m 644 -o root -g root "$T/deploy/vps/raqm-watchdog.timer" /etc/systemd/system/raqm-watchdog.timer
+# the daily backup of the bots' records to Telegram (raqmlive, read only)
+install -m 644 -o root -g root "$T/deploy/vps/raqm-backup.service" /etc/systemd/system/raqm-backup.service
+install -m 644 -o root -g root "$T/deploy/vps/raqm-backup.timer" /etc/systemd/system/raqm-backup.timer
 systemctl daemon-reload
 systemctl enable --now raqm-watchdog.timer >/dev/null 2>&1 || echo "warning: raqm-watchdog.timer not enabled" >&2
+systemctl enable --now raqm-backup.timer >/dev/null 2>&1 || echo "warning: raqm-backup.timer not enabled" >&2
 # new group lists reach a process only when it starts: the API (try-restart: only if running). The live bots are not
 # restarted here — one stopped in the middle of an order goes to review; restart them as a deliberate step:
 #   systemctl restart 'raqm-demo@*' / 'raqm-live@*'

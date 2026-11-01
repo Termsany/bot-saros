@@ -1,0 +1,17 @@
+# Daily backup of the Demo / live bots' records to the watchdog's Telegram chat (scripts/backup.py): read only.
+[Unit]
+Description=Raqm daily backup of the real-orders bots' records (Telegram)
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=raqmlive
+Group=raqmlive
+WorkingDirectory=/opt/raqm-live
+EnvironmentFile=-/opt/raqm-live/.env.telegram
+ExecStart=/opt/raqm-live/venv/bin/python -E -s scripts/backup.py
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+# the risk ledgers are SQLite: even a read needs their folder writable (journal/WAL files)
+ReadWritePaths=-/opt/raqm-risk-demo -/opt/raqm-risk
