@@ -2659,11 +2659,17 @@ def write_live_status(state, prices, analyses=None):
         cs = _position_contract_size(p)
         funding = _funding_pnl(p)
         fee = _fee_rate(p)
+        # fee and funding not verified yet (the usual case while a position is open): an estimate for the page only —
+        # the entry's fee rate on both sides, no funding — marked as such; the recorded PnL still needs the evidence
+        estimated = funding is None or fee is None
+        if estimated:
+            try: fee, funding = float(p.get("entry_fee_rate") or 0.0004), 0.0
+            except (TypeError, ValueError): fee, funding = 0.0004, 0.0
         live_pnl = futures_net_pnl(p["entry"], px, p["qty"], cs, p.get("side", "long"), fee_rate=fee, funding_pnl=funding) if px and cs and funding is not None and fee is not None else None
         loss_at_sl = None
         if p.get("sl") and cs and funding is not None and fee is not None:
             loss_at_sl = futures_net_pnl(p["entry"], float(p["sl"]), p["qty"], cs, p.get("side", "long"), fee_rate=fee, funding_pnl=funding)
-        pos.append({"symbol": sym.split(":")[0], "entry": p["entry"], "qty": p["qty"], "contract_size": cs, "sl": p.get("sl"), "price": px,
+        pos.append({"symbol": sym.split(":")[0], "side": p.get("side", "long"), "pnl_estimated": estimated, "entry": p["entry"], "qty": p["qty"], "contract_size": cs, "sl": p.get("sl"), "price": px,
                     "exit_below": exit_below, "tp": p.get("tp"),
                     "loss_at_sl": round(loss_at_sl, 2) if loss_at_sl is not None else None,
                     "pnl": round(live_pnl, 4) if live_pnl is not None else None, "opened": p.get("time"),

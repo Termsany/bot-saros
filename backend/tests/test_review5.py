@@ -113,3 +113,25 @@ class EquityRetryTests(unittest.TestCase):
     def test_a_zero_balance_is_not_retried(self):
         ex = mock.Mock(); ex.fetch_balance.return_value = {"USDT": {"total": 0}}
         self.assertIsNone(botmod._fetch_equity_usdt(ex)); self.assertEqual(ex.fetch_balance.call_count, 1)
+
+
+class LiveStatusPositionTests(unittest.TestCase):
+    """The admin page showed shorts as LONG (no side in the status) and "—" for every open trade's profit (fee and
+    funding not verified while it is open)."""
+    def test_side_and_an_estimated_profit_reach_the_page(self):
+        state = {"positions": {
+            "ETH/USDT:USDT": {"side": "short", "entry": 2000.0, "qty": 0.1, "contract_size": 1.0, "contract_size_verified": True,
+                              "entry_fee_rate": 0.0004, "sl": 2800.0, "time": "2026-10-31T00:00:00+00:00"},
+            "BTC/USDT:USDT": {"side": "long", "entry": 100.0, "qty": 1.0, "contract_size": 1.0, "contract_size_verified": True,
+                              "entry_fee_rate": 0.0004, "fee_verified": True, "fee_rate": 0.0004, "funding_verified": True, "funding_pnl": -1.0,
+                              "sl": 60.0, "time": "2026-10-31T00:00:00+00:00"}}, "history": []}
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d, mock.patch.dict(os.environ, {"RAQM_IPC_DIR": d}), \
+             mock.patch.dict(botmod.CONFIG, {"enabled_strategies": ["ratio_trend"]}):
+            botmod.write_live_status(state, {"ETH/USDT:USDT": 1900.0, "BTC/USDT:USDT": 110.0})
+            pos = {p["symbol"]: p for p in json.loads((Path(d) / "live_status.json").read_text(encoding="utf-8"))["positions"]}
+        eth, btc = pos["ETH/USDT"], pos["BTC/USDT"]
+        self.assertEqual((eth["side"], eth["pnl_estimated"]), ("short", True))
+        self.assertAlmostEqual(eth["pnl"], 10.0 - (200.0 + 190.0) * 0.0004, places=4)       # a short gains as price falls
+        self.assertAlmostEqual(eth["loss_at_sl"], -80.0 - (200.0 + 280.0) * 0.0004, places=2)
+        self.assertEqual((btc["side"], btc["pnl_estimated"]), ("long", False))
+        self.assertAlmostEqual(btc["pnl"], 10.0 - 210.0 * 0.0004 - 1.0, places=4)            # verified: funding counted
