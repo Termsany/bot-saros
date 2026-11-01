@@ -2,15 +2,20 @@
 
 Status is **NO-GO**. Paper mode remains the only permitted operating mode for real money.
 
-_Last updated 2026-10-29 after the third pre-production review (PR #29) and its deploy to the VPS._
-Previous version: 2026-10-29 after PRs #21–#23 and the Demo run (recorded `dc4ecb9` as deployed; the VPS was actually
-already on `e7a7bf9` by then — PR #28's second-review fixes). Before that: 2026-10-26 (28a8249), pre-PRs #12–#16.
+_Last updated 2026-11-01: the VPS runs `215596c` (PR #63). Since the previous version: the full review (#31–#33), the
+admin's own account running all seven strategies on Demo (#34–#45, #50), the measurement baseline (#46), problem
+alerts (#47–#49, #54), live-status fixes (#62) and the outside-the-server uptime check (#63)._
+Previous versions: 2026-10-29 after PR #29 (`da39663`); 2026-10-29 after PRs #21–#23; 2026-10-26 (28a8249).
 
 ## Where the roadmap stands
 
 The live-trading roadmap runs **Phase 1 — real end-to-end validation on Binance's test environment (Futures Demo
 Trading)** and **Phase 2 — per-user live infrastructure**. Phase 2 was built first, as library code only (PR #12).
-**Phase 1 is done for every remaining strategy: all seven have been run end to end against the exchange.**
+Phase 1 has two parts:
+- **1a — the execution code against the exchange: done** for all seven (adapter runs below, 2026-10-29).
+- **1b — measurement: running since 2026-10-31.** All seven run unattended as their own Demo bots on one Binance Futures
+  Demo account (the admin's), with fixed settings and no manual intervention; their results are compared with the
+  backtest baseline ([demo-baseline.md](demo-baseline.md)) after about 30 trades each. See "Demo measurement" below.
 `ict` and `wave_flats` were dropped by the owner on 2026-10-29 (`RETIRED_STRATEGIES` in bot.py: refused by `--strategy`,
 paper or live). The `ict` indicator ensemble still drives the dashboard's paper loop; it is not a live strategy.
 
@@ -19,7 +24,10 @@ paper or live). The `ict` indicator ensemble still drives the dashboard's paper 
 The seven names are in `LIVE_READY_STRATEGIES` (bot.py), so `--live` accepts them; that only means the
 execution code is reachable, not that it is validated.
 
-| Strategy | Paper bot on the VPS | Live execution path | Unit/integration tests (fake exchange) | Exchange end-to-end (Demo) | Status |
+Status column as of 2026-11-01: every strategy is **1a done, 1b measuring** on Demo (momentum_ls: see the gap under
+"Demo measurement"); none is cleared for real money.
+
+| Strategy | Paper bot on the VPS | Live execution path | Unit/integration tests (fake exchange) | Exchange end-to-end (Demo) | Status (2026-10-29) |
 |---|---|---|---|---|---|
 | `trend_daily` | Running | Hardened dedicated path (`_enter_trend_live`, `close_live_position`, `reconcile_live`) | Yes | **Done** (PR #16): entry + exchange stop, 4 concurrent positions capped by the aggregate risk gate, restart with no duplicates / no false recovery, out-of-band manual close detected with correct PnL. Demo account, no real funds | Blocked: final independent review, deploy of the reviewed code |
 | `vol_breakout` | Running | Shared single-leg path | Yes | **Done** (2026-10-29, `scripts/demo_e2e.py`): entry, exchange stop, restart with no duplicates / no false recovery, exit with stop cancelled and risk released | Blocked: final review, deploy |
@@ -134,6 +142,56 @@ Open items from the review:
   A basket larger than the share (momentum_ls opens 10 legs) cannot enter until the capital is raised or fewer
   strategies are on.
 
+## Full review and the admin's own account (2026-10-29 → 10-31, PRs #31–#45, #50)
+
+- Full review of server and order path (#31–#33): own OS groups for each shared folder, request IPC that can only
+  close, one failed order no longer locks a coin or a basket for good.
+- The admin's account runs every live strategy as its own bot (`raqm-demo@<strategy>` / `raqm-live@<strategy>`),
+  with a yes/no per strategy (#34, #36); one coin is held by one strategy only (a conflicting entry is refused).
+- Basket bots write their live status and carry out the site's close button (#35, #38). A manual close frees the
+  slot and the strategy keeps trading (#41); `trend_daily` still enters once per daily candle.
+- **Capital plan** (#37, #39, #42–#44, #50): the owner's capital sets the margin per trade (or a manual margin) and the
+  most trades open at once; the capital counts at most the account's real equity. Small capital lowers the margin
+  until one stop fits the per-trade risk limit (minimum $3). With a plan set, each strategy switched on gets an even
+  share of the open-trade count (`strategy_slots`), never above its own tested cap.
+- The admin page says why a strategy isn't trading (last refusal of the last 10 minutes) (#45), shows each position's
+  side and an estimated profit marked "≈" while fees and funding are unverified (#62).
+- A dropped balance request is retried once before entries are blocked (#49).
+
+## Problem alerts and uptime (PRs #47–#49, #54, #63)
+
+- `scripts/watchdog.py` (`raqm-watchdog.timer`, every 5 minutes, as `raqmlive`, read only): Telegram message when a
+  problem starts and when it clears — a bot down or not writing its status, a position without a confirmed stop on the
+  exchange, a review needed, entries blocked, the kill switch tripped, a ledger unreadable. Problems only, no daily
+  report (owner's choice). A crash of the watchdog itself is an alert (#54).
+- The watchdog can't report the server or its own timer being down, so it writes a heartbeat to
+  `/opt/raqm-ipc/watchdog_heartbeat.json`; the public `GET https://api.da3m.io/api/health/bots` answers 200 while it is
+  ≤ 15 minutes old and 503 otherwise (only an age and an alert count). An external monitor polls it every 5 minutes
+  (#63; the monitor account is the owner's).
+- Exits keep running when the live switch is off or the operator's kill switch is tripped (#54).
+
+## Demo measurement (since 2026-10-31)
+
+Settings, fixed for the measurement (Demo risk ledger `/opt/raqm-risk-demo`): capital $5,000 (Demo equity ≈ $5,000),
+manual margin $50, leverage 2, reserve 40%, risk per trade 2%, aggregate risk 40%. That is 60 trades by the capital
+and 50 by the aggregate risk; each of the 7 strategies gets 8 slots.
+
+- **Gap, accepted by the owner (2026-11-01): `momentum_ls` is not measured.** Its basket opens 10 legs together, more
+  than its 8 slots, so every rebalance is refused. To measure it: margin $40 (10 slots), or Demo equity and capital
+  ≥ $7,000.
+- Slow strategies: `rsi2_pullback` and `listing_short` trade about 4 times a month in the backtest, so 30 trades take
+  over 7 months; a smaller sample may be agreed for them, read with more caution.
+- Rule from the baseline: a strategy far from its baseline after its sample is switched off, not re-tuned.
+- 2026-11-01: 9 positions open (`trend_daily` 5, `ratio_trend` 2 pairs); no trade closed by a strategy yet — the 19
+  closed so far were closed by hand on 2026-10-30, before the measurement started, and are not counted.
+
+## Deployment (2026-11-01)
+
+`215596c` (PR #63) runs on the VPS: the 7 paper bots, the API, the real-orders copy in `/opt/raqm-live`, the 7
+`raqm-demo@<strategy>` bots and `raqm-watchdog.timer`. No `raqm-live@` unit exists; `ALLOW_LIVE_TRADING` is off;
+`readiness_evidence.json` is absent, so live activation is refused; `user_live_scheduler.py` is still not started by
+anything.
+
 ## Deployment (2026-10-29)
 
 `da39663` (PR #29, third review) runs on the VPS:
@@ -160,7 +218,10 @@ scripts), closing the cross-process file-access gap the third review found.
 6. Fresh independent review of the exact final head — first pass done (9088004, fixed in #21–#23); a second pass on
    the fixed head is next.
 
-Then: deploy the reviewed head to the VPS paper bots, watch it, and only after that consider real money, one strategy
-at a time, small size.
+7. ~~Deploy the reviewed head and run it unattended on Demo~~ — running since 2026-10-31 (see "Demo measurement").
+8. Each strategy's Demo results within its baseline after its sample — open.
+9. `readiness_evidence.json` written with the owner from that evidence, per strategy — open.
+
+Then, only after that: real money, one strategy at a time, small size.
 
 No step authorizes live trading by itself.
