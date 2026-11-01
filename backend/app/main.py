@@ -226,7 +226,8 @@ async def health():
 # the server is stuck. The VPS itself down shows as no answer at all. Only an age and a count, nothing about trades.
 HEARTBEAT_MAX_AGE_S = 900
 
-@app.get("/api/health/bots")
+# HEAD too: UptimeRobot checks with HEAD first, and a 405 there is a failed check
+@app.api_route("/api/health/bots", methods=["GET", "HEAD"])
 async def health_bots():
     try:
         hb = json.loads((IPC_DIR / "watchdog_heartbeat.json").read_text(encoding="utf-8"))

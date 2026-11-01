@@ -116,6 +116,16 @@ class HeartbeatTests(unittest.TestCase):
         r = self.api({"at": datetime.now(timezone.utc).isoformat(), "problems": 2})
         self.assertEqual(r.status_code, 200); self.assertEqual((r.json()["ok"], r.json()["problems"]), (True, 2))
 
+    def test_an_uptime_monitor_checking_with_head_gets_the_same_status(self):
+        sys.path.insert(0, str(ROOT / "backend"))
+        import app.main as m
+        from fastapi.testclient import TestClient
+        (self.d / "watchdog_heartbeat.json").write_text(json.dumps({"at": datetime.now(timezone.utc).isoformat()}), encoding="utf-8")
+        with mock.patch.object(m, "IPC_DIR", self.d):
+            self.assertEqual(TestClient(m.app).head("/api/health/bots").status_code, 200)
+            (self.d / "watchdog_heartbeat.json").unlink()
+            self.assertEqual(TestClient(m.app).head("/api/health/bots").status_code, 503)
+
     def test_a_stale_or_missing_heartbeat_is_503(self):
         self.assertEqual(self.api().status_code, 503)
         self.assertEqual(self.api({"at": (datetime.now(timezone.utc) - timedelta(minutes=16)).isoformat()}).status_code, 503)
