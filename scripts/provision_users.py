@@ -40,6 +40,7 @@ sys.path.insert(0, str(ROOT / "backend"))
 from app.user_bots import ENVS_ALLOWED, MAX_USERS, MAX_STRATEGIES, STRATEGIES, UID_RE, BOUNDS, validate  # noqa: E402,F401
 
 EXTRA_ARGS = {"trend_daily": "--universe 10"}      # as the owner's /opt/raqm-live/strategies/*.env
+NO_ENTRIES = '"no entries"'   # the applied record while a user is wound down
 
 
 def os_user(uid):
@@ -51,8 +52,9 @@ def unit(uid, strategy):
 
 
 def _read_small(path, limit=16384):
-    """A regular file, not followed through a symlink, at most `limit` bytes."""
-    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    """A regular file, not followed through a symlink, at most `limit` bytes. O_NONBLOCK: a FIFO planted in its place
+    must not hang root's run (open blocks before the regular-file check could refuse it)."""
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
     try:
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode) or st.st_size > limit:
@@ -83,17 +85,22 @@ def read_allow(path=ALLOW):
 
 def read_consent(path=CONSENT_DB):
     """{uid: environment consented to} for an enabled consent on binance (the existing audited record; records from
-    before the environment was recorded are real-money ones). Demo needs any; real money will need 'live'."""
-    try:
-        con = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
-        try:
-            cols = {r[1] for r in con.execute("PRAGMA table_info(user_live_activation)")}
-            env = "environment" if "environment" in cols else "'live'"
-            return {r[0]: r[1] for r in con.execute(f"SELECT user_id, {env} FROM user_live_activation WHERE enabled=1 AND exchange='binance'")}
-        finally:
-            con.close()
-    except sqlite3.Error:
+    before the environment was recorded are real-money ones). No record yet = nobody. A record that can't be read now
+    (locked while the API writes) raises: the run is skipped, never read as "nobody consents" — that winds everyone down."""
+    if not path.exists():
         return {}
+    con = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True, timeout=10)
+    try:
+        cols = {r[1] for r in con.execute("PRAGMA table_info(user_live_activation)")}
+        env = "environment" if "environment" in cols else "'live'"
+        return {r[0]: r[1] for r in con.execute(f"SELECT user_id, {env} FROM user_live_activation WHERE enabled=1 AND exchange='binance'")}
+    finally:
+        con.close()
+
+
+def consent_ok(consent, uid, env):
+    """A Demo bot needs a consent for Demo or real money; a real-money bot (not allowed yet) a real-money one only."""
+    return consent.get(uid) in (("demo", "live") if env == "demo" else ("live",))
 
 
 def read_keys(uids, vault=VAULT, api_env=API_ENV):
@@ -104,23 +111,27 @@ def read_keys(uids, vault=VAULT, api_env=API_ENV):
     from cryptography.fernet import Fernet
     key = next((l.split("=", 1)[1].strip().strip('"').strip("'") for l in _read_small(api_env, 65536).splitlines()
                 if l.startswith("VAULT_MASTER_KEY=")), "")
-    if not key or not vault.exists():
+    if not key:                       # a missing master key is a broken server, not "nobody has keys": skip the run
+        raise RuntimeError("VAULT_MASTER_KEY not found in the API's environment file")
+    if not vault.exists():
         return {}
     data = json.loads(Fernet(key.encode()).decrypt(_read_small(vault, 1 << 20).encode()).decode())
     out = {}
     for uid in uids:
         k = ((data.get(uid) or {}).get("binance") or {})
-        if k.get("apiKey") and k.get("secret"):
-            out[uid] = (k["apiKey"], k["secret"])
+        ak, sc = str(k.get("apiKey") or ""), str(k.get("secret") or "")
+        if ak and sc and not any(c.isspace() or c in "=\"'" for c in ak + sc):   # one line each in the credential
+            out[uid] = (ak, sc)
     return out
 
 
 def is_flat(state_file):
-    """No position and nothing pending in this bot's state. A missing file = never traded; unreadable = not flat."""
-    if not state_file.exists():
-        return True
+    """No position and nothing pending in this bot's state. A missing file = never traded; anything else that isn't a
+    small regular file read without following a link (the user's own folder) = not flat."""
     try:
-        st = json.loads(state_file.read_text(encoding="utf-8"))
+        st = json.loads(_read_small(state_file, 8 << 20))
+    except FileNotFoundError:
+        return True
     except Exception:
         return False
     return not (st.get("positions") or st.get("pending_orders") or st.get("recovery_required"))
@@ -130,9 +141,12 @@ def plan(desired, allow, consent, keys, running, flat):
     """The actions to take, from what is wanted and what runs. Pure: everything it needs is passed in.
     running: {uid: {strategy}} services enabled now; flat(uid, strategy) -> bool."""
     actions, wanted = [], {}
-    for uid in allow:                                         # the allow-list's order decides who gets the places
+    # who gets the places: users already running keep theirs (a newcomer never pushes out someone with open trades),
+    # then the allow-list's order
+    order = [u for u in allow if u in running] + [u for u in allow if u not in running]
+    for uid in order:
         d = desired.get(uid)
-        if d and d["enabled"] and d["strategies"] and uid in consent and uid in keys and len(wanted) < MAX_USERS:
+        if d and d["enabled"] and d["strategies"] and consent_ok(consent, uid, d["env"]) and uid in keys and len(wanted) < MAX_USERS:
             wanted[uid] = d
     for uid, d in wanted.items():
         actions.append(("user", uid))
@@ -152,7 +166,7 @@ def plan(desired, allow, consent, keys, running, flat):
             actions.append(("wipe_keys", uid))
     for uid, d in desired.items():                           # each user's page says where they stand
         state = ("off" if not (d["enabled"] and d["strategies"]) else "waiting_approval" if uid not in allow
-                 else "no_consent" if uid not in consent else "no_keys" if uid not in keys
+                 else "no_consent" if not consent_ok(consent, uid, d["env"]) else "no_keys" if uid not in keys
                  else "running" if uid in wanted else "no_place")
         actions.append(("answer", uid, {"state": state, "strategies": d["strategies"] if uid in wanted else []}))
     return actions
@@ -162,7 +176,8 @@ def dropin(uid, s, d):
     """The per-instance settings of raqm-user@.service."""
     data = DATA_ROOT / uid
     ipc = IPC_ROOT / uid / s
-    args = f"--leverage {d['leverage']} --amount {max(d['capital_margin_override_usdt'], 10):g} {EXTRA_ARGS.get(s, '')} --poll 60".split()
+    # --amount is the bot's fallback only: with the capital plan in the ledger the margin comes from the plan
+    args = f"--leverage {d['leverage']} --amount {d['capital_margin_override_usdt']:.2f} {EXTRA_ARGS.get(s, '')} --poll 60".split()
     return "\n".join([
         "# written by scripts/provision_users.py — do not edit by hand",
         "[Service]",
@@ -241,23 +256,29 @@ class System:
             self.root_dir(parent)
         self.own_dir(DATA_ROOT / uid / "risk", name, name, 0o700)
         self.own_dir(DATA_ROOT / uid / "state", name, name, 0o700)
+        # the strategy folder and its request folders: owner the user's bot, group the API, setgid — set by root on an
+        # O_NOFOLLOW handle (a user can't set the API's group). The API writes requests readable by the bot (0644 in
+        # a folder only the two can enter); the bot's status and results get the API's group from the setgid bit.
         for s in d["strategies"]:
-            self.own_dir(IPC_ROOT / uid / s, name, "raqmapi", 0o2770)   # the API reads status, writes close requests
+            for p in (IPC_ROOT / uid / s, IPC_ROOT / uid / s / "commands", IPC_ROOT / uid / s / "results"):
+                self.own_dir(p, name, "raqmapi", 0o2770)
         risk = DATA_ROOT / uid / "risk"
-        # inside the user's own folders, as the user: the close-request folders (the API writes requests through its
-        # group, the bot reads and removes them), then the ledger, capital plan and yes/no per strategy
-        mk = "".join(f"os.makedirs({str(IPC_ROOT / uid / s / sub)!r}, exist_ok=True); os.chmod({str(IPC_ROOT / uid / s / sub)!r}, 0o2770);"
-                     for s in d["strategies"] for sub in ("commands", "results"))
-        code = (f"{mk}import sys; sys.path.insert(0, 'backend'); from pathlib import Path; from app import risk_manager as r, live_activation as a;"
+        # the ledger, capital plan and yes/no per strategy: inside the user's own folder, so written as the user
+        code = ("import sys; sys.path.insert(0, 'backend'); from pathlib import Path; from app import risk_manager as r, live_activation as a;"
                 f"p = Path({str(risk)!r}); r.update_limits(p / 'risk_state.json', {json.dumps(_limits(d))});"
                 f"a.set_demo_strategies(p / 'live_activation.sqlite3', strategies={d['strategies']!r}, set_by='provisioner')")
-        self.run("runuser", "-u", os_user(uid), "--", f"{CODE}/venv/bin/python", "-E", "-s", "-c", f"import os; os.chdir({str(CODE)!r}); {code}")
+        self.as_user(uid, code)
 
     def no_entries(self, uid):
         risk = DATA_ROOT / uid / "risk"
         code = (f"import sys; sys.path.insert(0, 'backend'); from pathlib import Path; from app import live_activation as a;"
                 f"a.set_demo_strategies(Path({str(risk)!r}) / 'live_activation.sqlite3', strategies=[], set_by='provisioner')")
-        self.run("runuser", "-u", os_user(uid), "--", f"{CODE}/venv/bin/python", "-E", "-s", "-c", f"import os; os.chdir({str(CODE)!r}); {code}")
+        self.as_user(uid, code)
+
+    def as_user(self, uid, code):
+        """Python code run as the user, with an empty environment: nothing of root's process reaches their account."""
+        self.run("runuser", "-u", os_user(uid), "--", "/usr/bin/env", "-i", "PATH=/usr/bin:/bin", f"{CODE}/venv/bin/python",
+                 "-E", "-s", "-c", f"import os; os.chdir({str(CODE)!r}); {code}")
 
     def running(self):
         """{uid: {strategy}} of the raqm-user@ services enabled now."""
@@ -278,9 +299,11 @@ def _limits(d):
 
 def apply(actions, keys, sys_=None, log=print):
     sys_ = sys_ or System()
-    reload = False
+    reload, failed = False, set()
     for a in actions:
         kind, uid = a[0], a[1]
+        if uid in failed and kind in ("keys", "limits", "ensure"):
+            continue                  # never start a bot whose user, keys or limits weren't set up this run
         try:
             if kind == "user":
                 sys_.ensure_user(uid)
@@ -308,7 +331,11 @@ def apply(actions, keys, sys_=None, log=print):
                 sys_.run("systemctl", "enable", unit(uid, s)); sys_.run("systemctl", "restart", unit(uid, s))
                 log(f"{'started' if old is None else 'restarted with new settings'} {unit(uid, s)}")
             elif kind == "no_entries":
-                sys_.no_entries(uid)
+                # once per wind-down; and the applied record says so, so coming back with the same settings writes
+                # the user's yes/no per strategy again (otherwise it stayed empty: running, never entering)
+                applied = APPLIED / f"{uid}.json"
+                if sys_.read(applied) != NO_ENTRIES:
+                    sys_.no_entries(uid); sys_.write(applied, NO_ENTRIES, 0o600)
             elif kind == "stop":
                 s = a[2]
                 sys_.run("systemctl", "disable", "--now", unit(uid, s))
@@ -320,10 +347,12 @@ def apply(actions, keys, sys_=None, log=print):
                 log(f"keys wiped for {uid}")
             elif kind == "answer":       # root's file in root's folder; the API reads it for the user's page
                 path, text = IPC_ROOT / uid / "provision.json", json.dumps(a[2], sort_keys=True)
-                if sys_.read(path) != text:
-                    sys_.root_dir(IPC_ROOT / uid); sys_.write(path, text, 0o644)
+                if sys_.read(path) != text:          # the API only (other users can list the folders, not read this)
+                    sys_.root_dir(IPC_ROOT / uid); sys_.write(path, text, 0o640, owner="root:raqmapi")
         except Exception as e:                         # one user's failure never stops the others
             log(f"{kind} {uid}: {type(e).__name__}: {e}")
+            if kind in ("user", "keys", "limits"):
+                failed.add(uid)
     if reload:
         sys_.run("systemctl", "daemon-reload")
 

@@ -83,7 +83,7 @@ Template `deploy/vps/raqm-user@.service`, a copy of `raqm-demo@.service` with:
 - `LoadCredential=binance:/etc/raqm-users/<uid>/binance`;
 - `Environment=BINANCE_ENV=demo|live` and `--expect-env` the same, as today;
 - `RAQM_RISK_DIR`, `RAQM_IPC_DIR`, `--state` all under that user's folders;
-- `Conflicts=` between the Demo and real instance of the same user and strategy.
+- when real money comes: a separate instance name per environment, with `Conflicts=` between the Demo and the real one (one environment exists today).
 
 ### 4. Bot changes (small, owner's bots unaffected)
 

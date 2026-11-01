@@ -68,11 +68,26 @@ def read_desired(uid, folder=None):
         return None
 
 
-def _json(path):
+def read_json(path, limit=1 << 20):
+    """A file a user's bot wrote: a small regular file, not followed through a link (a bot could point its status at
+    another user's or the owner's), opened non-blocking (a FIFO in its place must not freeze the API). None otherwise."""
+    import stat
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    except OSError:
+        return None
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_size > limit:
+            return None
+        return json.loads(os.read(fd, limit + 1).decode("utf-8"))
     except (OSError, ValueError):
         return None
+    finally:
+        os.close(fd)
+
+
+_json = read_json
 
 
 def status(uid, ipc=None, now=None):
