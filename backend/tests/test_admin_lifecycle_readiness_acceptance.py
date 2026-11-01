@@ -103,7 +103,7 @@ class ReadinessAcceptanceTests(unittest.TestCase):
         self.assertIn("unverified", " ".join(result["strategies"]["trend_daily"]["reasons"]).lower())
 
     def test_environment_must_be_testnet_for_testnet_and_live(self):
-        evidence = {"schema_version": 1, "provenance": {"source": "trusted-readiness", "verified": True}, "strategies": {"trend_daily": {
+        evidence = {"schema_version": 2, "provenance": {"reviewed_commit_sha": "a" * 40, "evidence_artifact_sha256": "b" * 64, "evidence_id": "evidence-1", "producer": "job", "owner": "owner", "independent_review": {"reviewers": ["a", "b"], "open_findings": 0}}, "strategies": {"trend_daily": {
             field: {"value": True, "verified": True} for field in ("adapter_implemented", "recovery_tests", "security_approved", "testnet_validated")
         }}}
         result = build_admin_readiness(strategies=["trend_daily"], evidence=evidence, live_locked=False, environment="live")
@@ -112,7 +112,7 @@ class ReadinessAcceptanceTests(unittest.TestCase):
         self.assertIn("testnet environment", " ".join(result["strategies"]["trend_daily"]["reasons"]).lower())
 
     def test_live_ready_requires_unlocked_live_gate(self):
-        evidence = {"schema_version": 1, "provenance": {"source": "trusted-readiness", "verified": True}, "strategies": {"trend_daily": {
+        evidence = {"schema_version": 2, "provenance": {"reviewed_commit_sha": "a" * 40, "evidence_artifact_sha256": "b" * 64, "evidence_id": "evidence-1", "producer": "job", "owner": "owner", "independent_review": {"reviewers": ["a", "b"], "open_findings": 0}}, "strategies": {"trend_daily": {
             field: {"value": True, "verified": True} for field in ("adapter_implemented", "recovery_tests", "security_approved", "testnet_validated")
         }}}
         result = build_admin_readiness(strategies=["trend_daily"], evidence=evidence, live_locked=True, environment="testnet")

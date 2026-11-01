@@ -12,8 +12,10 @@ def evidence(*strategies):
     """A trusted, fully verified readiness document (the only thing activation may derive readiness from)."""
     fields = ("adapter_implemented", "recovery_tests", "security_approved", "testnet_validated")
     return {
-        "schema_version": 1,
-        "provenance": {"source": "trusted-readiness", "verified": True},
+        "schema_version": 2,
+                "provenance": {"reviewed_commit_sha": "a" * 40, "evidence_artifact_sha256": "b" * 64,
+                                "evidence_id": "evidence-20261102-001", "producer": "testnet-readiness-job",
+                                "owner": "readiness-owner", "independent_review": {"reviewers": ["a", "b"], "open_findings": 0}},
         "strategies": {s: {f: {"value": True, "verified": True} for f in fields} for s in strategies},
     }
 

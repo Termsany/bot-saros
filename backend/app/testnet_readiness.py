@@ -2,6 +2,7 @@
 from __future__ import annotations
 import math
 import os
+import re
 
 ALL_STRATEGIES = (
     "trend_daily", "listing_short", "momentum_ls", "ratio_trend",
@@ -9,6 +10,26 @@ ALL_STRATEGIES = (
 )
 
 EVIDENCE_FIELDS = ("adapter_implemented", "recovery_tests", "security_approved", "testnet_validated")
+_SHA40 = re.compile(r"^[0-9a-f]{40}$")
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _valid_v2_provenance(provenance):
+    if not isinstance(provenance, dict) or set(provenance) != {
+        "reviewed_commit_sha", "evidence_artifact_sha256", "evidence_id", "producer", "owner", "independent_review"
+    }:
+        return False
+    review = provenance["independent_review"]
+    return (
+        isinstance(provenance["reviewed_commit_sha"], str) and bool(_SHA40.fullmatch(provenance["reviewed_commit_sha"]))
+        and isinstance(provenance["evidence_artifact_sha256"], str) and bool(_SHA256.fullmatch(provenance["evidence_artifact_sha256"]))
+        and isinstance(provenance["evidence_id"], str) and bool(provenance["evidence_id"].strip())
+        and all(isinstance(provenance[k], str) and bool(provenance[k].strip()) for k in ("producer", "owner"))
+        and isinstance(review, dict) and set(review) == {"reviewers", "open_findings"}
+        and isinstance(review["reviewers"], list) and len(set(review["reviewers"])) >= 2
+        and all(isinstance(r, str) and r.strip() for r in review["reviewers"])
+        and review["open_findings"] == 0
+    )
 
 
 def build_admin_readiness(*, strategies, evidence=None, live_locked, environment=None):
@@ -16,13 +37,11 @@ def build_admin_readiness(*, strategies, evidence=None, live_locked, environment
     evidence = evidence if isinstance(evidence, dict) else {}
     provenance = evidence.get("provenance")
     valid_document = (
-        evidence.get("schema_version") == 1
-        and isinstance(provenance, dict)
-        and provenance.get("source") == "trusted-readiness"
-        and provenance.get("verified") is True
+        evidence.get("schema_version") == 2
+        and _valid_v2_provenance(provenance)
         and isinstance(evidence.get("strategies"), dict)
         and set(evidence) == {"schema_version", "provenance", "strategies"}
-        and set(provenance) == {"source", "verified"}
+
     )
     env = environment if environment is not None else os.getenv("BINANCE_ENV", "")
     rows = {}
