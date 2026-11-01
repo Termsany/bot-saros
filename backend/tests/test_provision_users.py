@@ -49,16 +49,27 @@ class PlanTests(unittest.TestCase):
         desired = {u: pu.validate(u, d) for u, d in (desired or {U1: doc(U1)}).items()}
         return pu.plan(desired, list(allow), set(consent), {u: ("k", "s") for u in keys}, running or {}, flat)
 
-    def kinds(self, actions):
-        return [(a[0],) + tuple(x for x in a[1:3] if isinstance(x, str)) for a in actions]
+    def kinds(self, actions):     # what is done to the machine (each user's page answer is checked on its own)
+        return [(a[0],) + tuple(x for x in a[1:3] if isinstance(x, str)) for a in actions if a[0] != "answer"]
+
+    def answer(self, actions, uid=U1):
+        return next(a[2]["state"] for a in actions if a[0] == "answer" and a[1] == uid)
 
     def test_a_user_passing_every_gate_gets_their_bot(self):
-        self.assertEqual(self.kinds(self.plan()), [("user", U1), ("keys", U1), ("limits", U1), ("ensure", U1, "trend_daily")])
+        acts = self.plan()
+        self.assertEqual(self.kinds(acts), [("user", U1), ("keys", U1), ("limits", U1), ("ensure", U1, "trend_daily")])
+        self.assertEqual(self.answer(acts), "running")
 
-    def test_each_gate_alone_keeps_a_user_out(self):
-        for kw in ({"allow": ()}, {"consent": ()}, {"keys": ()}, {"desired": {U1: doc(U1, enabled=False)}},
-                   {"desired": {U1: doc(U1, strategies=[])}}):
-            self.assertEqual(self.plan(**kw), [], kw)
+    def test_each_gate_alone_keeps_a_user_out_and_their_page_says_which(self):
+        for kw, why in (({"allow": ()}, "waiting_approval"), ({"consent": ()}, "no_consent"), ({"keys": ()}, "no_keys"),
+                        ({"desired": {U1: doc(U1, enabled=False)}}, "off"), ({"desired": {U1: doc(U1, strategies=[])}}, "off")):
+            acts = self.plan(**kw)
+            self.assertEqual(self.kinds(acts), [], kw); self.assertEqual(self.answer(acts), why, kw)
+
+    def test_past_the_cap_the_page_says_no_place(self):
+        users = [f"{i}{i}{i}{i}{i}{i}{i}{i}-1111-4111-8111-111111111111" for i in range(1, 7)]
+        acts = self.plan(desired={u: doc(u) for u in users}, allow=users, consent=users, keys=users)
+        self.assertEqual([self.answer(acts, u) for u in users], ["running"] * pu.MAX_USERS + ["no_place"] * 2)
 
     def test_the_cap_follows_the_allow_list_order(self):
         users = [f"{i}{i}{i}{i}{i}{i}{i}{i}-1111-4111-8111-111111111111" for i in range(1, 7)]
@@ -154,7 +165,10 @@ class ReadTests(unittest.TestCase):
             con = sqlite3.connect(d / "c.sqlite3")
             con.execute("CREATE TABLE user_live_activation (user_id TEXT, exchange TEXT, enabled INTEGER)")
             con.executemany("INSERT INTO user_live_activation VALUES (?,?,?)", [(U1, "binance", 1), (U2, "binance", 0)]); con.commit(); con.close()
-            self.assertEqual(pu.read_consent(d / "c.sqlite3"), {U1})
+            self.assertEqual(pu.read_consent(d / "c.sqlite3"), {U1: "live"})        # before the environment was kept
+            from backend.app import user_live_activation as ula
+            ula.enable_user_live(d / "n.sqlite3", user_id=U2, exchange="binance", confirm=ula.CONSENT_TEXT, actor="t", environment="demo")
+            self.assertEqual(pu.read_consent(d / "n.sqlite3"), {U2: "demo"})
             (d / ".env").write_text(f"OTHER=1\nVAULT_MASTER_KEY={key.decode()}\n", encoding="utf-8")
             vault = {U1: {"binance": {"apiKey": "a", "secret": "b"}}, U2: {"binance": {"apiKey": "a"}}}
             (d / "v.json").write_bytes(Fernet(key).encrypt(json.dumps(vault).encode()))

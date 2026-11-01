@@ -35,14 +35,11 @@ VAULT = Path("/opt/raqm-api/app/backend/user_vault.json")
 API_ENV = Path("/opt/raqm-api/.env")
 CONSENT_DB = Path("/opt/raqm-api/app/user_live_activation.sqlite3")
 
-ENVS_ALLOWED = ("demo",)      # P2.2: real money is refused in code, not by a setting
-MAX_USERS, MAX_STRATEGIES = 4, 2
-STRATEGIES = ("trend_daily", "vol_breakout", "rsi2_pullback", "trend_breakout", "listing_short", "momentum_ls", "ratio_trend")
+sys.path.insert(0, str(ROOT / "backend"))
+# the rules shared with the API (the same checks on both sides): Demo only, the cap, the strategies, the bounds
+from app.user_bots import ENVS_ALLOWED, MAX_USERS, MAX_STRATEGIES, STRATEGIES, UID_RE, BOUNDS, validate  # noqa: E402,F401
+
 EXTRA_ARGS = {"trend_daily": "--universe 10"}      # as the owner's /opt/raqm-live/strategies/*.env
-UID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
-# the per-user bounds of the existing consent record (backend/app/user_live_activation.py)
-BOUNDS = {"leverage": (1, 5), "risk_per_trade_pct": (0.01, 1.0), "max_aggregate_risk_pct": (0.01, 3.0),
-          "capital_usdt": (0.0, 1_000_000.0), "capital_margin_override_usdt": (0.0, 100_000.0)}
 
 
 def os_user(uid):
@@ -51,32 +48,6 @@ def os_user(uid):
 
 def unit(uid, strategy):
     return f"raqm-user@{uid}--{strategy}.service"
-
-
-def validate(uid, doc):
-    """The desired state, checked as if hostile (written by a less trusted process). ValueError on anything off."""
-    if not UID_RE.match(uid) or doc.get("user_id") != uid:
-        raise ValueError("user id")
-    env = doc.get("env")
-    if env not in ENVS_ALLOWED:
-        raise ValueError(f"environment {env!r} not allowed")
-    strategies = doc.get("strategies") or []
-    if not isinstance(strategies, list) or len(set(strategies)) != len(strategies) or any(s not in STRATEGIES for s in strategies):
-        raise ValueError("strategies")
-    if len(strategies) > MAX_STRATEGIES:
-        raise ValueError(f"more than {MAX_STRATEGIES} strategies")
-    clean = {"env": env, "enabled": doc.get("enabled") is True, "strategies": list(strategies)}
-    for k, (lo, hi) in BOUNDS.items():
-        v = doc.get(k, 0 if k.startswith("capital") else None)
-        if isinstance(v, bool) or not isinstance(v, (int, float)) or not lo <= v <= hi:
-            raise ValueError(f"{k} out of bounds")
-        clean[k] = float(v)
-    clean["leverage"] = int(clean["leverage"])
-    if clean["risk_per_trade_pct"] > clean["max_aggregate_risk_pct"]:
-        raise ValueError("risk per trade above the aggregate limit")
-    if clean["capital_margin_override_usdt"] > clean["capital_usdt"]:
-        raise ValueError("margin above the capital")
-    return clean
 
 
 def _read_small(path, limit=16384):
@@ -111,15 +82,18 @@ def read_allow(path=ALLOW):
 
 
 def read_consent(path=CONSENT_DB):
-    """{uid} with an enabled consent on binance (the existing audited record)."""
+    """{uid: environment consented to} for an enabled consent on binance (the existing audited record; records from
+    before the environment was recorded are real-money ones). Demo needs any; real money will need 'live'."""
     try:
         con = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
         try:
-            return {r[0] for r in con.execute("SELECT user_id FROM user_live_activation WHERE enabled=1 AND exchange='binance'")}
+            cols = {r[1] for r in con.execute("PRAGMA table_info(user_live_activation)")}
+            env = "environment" if "environment" in cols else "'live'"
+            return {r[0]: r[1] for r in con.execute(f"SELECT user_id, {env} FROM user_live_activation WHERE enabled=1 AND exchange='binance'")}
         finally:
             con.close()
     except sqlite3.Error:
-        return set()
+        return {}
 
 
 def read_keys(uids, vault=VAULT, api_env=API_ENV):
@@ -176,6 +150,11 @@ def plan(desired, allow, consent, keys, running, flat):
                 actions.append(("stop", uid, s))
         if uid not in wanted and all(flat(uid, s) for s in now):
             actions.append(("wipe_keys", uid))
+    for uid, d in desired.items():                           # each user's page says where they stand
+        state = ("off" if not (d["enabled"] and d["strategies"]) else "waiting_approval" if uid not in allow
+                 else "no_consent" if uid not in consent else "no_keys" if uid not in keys
+                 else "running" if uid in wanted else "no_place")
+        actions.append(("answer", uid, {"state": state, "strategies": d["strategies"] if uid in wanted else []}))
     return actions
 
 
@@ -239,26 +218,37 @@ class System:
             os.mkdir(path, mode)
         except FileExistsError:
             pass
-        if not stat.S_ISDIR(os.lstat(path).st_mode):
-            raise RuntimeError(f"{path} is not a plain folder")
-        os.chown(path, pwd.getpwnam(user).pw_uid, grp.getgrnam(group).gr_gid, follow_symlinks=False)
-        os.chmod(path, mode)          # a plain folder (checked above, in a parent only root can change)
+        # on an open handle of the folder itself: O_NOFOLLOW refuses a link, so nothing can be swapped in between
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fchown(fd, pwd.getpwnam(user).pw_uid, grp.getgrnam(group).gr_gid)
+            os.fchmod(fd, mode)
+        finally:
+            os.close(fd)
+
+    def root_dir(self, path):
+        """A folder of root's (a user's folder parent): created if missing, refused if it is a link or someone else's."""
+        path.mkdir(parents=True, exist_ok=True)
+        if path.is_symlink() or os.lstat(path).st_uid != 0:
+            raise RuntimeError(f"{path} is not root's")
+        os.chmod(path, 0o755)
 
     def set_limits(self, uid, d):
         """The user's ledger and yes/no per strategy. Root makes the folders (their parents are root's); what is inside
         the ledger folder is written as the user, never by root."""
         name = os_user(uid)
         for parent in (DATA_ROOT / uid, IPC_ROOT / uid):          # root's, so the user can't swap what is below
-            parent.mkdir(parents=True, exist_ok=True)
-            if parent.is_symlink() or os.lstat(parent).st_uid != 0:
-                raise RuntimeError(f"{parent} is not root's")
-            os.chmod(parent, 0o755)
+            self.root_dir(parent)
         self.own_dir(DATA_ROOT / uid / "risk", name, name, 0o700)
         self.own_dir(DATA_ROOT / uid / "state", name, name, 0o700)
         for s in d["strategies"]:
             self.own_dir(IPC_ROOT / uid / s, name, "raqmapi", 0o2770)   # the API reads status, writes close requests
         risk = DATA_ROOT / uid / "risk"
-        code = ("import sys; sys.path.insert(0, 'backend'); from pathlib import Path; from app import risk_manager as r, live_activation as a;"
+        # inside the user's own folders, as the user: the close-request folders (the API writes requests through its
+        # group, the bot reads and removes them), then the ledger, capital plan and yes/no per strategy
+        mk = "".join(f"os.makedirs({str(IPC_ROOT / uid / s / sub)!r}, exist_ok=True); os.chmod({str(IPC_ROOT / uid / s / sub)!r}, 0o2770);"
+                     for s in d["strategies"] for sub in ("commands", "results"))
+        code = (f"{mk}import sys; sys.path.insert(0, 'backend'); from pathlib import Path; from app import risk_manager as r, live_activation as a;"
                 f"p = Path({str(risk)!r}); r.update_limits(p / 'risk_state.json', {json.dumps(_limits(d))});"
                 f"a.set_demo_strategies(p / 'live_activation.sqlite3', strategies={d['strategies']!r}, set_by='provisioner')")
         self.run("runuser", "-u", os_user(uid), "--", f"{CODE}/venv/bin/python", "-E", "-s", "-c", f"import os; os.chdir({str(CODE)!r}); {code}")
@@ -328,6 +318,10 @@ def apply(actions, keys, sys_=None, log=print):
             elif kind == "wipe_keys":
                 sys_.remove(CRED_ROOT / uid / "binance")
                 log(f"keys wiped for {uid}")
+            elif kind == "answer":       # root's file in root's folder; the API reads it for the user's page
+                path, text = IPC_ROOT / uid / "provision.json", json.dumps(a[2], sort_keys=True)
+                if sys_.read(path) != text:
+                    sys_.root_dir(IPC_ROOT / uid); sys_.write(path, text, 0o644)
         except Exception as e:                         # one user's failure never stops the others
             log(f"{kind} {uid}: {type(e).__name__}: {e}")
     if reload:
@@ -344,6 +338,8 @@ def main(argv=None):
     sys_ = System()
     running = sys_.running()
     actions = plan(desired, allow, consent, keys, running, lambda u, s: is_flat(DATA_ROOT / u / "state" / f"{s}.json"))
+    actions += [("answer", name[:-5], {"state": "refused", "why": why, "strategies": []})
+                for name, why in bad.items() if UID_RE.match(name[:-5])]
     if dry:
         for a in actions: print(a[:3])
         return
