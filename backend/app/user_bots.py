@@ -25,8 +25,8 @@ BOUNDS = {"leverage": (1, 5), "risk_per_trade_pct": (0.01, 1.0), "max_aggregate_
 STALE_S = 300
 
 
-def ipc_instance(uid, strategy):
-    return IPC_ROOT / f"{uid}--{strategy}"
+def ipc_instance(uid, strategy, root=None):
+    return (root or IPC_ROOT) / f"{uid}--{strategy}"
 
 
 def strategy_policy(strategies, *, available_slots=10):
@@ -118,8 +118,8 @@ def status(uid, ipc=None, now=None):
     base = ipc / uid
     bots = {}
     for s in STRATEGIES:
-        st = _json(ipc_instance(uid, s) / "live_status.json") or _json(base / s / "live_status.json")
-        if st is None:
+        st = _json(ipc_instance(uid, s, ipc) / "live_status.json") or _json(base / s / "live_status.json")
+        if not isinstance(st, dict):
             continue
         try:
             st["running"] = (now - datetime.fromisoformat(st["updated"])).total_seconds() < STALE_S

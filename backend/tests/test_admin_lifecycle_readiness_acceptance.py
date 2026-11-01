@@ -11,9 +11,16 @@ sys.path.insert(0, str(ROOT / "backend"))
 
 from app import admin_control
 import app.main as main
-from app.testnet_readiness import build_admin_readiness
+from app.testnet_readiness import build_admin_readiness, evidence_artifact_sha256
 
 ADMIN = {"id": "admin", "email": "admin@example.com"}
+EXPECTED_COMMIT = "a" * 40
+
+
+def valid_evidence():
+    doc = {"schema_version": 2, "provenance": {"reviewed_commit_sha": EXPECTED_COMMIT, "evidence_artifact_sha256": "", "evidence_id": "evidence-1", "producer": "job", "owner": "owner", "independent_review": {"reviewers": ["a", "b"], "open_findings": 0}}, "strategies": {"trend_daily": {field: {"value": True, "verified": True} for field in ("adapter_implemented", "recovery_tests", "security_approved", "testnet_validated")}}}
+    doc["provenance"]["evidence_artifact_sha256"] = evidence_artifact_sha256(doc)
+    return doc
 
 
 class LifecycleAcceptanceTests(unittest.IsolatedAsyncioTestCase):
@@ -103,19 +110,15 @@ class ReadinessAcceptanceTests(unittest.TestCase):
         self.assertIn("unverified", " ".join(result["strategies"]["trend_daily"]["reasons"]).lower())
 
     def test_environment_must_be_testnet_for_testnet_and_live(self):
-        evidence = {"schema_version": 2, "provenance": {"reviewed_commit_sha": "a" * 40, "evidence_artifact_sha256": "b" * 64, "evidence_id": "evidence-1", "producer": "job", "owner": "owner", "independent_review": {"reviewers": ["a", "b"], "open_findings": 0}}, "strategies": {"trend_daily": {
-            field: {"value": True, "verified": True} for field in ("adapter_implemented", "recovery_tests", "security_approved", "testnet_validated")
-        }}}
-        result = build_admin_readiness(strategies=["trend_daily"], evidence=evidence, live_locked=False, environment="live")
+        evidence = valid_evidence()
+        result = build_admin_readiness(strategies=["trend_daily"], evidence=evidence, live_locked=False, environment="live", expected_reviewed_commit_sha=EXPECTED_COMMIT)
         self.assertFalse(result["testnet_ready"])
         self.assertFalse(result["live_ready"])
         self.assertIn("testnet environment", " ".join(result["strategies"]["trend_daily"]["reasons"]).lower())
 
     def test_live_ready_requires_unlocked_live_gate(self):
-        evidence = {"schema_version": 2, "provenance": {"reviewed_commit_sha": "a" * 40, "evidence_artifact_sha256": "b" * 64, "evidence_id": "evidence-1", "producer": "job", "owner": "owner", "independent_review": {"reviewers": ["a", "b"], "open_findings": 0}}, "strategies": {"trend_daily": {
-            field: {"value": True, "verified": True} for field in ("adapter_implemented", "recovery_tests", "security_approved", "testnet_validated")
-        }}}
-        result = build_admin_readiness(strategies=["trend_daily"], evidence=evidence, live_locked=True, environment="testnet")
+        evidence = valid_evidence()
+        result = build_admin_readiness(strategies=["trend_daily"], evidence=evidence, live_locked=True, environment="testnet", expected_reviewed_commit_sha=EXPECTED_COMMIT)
         self.assertTrue(result["testnet_ready"])
         self.assertFalse(result["live_ready"])
     def test_incomplete_evidence_never_live_ready_and_aggregates_are_distinct(self):

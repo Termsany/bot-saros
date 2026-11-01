@@ -111,6 +111,17 @@ class UserBotsApiTests(ApiAuthTests):
             self.skipTest("symlinks not available here")
         self.assertEqual(self.c.get("/api/user/bots", headers=self.h("u1-token")).json()["bots"], {})
 
+    def test_custom_ipc_root_is_used_and_non_dict_status_is_ignored(self):
+        custom = Path(self.tmp.name) / "custom-ipc"
+        (custom / U1 / "trend_daily").mkdir(parents=True)
+        (custom / U1 / "trend_daily" / "live_status.json").write_text(json.dumps([]), encoding="utf-8")
+        self.assertEqual(self.ub.status(U1, ipc=custom)["bots"], {})
+        (custom / f"{U1}--trend_daily").mkdir(parents=True)
+        (custom / f"{U1}--trend_daily" / "live_status.json").write_text(json.dumps({
+            "updated": datetime.now(timezone.utc).isoformat(), "positions": []}), encoding="utf-8")
+        result = self.ub.status(U1, ipc=custom)
+        self.assertTrue(result["bots"]["trend_daily"]["running"])
+
     def test_a_demo_consent_leaves_the_keys_marked_as_they_were(self):
         from app.user_keys_vault import save_user_keys, user_key_status
         from app.user_live_activation import CONSENT_TEXT

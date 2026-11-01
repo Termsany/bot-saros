@@ -66,7 +66,8 @@ def _normalise_allocation(strategies, risk_allocation):
     return shares
 
 
-def activate(path, *, environment, account, approved_by, strategies, risk_allocation=None, readiness_evidence=None):
+def activate(path, *, environment, account, approved_by, strategies, risk_allocation=None, readiness_evidence=None,
+             expected_reviewed_commit_sha=None):
     """Create an activation audit record; every gate must pass explicitly.
 
     Readiness is derived from the trusted evidence document, never supplied by the caller: a request can say a strategy
@@ -82,7 +83,8 @@ def activate(path, *, environment, account, approved_by, strategies, risk_alloca
     allocation = _normalise_allocation(strategies, risk_allocation)
     from .testnet_readiness import build_live_activation_readiness
     readiness = build_live_activation_readiness(strategies=strategies, evidence=readiness_evidence,
-                                                live_enabled=True)   # _env_enabled() above is the server switch
+                                                live_enabled=True,
+                                                expected_reviewed_commit_sha=expected_reviewed_commit_sha or os.getenv("READINESS_EXPECTED_COMMIT_SHA"))
     not_ready = [s for s in strategies if readiness.get(s) is not True]
     if not_ready:
         raise ValueError(f"strategies are not readiness-verified: {', '.join(not_ready)}")
