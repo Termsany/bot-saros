@@ -54,6 +54,8 @@ export function LivePositions({ strategy, label, st, reload }: { strategy: strin
   if(!st) return null
   const env = st.env === "live" ? "فلوس حقيقية" : st.env === "demo" ? "Binance Demo" : st.env || ""
   const total = ((st.positions || []) as any[]).reduce((a, p) => a + (Number(p.pnl) || 0), 0)
+  const estimated = ((st.positions || []) as any[]).some(p => p.pnl_estimated)
+  const approx = (v?: number|null, est?: boolean) => est && v !== null && v !== undefined ? `≈ ${money(v)}` : money(v)
   return (
     <Card>
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -62,7 +64,7 @@ export function LivePositions({ strategy, label, st, reload }: { strategy: strin
           {env && <Pill tone={st.env === "live" ? "loss" : "corona"}>{env}</Pill>}
           <span className="flex items-center gap-1.5 text-[12px] text-muted"><Dot tone={st.running ? "profit" : "loss"} pulse={st.running}/>{st.running ? `شغال · آخر تحديث ${ago(st.updated)}` : "البوت مش شغال"}</span>
         </div>
-        {st.positions?.length > 0 && <span className="text-[12px] text-muted">{st.positions.length} مفتوحة · <b className={`font-mono tabular ${tone(total)}`} dir="ltr">{money(total)}</b></span>}
+        {st.positions?.length > 0 && <span className="text-[12px] text-muted">{st.positions.length} مفتوحة · <b className={`font-mono tabular ${tone(total)}`} dir="ltr">{approx(total, estimated)}</b></span>}
       </div>
       {st.entry_block && <Banner t="loss">الدخول متوقف: {st.entry_block}</Banner>}
       <WhyNoTrade st={st} />
@@ -82,10 +84,10 @@ export function LivePositions({ strategy, label, st, reload }: { strategy: strin
                     <div className="mt-1 flex justify-end gap-1">{p.side === "short" ? <Pill tone="loss">SHORT</Pill> : <Pill tone="profit">LONG</Pill>}{p.unprotected && <Pill tone="loss">من غير وقف!</Pill>}</div>
                   </td>
                   <td className="px-2 py-3 font-mono tabular" dir="ltr" style={{ textAlign: "right" }}>{px(p.entry)} → {px(p.price)}<div className="text-[11px] text-faint">{ago(p.opened)}</div></td>
-                  <td className={`px-2 py-3 font-mono font-semibold tabular ${tone(p.pnl)}`} dir="ltr" style={{ textAlign: "right" }}>{money(p.pnl)}</td>
+                  <td className={`px-2 py-3 font-mono font-semibold tabular ${tone(p.pnl)}`} dir="ltr" style={{ textAlign: "right" }}>{approx(p.pnl, p.pnl_estimated)}{p.pnl_estimated && <div className="font-sans text-[10px] font-normal text-faint">تقريبي · من غير الـ funding</div>}</td>
                   <td className="px-2 py-3">
                     <span className="font-mono text-loss" dir="ltr">{px(p.sl)}</span> <span className="text-faint">({pct(p.price, p.sl)})</span>
-                    <div className="text-[11px] text-faint">لو اتضرب: {money(p.loss_at_sl)}{p.sl_unverified && <span className="text-loss"> · مش متأكدين إنه على Binance</span>}</div>
+                    <div className="text-[11px] text-faint">لو اتضرب: {approx(p.loss_at_sl, p.pnl_estimated)}{p.sl_unverified && <span className="text-loss"> · مش متأكدين إنه على Binance</span>}</div>
                   </td>
                   <td className="px-2 py-3">
                     {p.exit_below ? <><span className="text-muted">لو قفل يومي تحت <span className="font-mono text-ink" dir="ltr">{px(p.exit_below)}</span></span> <span className="text-faint">({pct(p.price, p.exit_below)})</span></>
