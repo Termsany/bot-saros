@@ -42,7 +42,7 @@ class Sim(FakeBinance):
     # like Binance USDT-M (seen on Demo): stop/take-profit orders only show in the trigger/stop views, and a plain
     # cancel of one answers -2011 "Unknown order sent"
     def _stops(self, sym):
-        return [{"id": "stop-" + o["params"]["clientOrderId"], "clientOrderId": o["params"]["clientOrderId"]}
+        return [{"id": "stop-" + o["params"]["clientOrderId"], "clientOrderId": o["params"]["clientOrderId"], "status": "open"}
                 for o in self.orders if o["symbol"] == sym and ("stopLossPrice" in o["params"] or "takeProfitPrice" in o["params"])
                 and "stop-" + o["params"]["clientOrderId"] not in self.cancelled]
     def fetch_open_orders(self, sym, since=None, limit=None, params=None):

@@ -15,8 +15,13 @@ from test_security import ApiAuthTests
 
 def trusted_evidence(strategies):
     fields = ("adapter_implemented", "recovery_tests", "security_approved", "testnet_validated")
-    return {"schema_version": 1, "provenance": {"source": "trusted-readiness", "verified": True},
+    from app.testnet_readiness import evidence_artifact_sha256
+    doc = {"schema_version": 2, "provenance": {"reviewed_commit_sha": "a" * 40, "evidence_artifact_sha256": "",
+            "evidence_id": "test-evidence-20261102", "producer": "testnet-readiness-job", "owner": "readiness-owner",
+            "independent_review": {"reviewers": ["reviewer-a", "reviewer-b"], "open_findings": 0}},
             "strategies": {s: {f: {"value": True, "verified": True} for f in fields} for s in strategies}}
+    doc["provenance"]["evidence_artifact_sha256"] = evidence_artifact_sha256(doc)
+    return doc
 
 
 class SameAccountTests(unittest.TestCase):
@@ -89,7 +94,7 @@ class StrategyTogglesApiTests(ApiAuthTests):
     def test_readiness_is_not_taken_from_the_request(self):
         from app import live_activation as la
         (Path(self.tmp.name) / "readiness_evidence.json").unlink()
-        with mock.patch.dict(os.environ, {"ALLOW_LIVE_TRADING": "true"}):
+        with mock.patch.dict(os.environ, {"ALLOW_LIVE_TRADING": "true", "READINESS_EXPECTED_COMMIT_SHA": "a" * 40}):
             r = self.c.post("/api/live/strategies", headers=self.h("admin-token"), json={
                 "account": "main", "strategies": ["trend_daily"],
                 "readiness": {"trend_daily": True}, "risk_allocation": {"trend_daily": 1.0}})
@@ -99,7 +104,7 @@ class StrategyTogglesApiTests(ApiAuthTests):
     def test_yes_no_per_strategy(self):
         from app import live_activation as la
         path = self.m.LIVE_ACTIVATION_PATH
-        with mock.patch.dict(os.environ, {"ALLOW_LIVE_TRADING": "true"}):
+        with mock.patch.dict(os.environ, {"ALLOW_LIVE_TRADING": "true", "READINESS_EXPECTED_COMMIT_SHA": "a" * 40}):
             self.assertEqual(self.put(["trend_daily", "momentum_ls"]).status_code, 200)
             self.assertTrue(la.live_activation_allowed(path, strategy="momentum_ls", account="main")[0])
             self.assertFalse(la.live_activation_allowed(path, strategy="ratio_trend", account="main")[0])

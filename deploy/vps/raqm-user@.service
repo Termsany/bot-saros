@@ -34,6 +34,7 @@ RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 SystemCallArchitectures=native
 # nothing of the owner's, the API's or the other applications' on this server
 InaccessiblePaths=-/opt/raqm-live -/opt/raqm-bot -/opt/raqm-api -/opt/raqm-risk -/opt/raqm-risk-demo -/opt/raqm-ipc -/opt/raqm-ipc-paper
+ReadWritePaths=/opt/raqm-users/ipc/%i
 MemoryMax=300M
 
 [Install]

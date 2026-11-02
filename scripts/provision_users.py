@@ -37,7 +37,7 @@ CONSENT_DB = Path("/opt/raqm-api/app/user_live_activation.sqlite3")
 
 sys.path.insert(0, str(ROOT / "backend"))
 # the rules shared with the API (the same checks on both sides): Demo only, the cap, the strategies, the bounds
-from app.user_bots import ENVS_ALLOWED, MAX_USERS, MAX_STRATEGIES, STRATEGIES, UID_RE, BOUNDS, validate  # noqa: E402,F401
+from app.user_bots import ENVS_ALLOWED, MAX_USERS, MAX_STRATEGIES, STRATEGIES, UID_RE, BOUNDS, validate, strategy_policy  # noqa: E402,F401
 
 EXTRA_ARGS = {"trend_daily": "--universe 10"}      # as the owner's /opt/raqm-live/strategies/*.env
 NO_ENTRIES = '"no entries"'   # the applied record while a user is wound down
@@ -49,6 +49,10 @@ def os_user(uid):
 
 def unit(uid, strategy):
     return f"raqm-user@{uid}--{strategy}.service"
+
+
+def ipc_instance(uid, strategy):
+    return IPC_ROOT / f"{uid}--{strategy}"
 
 
 def _read_small(path, limit=16384):
@@ -175,7 +179,7 @@ def plan(desired, allow, consent, keys, running, flat):
 def dropin(uid, s, d):
     """The per-instance settings of raqm-user@.service."""
     data = DATA_ROOT / uid
-    ipc = IPC_ROOT / uid / s
+    ipc = ipc_instance(uid, s)
     # --amount is the bot's fallback only: with the capital plan in the ledger the margin comes from the plan
     args = f"--leverage {d['leverage']} --amount {d['capital_margin_override_usdt']:.2f} {EXTRA_ARGS.get(s, '')} --poll 60".split()
     return "\n".join([
@@ -252,7 +256,7 @@ class System:
         """The user's ledger and yes/no per strategy. Root makes the folders (their parents are root's); what is inside
         the ledger folder is written as the user, never by root."""
         name = os_user(uid)
-        for parent in (DATA_ROOT / uid, IPC_ROOT / uid):          # root's, so the user can't swap what is below
+        for parent in (DATA_ROOT / uid, IPC_ROOT):                 # root's, so the user can't swap what is below
             self.root_dir(parent)
         self.own_dir(DATA_ROOT / uid / "risk", name, name, 0o700)
         self.own_dir(DATA_ROOT / uid / "state", name, name, 0o700)
@@ -260,7 +264,7 @@ class System:
         # O_NOFOLLOW handle (a user can't set the API's group). The API writes requests readable by the bot (0644 in
         # a folder only the two can enter); the bot's status and results get the API's group from the setgid bit.
         for s in d["strategies"]:
-            for p in (IPC_ROOT / uid / s, IPC_ROOT / uid / s / "commands", IPC_ROOT / uid / s / "results"):
+            for p in (ipc_instance(uid, s), ipc_instance(uid, s) / "commands", ipc_instance(uid, s) / "results"):
                 self.own_dir(p, name, "raqmapi", 0o2770)
         risk = DATA_ROOT / uid / "risk"
         # the ledger, capital plan and yes/no per strategy: inside the user's own folder, so written as the user

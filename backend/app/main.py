@@ -1275,7 +1275,8 @@ async def live_strategies_set(req: LiveStrategiesReq, user: dict = Depends(requi
     try:
         aid = live_activation.activate(LIVE_ACTIVATION_PATH, environment="live", account=req.account, approved_by=actor,
                                        strategies=chosen,
-                                       readiness_evidence=_safe_json_file(BOT_DIR / "readiness_evidence.json") or {})
+                                       readiness_evidence=_safe_json_file(BOT_DIR / "readiness_evidence.json") or {},
+                                       expected_reviewed_commit_sha=_trusted_readiness_commit())
     except PermissionError as exc:
         raise HTTPException(403, str(exc))
     except ValueError as exc:
@@ -1299,7 +1300,8 @@ async def live_activation_create(req: LiveActivationReq, user: dict = Depends(re
     try:
         aid = live_activation.activate(LIVE_ACTIVATION_PATH, environment=req.environment, account=req.account,
             approved_by=str(user.get("email") or user.get("id")), strategies=req.strategies,
-            readiness_evidence=_safe_json_file(BOT_DIR / "readiness_evidence.json") or {})
+            readiness_evidence=_safe_json_file(BOT_DIR / "readiness_evidence.json") or {},
+            expected_reviewed_commit_sha=_trusted_readiness_commit())
     except PermissionError as exc:
         raise HTTPException(403, str(exc))
     except ValueError as exc:
@@ -1392,6 +1394,11 @@ def _risk_path(): return risk_manager.ledger_dir(BOT_DIR) / "risk_state.json"   
 def _safe_json_file(path):
     try: return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
     except Exception: return None
+
+def _trusted_readiness_commit():
+    """Deployment-provided exact commit binding; missing or malformed means readiness fails closed."""
+    value = os.getenv("READINESS_EXPECTED_COMMIT_SHA", "").strip().lower()
+    return value if re.fullmatch(r"[0-9a-f]{40}", value) else None
 
 def _health_snapshot():
     cfg=_safe_json_file(BOT_DIR / "api_bot_config.json") or {}
@@ -1867,7 +1874,9 @@ async def admin_readiness(user: dict = Depends(require_admin)):
         risk_readable = False
         kill_clear = False
     evidence = _safe_json_file(BOT_DIR / "readiness_evidence.json") or {}
-    result = build_admin_readiness(strategies=list(admin_control.STRATEGIES), evidence=evidence, live_locked=not live_trading_allowed(), environment=os.getenv("BINANCE_ENV", ""))
+    result = build_admin_readiness(strategies=list(admin_control.STRATEGIES), evidence=evidence,
+                                   live_locked=not live_trading_allowed(), environment=os.getenv("BINANCE_ENV", ""),
+                                   expected_reviewed_commit_sha=_trusted_readiness_commit())
     result.update({"environment":"testnet" if os.getenv("BINANCE_ENV")=="testnet" else "unavailable", "checks":{"server_live_flag_locked":not live_trading_allowed(), "risk_ledger_readable":risk_readable, "kill_switch_clear":kill_clear}})
     result["testnet_ready"] = result["testnet_ready"] and risk_readable and kill_clear
     result["live_ready"] = result["live_ready"] and risk_readable and kill_clear
@@ -2078,8 +2087,8 @@ async def user_bots_close(req: UserBotCloseReq, user: dict = Depends(require_use
     if sym.split(":")[0] not in {p.get("symbol") for p in st.get("positions") or []}:
         raise HTTPException(404, "no open position on that coin")
     rid = uuid.uuid4().hex
-    base = user_bots.IPC_ROOT / user["id"]
-    _drop_request(base / req.strategy / "commands", base, rid,
+    base = user_bots.close_ipc(user["id"], req.strategy)
+    _drop_request(base / "commands", base, rid,
                   {"id": rid, "symbol": sym, "at_epoch": _time.time(), "by": user.get("email")}, mode=0o644)
     return {"ok": True, "id": rid}
 
@@ -2087,7 +2096,7 @@ async def user_bots_close(req: UserBotCloseReq, user: dict = Depends(require_use
 async def user_bots_close_result(strategy: str, rid: str, user: dict = Depends(require_user)):
     if strategy not in user_bots.STRATEGIES or not re.fullmatch(r"[0-9a-f]{32}", rid):
         raise HTTPException(400, "bad request")
-    d = user_bots.IPC_ROOT / user["id"] / strategy
+    d = user_bots.close_ipc(user["id"], strategy)
     res = user_bots.read_json(d / "results" / f"{rid}.json")      # the user's bot wrote it: no link followed
     if res is None:
         return {"done": False, "pending": (d / "commands" / f"close-{rid}.json").exists()}

@@ -46,11 +46,18 @@ class UserBotsApiTests(ApiAuthTests):
         self.assertIsNone(self.c.get("/api/user/bots", headers=self.h("u2-token")).json()["desired"])
 
     def test_what_the_rules_refuse_is_refused_here_too(self):
-        for kw in ({"env": "live"}, {"strategies": ["ict"]}, {"strategies": ["trend_daily", "vol_breakout", "rsi2_pullback"]},
+        for kw in ({"env": "live"}, {"strategies": ["ict"]}, {"strategies": ["momentum_ls"], "risk_per_trade_pct": 1.0, "max_aggregate_risk_pct": 9.0},
                    {"leverage": 9}, {"risk_per_trade_pct": 2.0}, {"capital_margin_override_usdt": 5000}):
             self.assertEqual(self.ask(**kw).status_code, 400, kw)
         self.assertEqual(self.ask(tok="new-token").status_code, 403)               # email not confirmed
         self.assertEqual(self.c.post("/api/user/bots", json=ASK).status_code, 401)
+
+    def test_strategy_policy_recommends_three_but_charges_slots_by_strategy(self):
+        self.assertEqual(self.ub.strategy_policy(["trend_daily", "vol_breakout", "rsi2_pullback"]),
+                         {"accepted": True, "recommended": 3, "slots": 3, "reason": "ok"})
+        self.assertEqual(self.ub.strategy_policy(["trend_daily", "vol_breakout"])["recommended"], 3)
+        self.assertEqual(self.ub.strategy_policy(["momentum_ls"])["slots"], 10)
+        self.assertFalse(self.ub.strategy_policy(["momentum_ls"], available_slots=9)["accepted"])
 
     def test_the_page_shows_the_provisioners_answer_and_the_bots(self):
         self.ask()
@@ -104,6 +111,17 @@ class UserBotsApiTests(ApiAuthTests):
             self.skipTest("symlinks not available here")
         self.assertEqual(self.c.get("/api/user/bots", headers=self.h("u1-token")).json()["bots"], {})
 
+    def test_custom_ipc_root_is_used_and_non_dict_status_is_ignored(self):
+        custom = Path(self.tmp.name) / "custom-ipc"
+        (custom / U1 / "trend_daily").mkdir(parents=True)
+        (custom / U1 / "trend_daily" / "live_status.json").write_text(json.dumps([]), encoding="utf-8")
+        self.assertEqual(self.ub.status(U1, ipc=custom)["bots"], {})
+        (custom / f"{U1}--trend_daily").mkdir(parents=True)
+        (custom / f"{U1}--trend_daily" / "live_status.json").write_text(json.dumps({
+            "updated": datetime.now(timezone.utc).isoformat(), "positions": []}), encoding="utf-8")
+        result = self.ub.status(U1, ipc=custom)
+        self.assertTrue(result["bots"]["trend_daily"]["running"])
+
     def test_a_demo_consent_leaves_the_keys_marked_as_they_were(self):
         from app.user_keys_vault import save_user_keys, user_key_status
         from app.user_live_activation import CONSENT_TEXT
@@ -118,6 +136,19 @@ class UserBotsApiTests(ApiAuthTests):
         (d / "live_status.json").write_text(json.dumps({"updated": datetime.now(timezone.utc).isoformat(), "positions": [{"symbol": "SOL/USDT"}]}), encoding="utf-8")
         rid = self.c.post("/api/user/bots/close", headers=self.h("u1-token"), json={"strategy": "trend_daily", "symbol": "SOL/USDT"}).json()["id"]
         self.assertTrue(os.stat(d / "commands" / f"close-{rid}.json").st_mode & 0o004)
+
+    def test_legacy_close_result_uses_the_same_per_user_ipc_layout(self):
+        d = self.ipc / U1 / "trend_daily"; (d / "commands").mkdir(parents=True)
+        (d / "live_status.json").write_text(json.dumps({"updated": datetime.now(timezone.utc).isoformat(), "positions": [{"symbol": "SOL/USDT"}]}), encoding="utf-8")
+        r = self.c.post("/api/user/bots/close", headers=self.h("u1-token"), json={"strategy": "trend_daily", "symbol": "SOL/USDT"})
+        self.assertEqual(r.status_code, 200)
+        rid = r.json()["id"]
+        self.assertEqual(self.c.get(f"/api/user/bots/close/trend_daily/{rid}", headers=self.h("u1-token")).json(), {"done": False, "pending": True})
+        (d / "commands" / f"close-{rid}.json").unlink()
+        (d / "results").mkdir()
+        (d / "results" / f"{rid}.json").write_text(json.dumps({"id": rid, "ok": True}), encoding="utf-8")
+        self.assertEqual(self.c.get(f"/api/user/bots/close/trend_daily/{rid}", headers=self.h("u1-token")).json(), {"done": True, "id": rid, "ok": True})
+        self.assertEqual(self.c.get(f"/api/user/bots/close/trend_daily/{rid}", headers=self.h("u2-token")).json(), {"done": False, "pending": False})
 
 
 
