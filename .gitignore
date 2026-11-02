@@ -42,3 +42,7 @@ risk_state*.sqlite3
 *.log
 
 testnet_e2e_runs/
+
+# generated readiness evidence: produced by scripts/make_readiness_evidence.py from operator-run reports
+readiness_evidence.json
+readiness_evidence.provenance.json

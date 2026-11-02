@@ -74,7 +74,10 @@ class StrategyTogglesApiTests(ApiAuthTests):
         self.p = mock.patch.object(m, "LIVE_ACTIVATION_PATH", Path(self.tmp.name) / "act.sqlite3"); self.p.start()
         self.p_dir = mock.patch.object(m, "BOT_DIR", Path(self.tmp.name)); self.p_dir.start()   # the audit log
         (Path(self.tmp.name) / "readiness_evidence.json").write_text(
-            json.dumps(trusted_evidence(m.LIVE_STRATEGIES)), encoding="utf-8")
+            json.dumps(trusted_evidence([*m.LIVE_STRATEGIES, "default"])), encoding="utf-8")
+        # activation now preflights the ledger's own plan: seed one that can fund every selected strategy
+        rm.save_risk_state(m._risk_path(), rm._default_state({
+            "capital_usdt": 100_000, "capital_margin_override_usdt": 30.0}))
 
     def tearDown(self):
         self.p.stop(); self.p_dir.stop(); super().tearDown()
@@ -94,6 +97,29 @@ class StrategyTogglesApiTests(ApiAuthTests):
                 "account": "main", "strategies": ["trend_daily"],
                 "readiness": {"trend_daily": True}, "risk_allocation": {"trend_daily": 1.0}})
             self.assertEqual(r.status_code, 422)
+            self.assertIsNone(la.active_record(self.m.LIVE_ACTIVATION_PATH))
+
+    def test_readiness_screen_works_on_the_live_api_host(self):
+        # The API host is not on testnet; the evidence document is the testnet record. The screen must show it and
+        # report the runtime environment separately instead of refusing because BINANCE_ENV is not "testnet".
+        with mock.patch.dict(os.environ, {"BINANCE_ENV": "live", "ALLOW_LIVE_TRADING": ""}):
+            r = self.c.get("/api/admin/readiness", headers=self.h("admin-token"))
+        self.assertEqual(r.status_code, 200)
+        data = r.json()
+        self.assertEqual(data["environment"], "live")
+        self.assertEqual(data["runtime_environment"], "live")
+        self.assertTrue(data["testnet_ready"])
+        self.assertFalse(data["live_ready"])           # the server live switch stays off
+        self.assertTrue(data["checks"]["server_live_flag_locked"])
+        self.assertIn("trend_daily", data["strategies"])
+
+    def test_refused_when_the_ledger_plan_cannot_fund_a_trade(self):
+        from app import live_activation as la
+        rm.update_limits(self.m._risk_path(), {"capital_usdt": 1_000, "capital_margin_override_usdt": None})
+        with mock.patch.dict(os.environ, {"ALLOW_LIVE_TRADING": "true"}):
+            r = self.put(["trend_daily"])
+            self.assertEqual(r.status_code, 422)
+            self.assertIn("risk_per_trade_pct", r.json()["detail"])
             self.assertIsNone(la.active_record(self.m.LIVE_ACTIVATION_PATH))
 
     def test_yes_no_per_strategy(self):

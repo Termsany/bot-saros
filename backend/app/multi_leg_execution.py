@@ -300,6 +300,84 @@ class MultiLegExecutionEngine:
         finally:
             con.close()
 
+    def residual_symbols(self, execution_id):
+        """Every symbol an unfinished execution may still hold, from its payload and residual rows.
+
+        A manual resolution must check these on the exchange before clearing the row, so a person cannot hide an open
+        leg behind a recovery mark.
+        """
+        con = self._connect()
+        try:
+            row = con.execute("SELECT payload,residual FROM executions WHERE execution_id=?", (execution_id,)).fetchone()
+            if not row:
+                return []
+            symbols = set()
+            try:
+                payload = json.loads(row["payload"] or "{}")
+            except (TypeError, ValueError):
+                payload = {}
+            for leg in payload.get("legs", []) or []:
+                if isinstance(leg, dict) and leg.get("symbol"):
+                    symbols.add(str(leg["symbol"]))
+            try:
+                residual = json.loads(row["residual"] or "null") or []
+            except (TypeError, ValueError):
+                residual = []
+            for item in residual if isinstance(residual, list) else []:
+                if not isinstance(item, dict):
+                    continue
+                for leg in [item.get("leg"), *(item.get("legs") or [])]:
+                    if isinstance(leg, dict) and leg.get("symbol"):
+                        symbols.add(str(leg["symbol"]))
+            return sorted(symbols)
+        finally:
+            con.close()
+
+    def resolve_manually(self, execution_id, *, reason, actor=None, confirmed_flat=False):
+        """Close a stuck execution row by hand, only after the caller proved every symbol flat on the exchange.
+
+        ``confirmed_flat`` is deliberately required: this method has no exchange access, so it must never be able to
+        clear residual exposure on its own. The execution becomes terminal (no longer ``pending``), its residual rows
+        are marked resolved, and its risk reservations are released.
+        """
+        reason = str(reason or "").strip()
+        if not reason:
+            raise ValueError("a reason is required to resolve an execution manually")
+        if not confirmed_flat:
+            raise ValueError("manual resolution requires exchange-confirmed flat positions")
+        con = self._connect()
+        try:
+            row = con.execute("SELECT status,strategy,payload,residual FROM executions WHERE execution_id=?", (execution_id,)).fetchone()
+            if not row:
+                raise KeyError(f"unknown execution: {execution_id}")
+            if row["status"] == "manually_resolved":
+                return {"ok": True, "execution_id": execution_id, "status": "manually_resolved", "already": True}
+            if row["status"] not in ("intent_persisted", "started", "recovery_required", "post_fill_recovery"):
+                raise ValueError(f"execution is already terminal ({row['status']})")
+            try:
+                payload = json.loads(row["payload"] or "{}")
+            except (TypeError, ValueError):
+                payload = {}
+            audit = {"resolution": "manual", "reason": reason, "by": actor, "at": _now(),
+                     "previous_status": row["status"], "previous_residual": json.loads(row["residual"] or "null")}
+            stamp = _now()
+            con.execute("BEGIN IMMEDIATE")
+            con.execute("UPDATE executions SET status='manually_resolved', residual=?, updated_at=? WHERE execution_id=?",
+                        (json.dumps(audit, default=str), stamp, execution_id))
+            con.execute("UPDATE execution_residuals SET status='resolved', updated_at=? WHERE execution_id=?", (stamp, execution_id))
+            con.execute("COMMIT")
+        except Exception:
+            try: con.execute("ROLLBACK")
+            except Exception: pass
+            raise
+        finally:
+            con.close()
+        legs = [leg for leg in payload.get("legs", []) or [] if isinstance(leg, dict) and leg.get("symbol")]
+        if legs:
+            self._release(row["strategy"], legs)
+        return {"ok": True, "execution_id": execution_id, "status": "manually_resolved",
+                "cycle_token": payload.get("cycle_token"), "symbols": sorted({leg["symbol"] for leg in legs})}
+
     def reconcile(self, *, position_lookup, compensation_lookup=None, resolve=None):
         """Reconcile durable pending intents; resolve may compensate or persist residuals."""
         out = []

@@ -2435,13 +2435,100 @@ def _read_request(f):
     finally:
         if fd is not None: os.close(fd)
 
+RECOVERY_KEY_RE = re.compile(r"^(?:execution:[A-Za-z0-9_-]{8,80}|[A-Z0-9]{1,20}/USDT(?::USDT)?)$")
+
+
+def _recovery_item_symbols(key, item):
+    """Every coin a recovery mark may be hiding, from the key itself and the residual legs recorded with it."""
+    symbols = set()
+    if "/USDT" in key:
+        symbols.add(key)
+    residual = (item or {}).get("residual") if isinstance(item, dict) else None
+    for row in residual if isinstance(residual, list) else []:
+        if not isinstance(row, dict):
+            continue
+        for leg in [row.get("leg"), *(row.get("legs") or [])]:
+            if isinstance(leg, dict) and leg.get("symbol"):
+                symbols.add(str(leg["symbol"]))
+    return symbols
+
+
+def _process_recovery_resolve(state, ex, req):
+    """Clear one recovery mark only after proving nothing is held. A person's request cannot hide a position: the
+    bot's own state and the exchange must both be flat for every coin the mark could cover."""
+    rid = str(req.get("id", ""))
+    key = str(req.get("key", ""))
+    reason = str(req.get("reason", "")).strip()
+    out = {"id": rid, "key": key, "done_at": datetime.now(timezone.utc).isoformat()}
+    if not RECOVERY_KEY_RE.fullmatch(key):
+        return {**out, "ok": False, "msg": "مفتاح مراجعة غير صالح"}
+    if not reason:
+        return {**out, "ok": False, "msg": "السبب مطلوب"}
+    try:
+        at = float(req.get("at_epoch") or 0); age = time.time() - at
+    except (TypeError, ValueError):
+        at, age = 0, MANUAL_CLOSE_MAX_AGE_S + 1
+    if at <= 0 or age < -60: age = MANUAL_CLOSE_MAX_AGE_S + 1
+    if age > MANUAL_CLOSE_MAX_AGE_S:
+        return {**out, "ok": False, "msg": "الطلب قديم — اتلغى من غير تنفيذ"}
+    recovery = state.setdefault("recovery_required", {})
+    if key not in recovery:
+        return {**out, "ok": False, "msg": "مفيش بند مراجعة بالمفتاح ده"}
+    item = recovery.get(key) if isinstance(recovery.get(key), dict) else {}
+    symbols = _recovery_item_symbols(key, item)
+    engine = eid = None
+    if key.startswith("execution:"):
+        eid = key.split(":", 1)[1]
+        engine = _phase2_engine(state)
+        try:
+            symbols |= set(engine.residual_symbols(eid))
+        except Exception as exc:
+            return {**out, "ok": False, "msg": f"سجل التنفيذ غير مقروء: {exc}"}
+        if not symbols:
+            return {**out, "ok": False, "msg": "سجل التنفيذ مش فيه عملات — مش هينفع نتأكد إن مفيش صفقة مفتوحة"}
+    held = {str(sym).split(":")[0] for sym in state.get("positions", {})}
+    for sym in sorted(symbols):
+        if sym.split(":")[0] in held:
+            return {**out, "ok": False, "msg": f"البوت لسه شايل {sym} — اقفله الأول قبل ما تمسح المراجعة"}
+    for sym in sorted(symbols):
+        q = _exchange_position_qty(ex, sym)
+        if q is None or float(q) != 0:
+            shown = "غير معروف" if q is None else f"{q}"
+            return {**out, "ok": False, "msg": f"{sym} لسه مش فاضي على المنصة ({shown}) — مش هينفع نمسح المراجعة"}
+    try:
+        if engine and eid:
+            resolved = engine.resolve_manually(eid, reason=reason, actor=req.get("by"), confirmed_flat=True)
+            recovery.pop(key, None)
+            for k, v in list(recovery.items()):
+                if isinstance(v, dict) and v.get("execution_id") == eid:
+                    recovery.pop(k, None)
+            token = (resolved or {}).get("cycle_token")
+            if token:
+                for k, v in list(state.get("_execution_cycles", {}).items()):
+                    if v == token:
+                        state["_execution_cycles"].pop(k, None)
+        else:
+            recovery.pop(key, None)
+            try: riskmgr.release_open_risk(RISK_PATH, strategy=_current_strategy_name(), symbol=key)
+            except Exception as exc: log(f"⚠️ {key}: تحرير الحجز بعد مسح المراجعة: {exc}")
+        save_state(state)
+        out.update(ok=True, msg="اتمسحت المراجعة بعد التأكد إن مفيش صفقة مفتوحة")
+        log(f"🧹 مراجعة يدوية اتمسحت {key} (طلب {req.get('by', '?')}): {reason}")
+        notify(f"🧹 مراجعة يدوية اتمسحت: {key}\nالسبب: {reason}\nاتأكد إن البوت والمنصة مفيهمش صفقة مفتوحة ({_live_label()})")
+    except Exception as e:
+        out.update(ok=False, msg=f"مسح المراجعة فشل: {e}")
+        log(f"⚠️ مسح مراجعة {key} فشل: {e}")
+    return out
+
+
 def process_manual_closes(state, ex, prices):
     """Close requests from the site's admin button: close the position now, record it, and don't buy the coin
-    again until its trend turns off and back on. Only closes — a request can never open anything."""
+    again until its trend turns off and back on. Only closes — a request can never open anything. Also carries
+    out audited ``resolve-*.json`` requests, which only clear a recovery mark after proving the coins are flat."""
     d = _ipc_dir()
     if not d: return
     cmd_dir, res_dir = d / "commands", d / "results"
-    try: files = sorted(cmd_dir.glob("close-*.json"))
+    try: files = sorted(cmd_dir.glob("close-*.json")) + sorted(cmd_dir.glob("resolve-*.json"))
     except Exception: return
     try:   # results older than a day are of no use to anyone
         for old in res_dir.glob("*.json"):
@@ -2454,8 +2541,21 @@ def process_manual_closes(state, ex, prices):
             continue
         req = _read_request(f) or {}
         rid, sym = str(req.get("id", "")), str(req.get("symbol", ""))
-        if not re.fullmatch(r"[0-9a-f]{32}", rid) or not re.fullmatch(r"[A-Z0-9]{1,20}/USDT(:USDT)?", sym):
-            log(f"⚠️ طلب قفل مرفوض (id أو عملة مش صحيحة): {f.name}")
+        if not re.fullmatch(r"[0-9a-f]{32}", rid):
+            log(f"⚠️ طلب مرفوض (id مش صحيح): {f.name}")
+            try: f.unlink()
+            except OSError: pass
+            continue
+        if f.name.startswith("resolve-"):
+            out = _process_recovery_resolve(state, ex, req)
+            try:
+                res_dir.mkdir(exist_ok=True); _write_json_atomic(res_dir / f"{rid}.json", out)
+            except Exception as e: log(f"recovery resolve result {rid}: {e}")
+            try: f.unlink()
+            except Exception: pass
+            continue
+        if not re.fullmatch(r"[A-Z0-9]{1,20}/USDT(:USDT)?", sym):
+            log(f"⚠️ طلب قفل مرفوض (عملة مش صحيحة): {f.name}")
             try: f.unlink()
             except OSError: pass
             continue

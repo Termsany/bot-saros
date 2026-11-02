@@ -2,7 +2,8 @@
 
 Status is **NO-GO**. Paper mode remains the only permitted operating mode for real money.
 
-_Last updated 2026-10-29 after the third pre-production review (PR #29) and its deploy to the VPS._
+_Last updated 2026-11-02 with the activation / readiness-evidence work; previous update 2026-10-29 after the third
+pre-production review (PR #29) and its deploy to the VPS._
 Previous version: 2026-10-29 after PRs #21–#23 and the Demo run (recorded `dc4ecb9` as deployed; the VPS was actually
 already on `e7a7bf9` by then — PR #28's second-review fixes). Before that: 2026-10-26 (28a8249), pre-PRs #12–#16.
 
@@ -125,6 +126,41 @@ Open items from the review:
   is derived server-side from `readiness_evidence.json` (verified provenance) and the server live switch; allocation is
   split server-side and enforced by the risk gate as each strategy's open-risk cap (a share of the account's aggregate
   risk budget). The legacy generic entry path also checks the activation gate now.
+
+## Activation / readiness evidence (2026-11-02)
+
+The last activation work closes the gap between "the record says live" and "the account can actually trade":
+
+- **Evidence is produced, not typed.** `python scripts/make_readiness_evidence.py` accepts an operator-run Demo
+  report (`scripts/demo_e2e.py --out …`), a passing test report, and a named security sign-off, all bound to the
+  current commit and within the freshness window. It refuses on any failed scenario, failing test, generic approver,
+  missing strategy coverage, stale/future timestamp, or different commit, and writes exactly
+  `{schema_version, provenance, strategies}` plus a provenance sidecar. The principal never edits evidence by hand.
+  The generated files are git-ignored.
+- **Activation preflights its own arithmetic.** `live_activation.activate()` now requires the risk ledger's limits and
+  runs `activation_preflight.evaluate()`. A plan whose per-trade risk exceeds `risk_per_trade_pct`, exceeds the
+  strategy's share of `max_aggregate_risk_pct`, or has no open slot is refused at activation time instead of becoming a
+  silent no-trade account. A missing capital plan is refused too.
+- **`/api/admin/readiness` shows the evidence on the live API host.** The evidence document is the validation record;
+  the runtime `BINANCE_ENV` is reported next to it (`runtime_environment`) instead of being required to equal
+  `testnet`. Only the server live switch remains a gate for `live_ready`.
+- **Recovery marks are resolved with an audit trail.** `POST /api/admin/recovery/clear` queues a `resolve-*.json`
+  request; the live bot clears the mark only after its own state and the exchange are both flat for every coin the
+  mark can cover, and the execution journal row becomes terminal (`manually_resolved`) with the reason recorded. The
+  endpoint refuses a coin still visible in the bot's live positions, and the bot refuses again if anything is still
+  held. Clearing can never open, close, or hide a position.
+
+Remaining real-money steps (none of these is a code change):
+
+1. Run `scripts/demo_e2e.py` on Binance Futures Demo and produce a fresh report for all seven strategies.
+2. Run the full backend suite and record a passing test report bound to the final commit.
+3. Obtain a named independent security sign-off for that commit and all seven strategies.
+4. Generate `readiness_evidence.json` with `make_readiness_evidence.py` and verify `/api/admin/readiness` shows the
+   evidence, the runtime environment, and the live switch state.
+5. Set the capital plan and risk limits so the preflight passes (a $1k account at the default 1 % rule risks 2.4 % per
+   trade, above the default 0.25 % limit; an equal seven-way split at 1 % aggregate is smaller than one trade).
+6. Enable `ALLOW_LIVE_TRADING=true` in both `/opt/raqm-live/allow-live.env` and `/opt/raqm-api/.env`, keep
+   `BINANCE_LIVE_ACCOUNT`/`RAQM_RISK_DIR` matching, then activate one strategy at a time with small size.
 
 ## Deployment (2026-10-29)
 

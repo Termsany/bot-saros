@@ -881,17 +881,32 @@ class PaperCloseReq(BaseModel):
     bot: str
     symbol: str = Field(max_length=60)
 
-def _drop_request(d: Path, root: Path, rid: str, cmd: dict):
-    """A close request file in `d`: the folder must really be inside `root` (no link swapped in for it — a paper
-    bot's commands/ pointing at the real-money bot's folder would turn a paper close into a real one), and the file
-    is created new (O_EXCL, O_NOFOLLOW) then renamed in, so nothing planted there is written through."""
+_IPC_REQUEST_PREFIXES = ("close", "resolve")
+
+def _drop_request(d: Path, root: Path, rid: str, cmd: dict, prefix: str = "close"):
+    """A close/resolve request file in `d`: the folder must really be inside `root` (no link swapped in for it — a
+    paper bot's commands/ pointing at the real-money bot's folder would turn a paper close into a real one), and the
+    file is created new (O_EXCL, O_NOFOLLOW) then renamed in, so nothing planted there is written through.
+
+    ``prefix`` selects which queue the bot reads: close-*.json closes a position, resolve-*.json clears a recovery
+    mark only after the bot itself proves nothing is held.
+    """
+    if prefix not in _IPC_REQUEST_PREFIXES:
+        raise HTTPException(500, "unknown request kind — refused")
     real, base = os.path.realpath(d), os.path.realpath(root)
     if os.path.islink(d) or os.path.commonpath([real, base]) != base or real != os.path.normpath(os.path.join(base, os.path.relpath(d, root))):
         raise HTTPException(500, "request folder is not where it should be — refused")
-    tmp = os.path.join(real, f".close-{rid}.tmp")
+    try:
+        os.makedirs(real, mode=0o750, exist_ok=True)
+    except OSError as exc:
+        raise HTTPException(500, f"request folder cannot be created: {exc}")
+    # Re-check after creating it: a link swapped in between the two checks must not receive the request.
+    if os.path.islink(real) or os.path.realpath(real) != real:
+        raise HTTPException(500, "request folder is not where it should be — refused")
+    tmp = os.path.join(real, f".{prefix}-{rid}.tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o660)
     with os.fdopen(fd, "w", encoding="utf-8") as fh: fh.write(json.dumps(cmd))
-    os.replace(tmp, os.path.join(real, f"close-{rid}.json"))   # the bot only picks up close-*.json
+    os.replace(tmp, os.path.join(real, f"{prefix}-{rid}.json"))   # the bot only picks up close-*.json / resolve-*.json
 
 @app.post("/api/paper/close")
 async def paper_close(req: PaperCloseReq, user: dict = Depends(require_admin)):
@@ -1130,7 +1145,9 @@ def _live_status_of(strategy: str) -> dict:
         return {"running": False}
     try:
         data = json.loads(f.read_text(encoding="utf-8"))
-        data["running"] = (datetime.now(timezone.utc) - datetime.fromisoformat(data["updated"])).total_seconds() < 300
+        fresh = (datetime.now(timezone.utc) - datetime.fromisoformat(data["updated"])).total_seconds() < 300
+        # A bot that explicitly says it stopped is not running even if its last status write is recent.
+        data["running"] = bool(data.get("running", True)) and fresh
         return data
     except Exception:
         return {"running": False, "error": "status unreadable"}
@@ -1212,8 +1229,13 @@ async def live_strategies_set(req: LiveStrategiesReq, user: dict = Depends(requi
         return {"ok": True, "strategies": []}
     chosen = sorted(set(req.strategies))
     try:
+        ledger = risk_manager.load_risk_state(_risk_path())
+        risk_limits, equity = ledger.get("limits") or {}, ledger.get("equity_last")
+    except Exception as exc:
+        raise HTTPException(422, f"risk ledger is unreadable, so activation cannot be verified: {exc}")
+    try:
         aid = live_activation.activate(LIVE_ACTIVATION_PATH, environment="live", account=req.account, approved_by=actor,
-                                       strategies=chosen,
+                                       strategies=chosen, risk_limits=risk_limits, equity_usdt=equity,
                                        readiness_evidence=_safe_json_file(BOT_DIR / "readiness_evidence.json") or {})
     except PermissionError as exc:
         raise HTTPException(403, str(exc))
@@ -1236,8 +1258,14 @@ async def live_activation_create(req: LiveActivationReq, user: dict = Depends(re
     if not all(re.fullmatch(r"[a-z0-9_]{1,30}", s) for s in req.strategies):
         raise HTTPException(400, "bad strategy name")
     try:
+        ledger = risk_manager.load_risk_state(_risk_path())
+        risk_limits, equity = ledger.get("limits") or {}, ledger.get("equity_last")
+    except Exception as exc:
+        raise HTTPException(422, f"risk ledger is unreadable, so activation cannot be verified: {exc}")
+    try:
         aid = live_activation.activate(LIVE_ACTIVATION_PATH, environment=req.environment, account=req.account,
             approved_by=str(user.get("email") or user.get("id")), strategies=req.strategies,
+            risk_limits=risk_limits, equity_usdt=equity,
             readiness_evidence=_safe_json_file(BOT_DIR / "readiness_evidence.json") or {})
     except PermissionError as exc:
         raise HTTPException(403, str(exc))
@@ -1439,7 +1467,60 @@ async def admin_entry_pause(req: PauseReq, user: dict = Depends(require_admin)):
 @app.get("/api/admin/recovery")
 async def admin_recovery(user: dict = Depends(require_admin)):
     st=risk_manager.load_risk_state(_risk_path()); dash=_safe_json_file(BOT_DIR/"dashboard-data.json") or {}; state=dash.get("state") or {}
-    return {"available":True,"recovery_required":state.get("recovery_required",{}),"reconciliation":state.get("_reconcile",{}),"risk_reservations":st.get("open_risk",{})}
+    # Each live bot's own review marks are the authority (the aggregate dashboard file is paper-side and can lag).
+    live = {}
+    for s in LIVE_STRATEGIES:
+        status = _live_status_of(s)
+        live[s] = {"running": bool(status.get("running")), "review": status.get("review") or {},
+                   "entry_block": status.get("entry_block") or "", "positions": status.get("positions") or []}
+    return {"available":True,"recovery_required":state.get("recovery_required",{}),"reconciliation":state.get("_reconcile",{}),
+            "risk_reservations":st.get("open_risk",{}),"live":live}
+
+
+class RecoveryClearReq(BaseModel):
+    strategy: str = Field(pattern=r"^[a-z0-9_]{1,30}$")
+    key: str = Field(min_length=1, max_length=120)
+    reason: str = Field(min_length=1, max_length=500)
+    confirm: bool = False
+
+
+@app.post("/api/admin/recovery/clear")
+async def admin_recovery_clear(req: RecoveryClearReq, user: dict = Depends(require_admin)):
+    """Ask a live bot to clear one recovery mark, with an audit trail. The bot is the only thing that can prove the
+    position is flat: the API refuses a coin it can already see in the bot's live status, and the bot refuses again
+    if its state or the exchange still holds anything. Clearing can never close, open, or hide an open position."""
+    rate_limit(user["id"], "admin_mutation", 30, 60)
+    if not req.confirm: raise HTTPException(400, "confirmation required")
+    strategy = _live_strategy(req.strategy)
+    actor = str(user.get("email") or user.get("id") or "admin")
+    status = _live_status_of(strategy)
+    if not status.get("running"):
+        raise HTTPException(409, "this strategy's real-orders bot isn't running — it cannot prove the position is flat")
+    key = req.key.strip()
+    review = status.get("review") or {}
+    if key not in review:
+        raise HTTPException(404, "no recovery item with that key on this strategy")
+    held = {str(p.get("symbol", "")).split(":")[0].split("/")[0] for p in status.get("positions") or []}
+    base = key.split(":")[0].split("/")[0]
+    if base in held:
+        raise HTTPException(409, "the bot still holds that coin — close the position before clearing its review")
+    rid = uuid.uuid4().hex
+    cmd = {"id": rid, "key": key, "reason": req.reason.strip(), "at_epoch": _time.time(), "by": actor}
+    _drop_request(IPC_DIR / strategy / "commands", IPC_DIR, rid, cmd, prefix="resolve")
+    admin_control.audit(BOT_DIR, actor, "recovery_clear", "requested",
+                        {"strategy": strategy, "key": key, "reason": req.reason.strip(), "request_id": rid})
+    return {"ok": True, "id": rid, "strategy": strategy, "key": key}
+
+
+@app.get("/api/admin/recovery/{strategy}/{rid}")
+async def admin_recovery_result(strategy: str, rid: str, user: dict = Depends(require_admin)):
+    d = IPC_DIR / _live_strategy(strategy)
+    if not re.fullmatch(r"[0-9a-f]{32}", rid):
+        raise HTTPException(400, "bad id")
+    f = d / "results" / f"{rid}.json"
+    if not f.exists():
+        return {"done": False, "pending": (d / "commands" / f"resolve-{rid}.json").exists()}
+    return {"done": True, **json.loads(f.read_text(encoding="utf-8"))}
 
 @app.get("/api/admin/health")
 async def admin_health(user: dict = Depends(require_admin)):
@@ -1541,9 +1622,17 @@ async def admin_readiness(user: dict = Depends(require_admin)):
     except Exception:
         risk_readable = False
         kill_clear = False
+    runtime_env = os.getenv("BINANCE_ENV", "") or "unavailable"
     evidence = _safe_json_file(BOT_DIR / "readiness_evidence.json") or {}
-    result = build_admin_readiness(strategies=list(admin_control.STRATEGIES), evidence=evidence, live_locked=not live_trading_allowed(), environment=os.getenv("BINANCE_ENV", ""))
-    result.update({"environment":"testnet" if os.getenv("BINANCE_ENV")=="testnet" else "unavailable", "checks":{"server_live_flag_locked":not live_trading_allowed(), "risk_ledger_readable":risk_readable, "kill_switch_clear":kill_clear}})
+    # The evidence document is the validation record; this host is normally the live API and is not on testnet. The
+    # runtime environment is therefore reported next to it, not required to match it (that made this screen always
+    # unavailable on the real server).
+    result = build_admin_readiness(strategies=list(admin_control.STRATEGIES), evidence=evidence,
+                                   live_locked=not live_trading_allowed(), environment=runtime_env,
+                                   require_current_testnet=False)
+    result.update({"environment": runtime_env, "runtime_environment": runtime_env,
+                   "evidence": "readiness_evidence.json" if evidence else "none",
+                   "checks":{"server_live_flag_locked":not live_trading_allowed(), "risk_ledger_readable":risk_readable, "kill_switch_clear":kill_clear}})
     result["testnet_ready"] = result["testnet_ready"] and risk_readable and kill_clear
     result["live_ready"] = result["live_ready"] and risk_readable and kill_clear
     if not risk_readable or not kill_clear:

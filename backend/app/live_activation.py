@@ -66,12 +66,15 @@ def _normalise_allocation(strategies, risk_allocation):
     return shares
 
 
-def activate(path, *, environment, account, approved_by, strategies, risk_allocation=None, readiness_evidence=None):
+def activate(path, *, environment, account, approved_by, strategies, risk_allocation=None, readiness_evidence=None,
+             risk_limits=None, equity_usdt=None):
     """Create an activation audit record; every gate must pass explicitly.
 
     Readiness is derived from the trusted evidence document, never supplied by the caller: a request can say a strategy
     is ready, but only verified evidence (and the server's own live switch) can make it so. The allocation recorded here
-    is enforced by the risk gate as that strategy's open-risk cap.
+    is enforced by the risk gate as that strategy's open-risk cap. ``risk_limits`` (the ledger's limits object, or the
+    whole ledger state) makes the arithmetic preflight part of the gate: an allocation whose own plan cannot fund one
+    trade is refused instead of producing a silently inactive account.
     """
     if not _env_enabled():
         raise PermissionError("ALLOW_LIVE_TRADING is not true")
@@ -86,6 +89,14 @@ def activate(path, *, environment, account, approved_by, strategies, risk_alloca
     not_ready = [s for s in strategies if readiness.get(s) is not True]
     if not_ready:
         raise ValueError(f"strategies are not readiness-verified: {', '.join(not_ready)}")
+    if not isinstance(risk_limits, dict):
+        raise ValueError("activation requires the risk ledger limits: without them the risk cannot be verified")
+    from .activation_preflight import evaluate
+    preflight = evaluate(strategies=strategies, allocation=allocation,
+                         limits=risk_limits.get("limits") if "limits" in risk_limits else risk_limits,
+                         equity_usdt=equity_usdt)
+    if not preflight["ok"]:
+        raise ValueError("risk limits cannot fund this activation: " + "; ".join(preflight["reasons"]))
     activation_id = f"act-{uuid.uuid4().hex}"
     con = _connect(path)
     try:

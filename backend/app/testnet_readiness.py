@@ -11,8 +11,14 @@ ALL_STRATEGIES = (
 EVIDENCE_FIELDS = ("adapter_implemented", "recovery_tests", "security_approved", "testnet_validated")
 
 
-def build_admin_readiness(*, strategies, evidence=None, live_locked, environment=None):
-    """Build readiness only from a versioned, provenance-bearing evidence document."""
+def build_admin_readiness(*, strategies, evidence=None, live_locked, environment=None, require_current_testnet=True):
+    """Build readiness only from a versioned, provenance-bearing evidence document.
+
+    ``require_current_testnet`` is for the readiness screen only: by default it additionally insists that this process
+    is *currently* running on testnet. The live API host is not on testnet, so its screen must pass ``False`` and show
+    the runtime environment separately - otherwise a correctly recorded Demo/testnet run can never be displayed there.
+    The evidence document remains the source of truth either way; this flag never invents a validation.
+    """
     evidence = evidence if isinstance(evidence, dict) else {}
     provenance = evidence.get("provenance")
     valid_document = (
@@ -25,17 +31,18 @@ def build_admin_readiness(*, strategies, evidence=None, live_locked, environment
         and set(provenance) == {"source", "verified"}
     )
     env = environment if environment is not None else os.getenv("BINANCE_ENV", "")
+    env_ok = (not require_current_testnet) or env == "testnet"
     rows = {}
     for strategy in strategies or []:
         supplied = (evidence.get("strategies", {}).get(strategy) or {}) if valid_document else {}
         row = {field: bool(valid_document and set(supplied) == set(EVIDENCE_FIELDS) and isinstance(supplied.get(field), dict) and set(supplied[field]) == {"value", "verified"} and supplied[field].get("value") is True and supplied[field].get("verified") is True) for field in EVIDENCE_FIELDS}
         row["paper_ready"] = row["adapter_implemented"]
-        row["testnet_ready"] = env == "testnet" and row["paper_ready"] and row["recovery_tests"] and row["security_approved"] and row["testnet_validated"]
+        row["testnet_ready"] = env_ok and row["paper_ready"] and row["recovery_tests"] and row["security_approved"] and row["testnet_validated"]
         row["live_ready"] = row["testnet_ready"] and not bool(live_locked)
         row["reasons"] = [f"missing {field.replace('_', ' ')} evidence" for field in EVIDENCE_FIELDS if not row[field]]
         if not valid_document:
             row["reasons"].append("unverified readiness evidence")
-        if env != "testnet":
+        if not env_ok:
             row["reasons"].append("testnet environment is unavailable")
         if row["testnet_ready"] and live_locked:
             row["reasons"].append("live trading remains locked")
@@ -59,7 +66,8 @@ def build_live_activation_readiness(*, strategies, evidence=None, live_enabled):
     """
     if not live_enabled:
         return {s: False for s in strategies or []}
-    report = build_admin_readiness(strategies=strategies, evidence=evidence, live_locked=False, environment="testnet")
+    report = build_admin_readiness(strategies=strategies, evidence=evidence, live_locked=False, environment=None,
+                                   require_current_testnet=False)
     return {s: bool(report["strategies"].get(s, {}).get("live_ready")) for s in strategies or []}
 
 

@@ -111,6 +111,17 @@ class ReadinessAcceptanceTests(unittest.TestCase):
         self.assertFalse(result["live_ready"])
         self.assertIn("testnet environment", " ".join(result["strategies"]["trend_daily"]["reasons"]).lower())
 
+    def test_evidence_can_be_shown_on_a_non_testnet_host_when_explicitly_allowed(self):
+        evidence = {"schema_version": 1, "provenance": {"source": "trusted-readiness", "verified": True}, "strategies": {"trend_daily": {
+            field: {"value": True, "verified": True} for field in ("adapter_implemented", "recovery_tests", "security_approved", "testnet_validated")
+        }}}
+        default = build_admin_readiness(strategies=["trend_daily"], evidence=evidence, live_locked=True, environment="live")
+        self.assertFalse(default["testnet_ready"])
+        shown = build_admin_readiness(strategies=["trend_daily"], evidence=evidence, live_locked=True, environment="live",
+                                      require_current_testnet=False)
+        self.assertTrue(shown["testnet_ready"])
+        self.assertFalse(shown["live_ready"])
+
     def test_live_ready_requires_unlocked_live_gate(self):
         evidence = {"schema_version": 1, "provenance": {"source": "trusted-readiness", "verified": True}, "strategies": {"trend_daily": {
             field: {"value": True, "verified": True} for field in ("adapter_implemented", "recovery_tests", "security_approved", "testnet_validated")
