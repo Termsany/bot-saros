@@ -25,7 +25,7 @@ class OcoTests(unittest.TestCase):
         # SL succeeds, TP fails
         def create_order(sym, typ, side, qty, price, params):
             if "stopLossPrice" in params:
-                return {"id": "sl-1", "clientOrderId": params.get("clientOrderId")}
+                return {"id": "sl-1", "clientOrderId": params.get("clientOrderId"), "status": "open"}
             raise Exception("tp rejected")
         ex.create_order.side_effect = create_order
         ex.cancel_order = mock.Mock()

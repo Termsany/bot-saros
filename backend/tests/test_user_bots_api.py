@@ -46,7 +46,7 @@ class UserBotsApiTests(ApiAuthTests):
         self.assertIsNone(self.c.get("/api/user/bots", headers=self.h("u2-token")).json()["desired"])
 
     def test_what_the_rules_refuse_is_refused_here_too(self):
-        for kw in ({"env": "live"}, {"strategies": ["ict"]}, {"strategies": ["trend_daily", "vol_breakout", "rsi2_pullback"]},
+        for kw in ({"env": "live"}, {"strategies": ["ict"]}, {"strategies": ["momentum_ls"], "risk_per_trade_pct": 1.0, "max_aggregate_risk_pct": 9.0},
                    {"leverage": 9}, {"risk_per_trade_pct": 2.0}, {"capital_margin_override_usdt": 5000}):
             self.assertEqual(self.ask(**kw).status_code, 400, kw)
         self.assertEqual(self.ask(tok="new-token").status_code, 403)               # email not confirmed

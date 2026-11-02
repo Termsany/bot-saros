@@ -17,7 +17,7 @@ def _ex(open_plain=(), open_trigger=()):
     ex.id = "binance"; ex.options = {}
     ex.market.return_value = {"contract": True, "linear": True, "inverse": False, "contractSize": 1.0}
     ex.price_to_precision.side_effect = lambda s, p: str(float(p))
-    ex.create_order.side_effect = lambda sym, typ, side, qty, price, params: {"id": "x-" + params["clientOrderId"], "clientOrderId": params["clientOrderId"]}
+    ex.create_order.side_effect = lambda sym, typ, side, qty, price, params: {"id": "x-" + params["clientOrderId"], "clientOrderId": params["clientOrderId"], "status": "open"}
     ex.fetch_order.side_effect = Exception("not found")
     ex.fetch_open_orders.side_effect = lambda sym, *a: list(open_trigger if (len(a) == 3 and a[2]) else open_plain)
     ex.fetch_funding_history = lambda symbol, since=None: []
@@ -29,7 +29,7 @@ class ConditionalOrdersTests(unittest.TestCase):
     def test_stop_found_among_trigger_orders_is_verified(self):
         sl, tp = oco_mod._oco_id("raqm-aaaabbbbcccc", "sl"), oco_mod._oco_id("raqm-aaaabbbbcccc", "tp")
         # Binance keeps stop / take-profit orders apart from the plain open orders
-        ex = _ex(open_plain=[], open_trigger=[{"id": "1", "clientOrderId": sl}, {"id": "2", "clientOrderId": tp}])
+        ex = _ex(open_plain=[], open_trigger=[{"id": "1", "clientOrderId": sl, "status": "open"}, {"id": "2", "clientOrderId": tp, "status": "open"}])
         res = place_oco_orders(ex, "BTC/USDT", "long", 0.01, 49000, 51000, paper=False, pos_id="raqm-aaaabbbbcccc")
         self.assertNotIn("verify_failed", res)
         ex.cancel_order.assert_not_called()
@@ -44,7 +44,7 @@ class ConditionalOrdersTests(unittest.TestCase):
         ex = _ex()
         def create(sym, typ, side, qty, price, params):
             if "stopLossPrice" in params: raise Exception("rejected")
-            return {"id": "t", "clientOrderId": params["clientOrderId"]}
+            return {"id": "t", "clientOrderId": params["clientOrderId"], "status": "open"}
         ex.create_order.side_effect = create
         res = place_oco_orders(ex, "BTC/USDT", "long", 0.01, 49000, 51000, paper=False, pos_id="raqm-111122223333")
         self.assertTrue(res["protection_missing"])
@@ -59,7 +59,7 @@ class ProtectiveIdTests(unittest.TestCase):
 
     def test_cancel_requires_readback_absence(self):
         ex = mock.Mock()
-        owned = [{"id": "sl-1", "clientOrderId": "raqm-pos-sl"}]
+        owned = [{"id": "sl-1", "clientOrderId": "raqm-pos-sl", "status": "open"}]
         active = list(owned)
         ex.fetch_open_orders.side_effect = lambda sym, *a: list(active)
         ex.cancel_order.side_effect = lambda oid, *a: active.clear()
@@ -67,12 +67,12 @@ class ProtectiveIdTests(unittest.TestCase):
 
     def test_cancel_ambiguous_readback_stays_unconfirmed(self):
         ex = mock.Mock()
-        ex.fetch_open_orders.return_value = [{"id": "sl-1", "clientOrderId": "raqm-pos-sl"}]
+        ex.fetch_open_orders.return_value = [{"id": "sl-1", "clientOrderId": "raqm-pos-sl", "status": "open"}]
         self.assertFalse(cancel_oco_orders(ex, "BTC/USDT", sl_id="raqm-pos-sl"))
 
     def test_algo_endpoint_is_read_and_cancelled(self):
         ex = mock.Mock()
-        active = [{"id": "algo-1", "clientOrderId": "raqm-pos-sl"}]
+        active = [{"id": "algo-1", "clientOrderId": "raqm-pos-sl", "status": "open"}]
         ex.fetch_open_orders.return_value = []
         ex.fetch_open_algo_orders = lambda symbol: list(active)
         ex.cancel_algo_order = lambda oid, symbol: active.clear()
@@ -81,8 +81,8 @@ class ProtectiveIdTests(unittest.TestCase):
     def test_cancel_leaves_the_other_positions_stop(self):
         mine, other = "raqm-0e8b777212da", "raqm-0e8f00000000"
         ex = mock.Mock()
-        ex.fetch_open_orders.return_value = [{"id": "1", "clientOrderId": oco_mod._oco_id(mine, "sl")},
-                                             {"id": "2", "clientOrderId": oco_mod._oco_id(other, "sl")}]
+        ex.fetch_open_orders.return_value = [{"id": "1", "clientOrderId": oco_mod._oco_id(mine, "sl"), "status": "open"},
+                                             {"id": "2", "clientOrderId": oco_mod._oco_id(other, "sl"), "status": "open"}]
         cancel_oco_orders(ex, "BTC/USDT", pos_id=mine)
         self.assertEqual([c[0][0] for c in ex.cancel_order.call_args_list], ["1"])
 
@@ -164,7 +164,7 @@ class CloseLivePositionTests(unittest.TestCase):
         ex = self._ex()
         pos = {"side": "long", "entry": 100.0, "qty": 0.37, "contract_size": 1.0, "contract_size_verified": True, "oco_ids": {"pos_id": "raqm-aaaabbbbcccc"}, "entry_fee_rate": 0.0004, "entry_fee_cost": 0.37 * 100.0 * 0.0004}
         sl = oco_mod._oco_id("raqm-aaaabbbbcccc", "sl")
-        ex.fetch_open_orders.return_value = [{"id": "9", "clientOrderId": sl}, {"id": "8", "clientOrderId": "manual"}]
+        ex.fetch_open_orders.return_value = [{"id": "9", "clientOrderId": sl, "status": "open"}, {"id": "8", "clientOrderId": "manual", "status": "open"}]
         orders = list(ex.fetch_open_orders.return_value)
         cancelled = set()
         def active_remove(oid):

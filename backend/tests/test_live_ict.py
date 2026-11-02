@@ -31,7 +31,7 @@ class IctFakeBinance(FakeBinance):
 
     def fetch_open_orders(self, sym, *a):
         out = super().fetch_open_orders(sym, *a)
-        out += [{"id": "tp-" + o["params"]["clientOrderId"], "clientOrderId": o["params"]["clientOrderId"]}
+        out += [{"id": "tp-" + o["params"]["clientOrderId"], "clientOrderId": o["params"]["clientOrderId"], "status": "open"}
                 for o in self.orders if "takeProfitPrice" in o["params"] and "tp-" + o["params"]["clientOrderId"] not in self.cancelled]
         return out
 

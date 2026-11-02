@@ -50,7 +50,7 @@ class FakeBinance:
         raise Exception('binanceusdm {"code":-2013,"msg":"Order does not exist."}')   # what Binance answers
 
     def fetch_open_orders(self, sym, *a):
-        return [{"id": "stop-" + o["params"]["clientOrderId"], "clientOrderId": o["params"]["clientOrderId"]}
+        return [{"id": "stop-" + o["params"]["clientOrderId"], "clientOrderId": o["params"]["clientOrderId"], "status": "open"}
                 for o in self.orders if "stopLossPrice" in o["params"] and "stop-" + o["params"]["clientOrderId"] not in self.cancelled]
 
     def cancel_order(self, oid, sym, *a): self.cancelled.append(oid)

@@ -23,7 +23,7 @@ class ValidateTests(unittest.TestCase):
 
     def test_everything_is_checked(self):
         bad = [doc(U1, user_id=U2), doc(U1, strategies=["ict"]), doc(U1, strategies=["trend_daily", "trend_daily"]),
-               doc(U1, strategies=["trend_daily", "vol_breakout", "rsi2_pullback"]), doc(U1, leverage=6), doc(U1, leverage=True),
+               doc(U1, strategies=["momentum_ls"], max_aggregate_risk_pct=9.0), doc(U1, leverage=6), doc(U1, leverage=True),
                doc(U1, risk_per_trade_pct=2), doc(U1, max_aggregate_risk_pct=5), doc(U1, risk_per_trade_pct=1, max_aggregate_risk_pct=0.5),
                doc(U1, capital_margin_override_usdt=2000), doc(U1, capital_usdt="1000")]
         for d in bad:
