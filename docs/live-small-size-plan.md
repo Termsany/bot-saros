@@ -37,8 +37,9 @@ volume and can include BTC). Per leg at its 40% stop: 26 × 2 × 0.40 = **$20.8*
 **$208** — the most this size can lose in a week, whatever the capital. Capital needs at least 26 × 10 / 0.6 ≈ $434
 with the 40% reserve.
 
-The ceilings (`allow-live.env`) are in % of equity, so they follow the capital the owner puts on the sub-account:
-per-trade ≥ 2080 / capital, aggregate ≥ 10 × that. Example for **$1,500**:
+The ceilings (`allow-live.env`) and the gate's limits are in % of the account's **equity on Binance**, not of the
+dashboard's capital — so keep on the sub-account only the capital meant for the bot. Per-trade ≥ 2080 / equity,
+aggregate ≥ 10 × that. Example for **$1,500** (set 2026-11-03 in `allow-live.env`, with ALLOW_LIVE_TRADING=false):
 
 ```
 RAQM_CAP_RISK_PER_TRADE_PCT=1.5
@@ -48,8 +49,14 @@ RAQM_CAP_DAILY_LOSS_PCT=10
 RAQM_CAP_DRAWDOWN_PCT=25
 ```
 
-Dashboard (التداول الحقيقي → فلوس حقيقية): capital = the sub-account's capital, manual margin **26**, only
-`momentum_ls` switched on. The preflight checks the basket fits the ceilings at that margin.
+Dashboard, real account:
+- التداول الحقيقي → فلوس حقيقية: capital = the sub-account's capital, manual margin **26**, only `momentum_ls` on.
+- المخاطر (risk limits of the real ledger): the same numbers as the ceilings. The gate takes the **lower** of the
+  dashboard's limit and root's ceiling, and the dashboard's defaults (0.25% per trade, 1% aggregate) refuse a
+  momentum_ls basket.
+
+The preflight checks the basket against both at that margin (per leg, whole basket, and one side against the
+correlated limit) and names which one binds.
 
 ## 4. Go live
 

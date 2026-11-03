@@ -66,7 +66,9 @@ class PreflightTests(unittest.TestCase):
         self.paths["unit"].write_text("ExecStart=/opt/raqm-live/venv/bin/python bot.py --live --expect-env live\n", encoding="utf-8")
         self.paths["api_env"].write_text(f"ALLOW_LIVE_TRADING=true\nREADINESS_EXPECTED_COMMIT_SHA={SHA}\n", encoding="utf-8")
         self.paths["evidence"].write_text(json.dumps(evidence(strategy, SHA)), encoding="utf-8")
-        rm.update_limits(self.paths["ledger"], {"capital_usdt": 1500, "capital_margin_override_usdt": 26})
+        # the dashboard's capital plan and risk limits, as the owner sets them for the real account
+        rm.update_limits(self.paths["ledger"], {"capital_usdt": 1500, "capital_margin_override_usdt": 26,
+                                                "risk_per_trade_pct": 2, "max_aggregate_risk_pct": 20, "max_correlated_risk_pct": 20})
 
     def failed(self, rows):
         return [name for name, ok, _ in rows if not ok]
@@ -82,8 +84,23 @@ class PreflightTests(unittest.TestCase):
         self.set_up_server()
         rows = lp.run(self.paths, "momentum_ls", clients=(Futures(), Spot()))
         self.assertEqual(self.failed(rows), [], rows)
-        why = dict((n, w) for n, _, w in rows)["momentum_ls basket fits the ceilings"]
+        why = dict((n, w) for n, _, w in rows)["momentum_ls basket fits the risk limits"]
         self.assertIn("10 leg(s)", why)                              # 10 × 26×2×0.4/1500 = 13.9% under 20%
+
+    def test_dashboard_limits_left_at_their_defaults_refuse_the_basket(self):
+        # the gate takes the lower of the dashboard's limit and root's ceiling: 0.25% per trade by default, under a
+        # 1.39% leg, though the ceiling (2%) would allow it — seen on the VPS on 2026-11-03
+        self.set_up_server()
+        rm.update_limits(self.paths["ledger"], {k: rm.DEFAULT_LIMITS[k] for k in ("risk_per_trade_pct", "max_aggregate_risk_pct", "max_correlated_risk_pct")})
+        rows = lp.run(self.paths, "momentum_ls", clients=(Futures(), Spot()))
+        self.assertIn("momentum_ls basket fits the risk limits", self.failed(rows))
+        self.assertIn("dashboard", dict((n, w) for n, _, w in rows)["momentum_ls basket fits the risk limits"])
+
+    def test_one_side_of_the_basket_counts_against_the_correlated_limit(self):
+        self.set_up_server()
+        rm.update_limits(self.paths["ledger"], {"max_correlated_risk_pct": 5})   # 5 longs × 1.39% = 6.9% > 5%
+        rows = lp.run(self.paths, "momentum_ls", clients=(Futures(), Spot()))
+        self.assertIn("one side of the basket", dict((n, w) for n, _, w in rows)["momentum_ls basket fits the risk limits"])
 
     def test_key_that_can_withdraw_or_is_not_ip_restricted_fails(self):
         self.set_up_server()
@@ -97,7 +114,7 @@ class PreflightTests(unittest.TestCase):
     def test_basket_above_the_ceilings_fails(self):
         self.set_up_server()
         rm.update_limits(self.paths["ledger"], {"capital_margin_override_usdt": 60})   # 10 × 3.2% = 32% > 20%; a leg 3.2% > 2%
-        self.assertIn("momentum_ls basket fits the ceilings", self.failed(lp.run(self.paths, "momentum_ls", clients=(Futures(), Spot()))))
+        self.assertIn("momentum_ls basket fits the risk limits", self.failed(lp.run(self.paths, "momentum_ls", clients=(Futures(), Spot()))))
 
     def test_wrong_file_mode_or_owner_fails(self):
         self.set_up_server()
