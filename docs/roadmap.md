@@ -12,7 +12,7 @@ Owner = only the owner can do it (keys, Binance, money, names). Claude = code, s
 | # | Step | Who | Done when |
 |---|---|---|---|
 | A1 | ~~Demo measurement restarted~~ (6 strategies back on, 2026-11-03 21:55 UTC) | Claude, owner's go | ✓ every Demo bot's `entry_block` empty |
-| A2 | Close the 10 leftover Demo `momentum_ls` legs (no bot holds them) | Claude, owner's go | Demo account has only legs some bot owns |
+| A2 | ~~Close the leftover Demo `momentum_ls` legs~~ (9, not 10: closed 2026-11-03 ~22:02 UTC by the bot's own rebalance exit, net ≈ −2.3 USDT; no order left on them, Demo ledger holds only trend_daily 4 + ratio_trend 2) | Claude, owner's go | ✓ Demo account has only legs some bot owns |
 | A3 | Revoke the old main-account API key on Binance | Owner | key gone from Binance's API list |
 | A4 | Put real reviewer names in `readiness_evidence.json` | Owner | evidence names people, digest re-made |
 | A5 | Test that a live-bot problem reaches Telegram (one harmless forced alert) | Claude | message received and cleared |
