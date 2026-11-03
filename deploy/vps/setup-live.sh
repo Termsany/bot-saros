@@ -33,8 +33,9 @@ install -d -o root -g root -m 755 "$L/assets" "$L/assets/fonts"
 for f in "$T"/assets/fonts/*; do install -m 644 -o root -g root "$f" "$L/assets/fonts/"; done
 install -d -o root -g root -m 755 "$L/backend" "$L/backend/app"
 # every backend module bot.py imports (stdlib only): order placement, multi-leg engine, execution checks, risk ledger, activation
-# (+ user_bots: the users' rules the provisioner shares with the API)
-for m in __init__ oco multi_leg_execution execution_safety risk_manager live_activation user_bots; do
+# (+ user_bots: the users' rules the provisioner shares with the API; testnet_readiness: the evidence check the
+# real-money preflight runs, the same one the API's activation applies)
+for m in __init__ oco multi_leg_execution execution_safety risk_manager live_activation user_bots testnet_readiness; do
     install -m 644 -o root -g root "$T/backend/app/$m.py" "$L/backend/app/$m.py"
 done
 # Phase 1 harness (scripts/demo_e2e.py): runs as raqmlive from this root-owned copy, refuses anything but Demo
@@ -44,6 +45,7 @@ install -m 644 -o root -g root "$T/scripts/live_report.py" "$L/scripts/live_repo
 install -m 644 -o root -g root "$T/scripts/watchdog.py" "$L/scripts/watchdog.py"         # problem alerts (read only)
 install -m 644 -o root -g root "$T/scripts/backup.py" "$L/scripts/backup.py"             # daily backup to Telegram (read only)
 install -m 644 -o root -g root "$T/scripts/provision_users.py" "$L/scripts/provision_users.py"   # Phase 2 users' bots (root)
+install -m 644 -o root -g root "$T/scripts/live_preflight.py" "$L/scripts/live_preflight.py"     # checks before real money (root, read only)
 echo "$SHA" > "$L/DEPLOYED_COMMIT"
 # packages: only what the bot imports, pinned, from wheels (deploy/vps/live-requirements.txt)
 [ -x "$L/venv/bin/python" ] || python3 -m venv "$L/venv"
