@@ -97,3 +97,15 @@ it holds it until it closes (shared risk ledger), and each bot leaves the others
 
 The live bots are not restarted by the setup scripts (one stopped mid-order goes to review): restart them as a
 deliberate step, `systemctl restart 'raqm-live@*'`.
+
+### realbot.da3m.io — the real-money bots' public page
+
+Public like bot.da3m.io (owner's choice, 2026-11-03): anyone with the link sees the live bots' positions, sizes and
+PnL. `setup-live.sh` installs the page (`/var/www/realbot.da3m.io/index.html`) and `raqm-realbot-export.timer`,
+which every 20 s writes a filtered `live.json` from `/opt/raqm-ipc/<strategy>/live_status.json` — real-money bots
+only, positions and closed trades only (never who closed one, review notes or block reasons). nginx never reads
+`/opt/raqm-ipc`, which also takes the close requests. One-time, as root (realbot.da3m.io's DNS points at the VPS):
+
+    install -m 644 /root/raqm-src/deploy/vps/nginx-realbot.da3m.io.conf /etc/nginx/sites-available/realbot.da3m.io
+    ln -s /etc/nginx/sites-available/realbot.da3m.io /etc/nginx/sites-enabled/realbot.da3m.io
+    nginx -t && systemctl reload nginx && certbot --nginx -d realbot.da3m.io

@@ -1,0 +1,18 @@
+# The public page of the real-money bots (realbot.da3m.io): scripts/realbot_export.py writes a filtered live.json
+# into the page's folder. Read only on /opt/raqm-ipc, runs every 20 seconds from raqm-realbot-export.timer.
+[Unit]
+Description=Raqm realbot page: export the live bots' public status
+
+[Service]
+Type=oneshot
+User=raqmlive
+Group=raqmlive
+WorkingDirectory=/opt/raqm-live
+ExecStart=/opt/raqm-live/venv/bin/python -E -s scripts/realbot_export.py
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateNetwork=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/opt/raqm-ipc
+ReadWritePaths=/var/www/realbot.da3m.io

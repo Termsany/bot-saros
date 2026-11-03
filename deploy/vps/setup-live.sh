@@ -46,6 +46,7 @@ install -m 644 -o root -g root "$T/scripts/watchdog.py" "$L/scripts/watchdog.py"
 install -m 644 -o root -g root "$T/scripts/backup.py" "$L/scripts/backup.py"             # daily backup to Telegram (read only)
 install -m 644 -o root -g root "$T/scripts/provision_users.py" "$L/scripts/provision_users.py"   # Phase 2 users' bots (root)
 install -m 644 -o root -g root "$T/scripts/live_preflight.py" "$L/scripts/live_preflight.py"     # checks before real money (root, read only)
+install -m 644 -o root -g root "$T/scripts/realbot_export.py" "$L/scripts/realbot_export.py"     # realbot.da3m.io's live.json (raqmlive)
 echo "$SHA" > "$L/DEPLOYED_COMMIT"
 # packages: only what the bot imports, pinned, from wheels (deploy/vps/live-requirements.txt)
 [ -x "$L/venv/bin/python" ] || python3 -m venv "$L/venv"
@@ -121,6 +122,13 @@ install -m 644 -o root -g root "$T/deploy/vps/raqm-watchdog.timer" /etc/systemd/
 # the daily backup of the bots' records to Telegram (raqmlive, read only)
 install -m 644 -o root -g root "$T/deploy/vps/raqm-backup.service" /etc/systemd/system/raqm-backup.service
 install -m 644 -o root -g root "$T/deploy/vps/raqm-backup.timer" /etc/systemd/system/raqm-backup.timer
+# realbot.da3m.io, the public page of the real-money bots (owner's choice, 2026-11-03): the page is root's, live.json
+# is written every 20 s by raqmlive (filtered by scripts/realbot_export.py). The nginx site and its certificate are a
+# one-time step: deploy/vps/README.md, "realbot.da3m.io".
+install -d -o raqmlive -g www-data -m 755 /var/www/realbot.da3m.io
+install -m 644 -o root -g root "$T/deploy/vps/realbot/index.html" /var/www/realbot.da3m.io/index.html
+install -m 644 -o root -g root "$T/deploy/vps/raqm-realbot-export.service" /etc/systemd/system/raqm-realbot-export.service
+install -m 644 -o root -g root "$T/deploy/vps/raqm-realbot-export.timer" /etc/systemd/system/raqm-realbot-export.timer
 # Phase 2 (docs/phase2-design.md): the users' bot template and the provisioner. The timer is NOT enabled here —
 # switching users' bots on is a deliberate step: systemctl enable --now raqm-users-provision.timer
 install -m 644 -o root -g root "$T/deploy/vps/raqm-user@.service" /etc/systemd/system/raqm-user@.service
@@ -137,6 +145,7 @@ done
 systemctl daemon-reload
 systemctl enable --now raqm-watchdog.timer >/dev/null 2>&1 || echo "warning: raqm-watchdog.timer not enabled" >&2
 systemctl enable --now raqm-backup.timer >/dev/null 2>&1 || echo "warning: raqm-backup.timer not enabled" >&2
+systemctl enable --now raqm-realbot-export.timer >/dev/null 2>&1 || echo "warning: raqm-realbot-export.timer not enabled" >&2
 systemctl enable --now raqm-watchdog-users.timer >/dev/null 2>&1 || echo "warning: raqm-watchdog-users.timer not enabled" >&2
 systemctl enable --now raqm-backup-users.timer >/dev/null 2>&1 || echo "warning: raqm-backup-users.timer not enabled" >&2
 # new group lists reach a process only when it starts: the API (try-restart: only if running). The live bots are not
