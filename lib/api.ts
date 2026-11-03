@@ -106,6 +106,13 @@ export async function apiSetCapital(env: "live"|"demo", capital_usdt: number, ca
   if(!r.ok) throw new Error(typeof d.detail === "string" ? d.detail : "ما اتحفظش")
   return d
 }
+/** An account's risk limits (% of its equity): per trade, aggregate, correlated, daily loss, drawdown. */
+export async function apiSetLimits(env: "live"|"demo", limits: Record<string, number>): Promise<any>{
+  const r=await fetch(`${API}/api/live/limits`, { method:"POST", headers: await authHeaders(JSON_CT), body: JSON.stringify({ env, ...limits }) })
+  const d = await r.json().catch(()=>({}))
+  if(!r.ok) throw new Error(typeof d.detail === "string" ? d.detail : "ما اتحفظش")
+  return d
+}
 export async function apiLiveClose(strategy: string, symbol: string): Promise<{ id: string }>{
   const r=await fetch(`${API}/api/live/close`, { method:"POST", headers: await authHeaders(JSON_CT), body: JSON.stringify({ strategy, symbol }) })
   const d = await r.json().catch(()=>({}))
