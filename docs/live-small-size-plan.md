@@ -9,10 +9,10 @@ open the new one with stops, fees/funding/slippage close to the backtest, no rec
 strategy is profitable** (backtest profit factor ≈ 1.2: a single week can go either way by chance). Size is what
 bounds that risk, so the size stays at the minimum until the real sample exists.
 
-## 1. The Demo gate — rebalance of 2026-11-10 00:00 UTC
+## 1. The Demo gate — the first rebalance (Monday 2026-11-09 00:00 UTC)
 
 The basket opened 2026-11-03 (10 legs, $40 margin, every leg's stop on the exchange — checked against Binance).
-After the 2026-11-10 rebalance, on the Demo account:
+After that rebalance, on the Demo account:
 
 - [ ] the 10 old legs closed, each with an exchange fill price, fees and funding recorded
 - [ ] **none of the old legs' stops left on the exchange** (the bug PR #77 fixed)
@@ -81,4 +81,20 @@ correlated limit) and names which one binds.
 - Size stays at $26 per leg for **at least 3 rebalances** (~30 closed legs).
 - After them: compare with the baseline (win rate ≈ 49%, profit factor ≈ 1.2, net of real fees and funding).
   Within it → the owner may raise the size step by step. Far from it → switch the strategy off; it is not re-tuned.
+- **Rebalance weekday (2026-11-03):** Mondays at 00:00 UTC (the first real basket opened on a Tuesday and is rebuilt
+  on Monday 2026-11-09). The backtest's weekday is arbitrary too, and the results swing with it — the same rules
+  rebalanced on each of the 7 days (2019–2026, fees and real funding, no slippage):
+
+  | entry day | PF (since 2024) | net, margins | worst DD, margins |
+  |---|---|---|---|
+  | Mon | 1.15 (1.20) | +75 | 18.3 |
+  | Tue | 1.09 (1.12) | +47 | 17.4 |
+  | Wed (the baseline's) | 1.18 (1.24) | +91 | 12.0 |
+  | Thu | 1.08 (1.07) | +39 | 17.3 |
+  | Fri | 1.15 (1.17) | +78 | 15.4 |
+  | Sat | 1.22 (1.34) | +110 | 15.4 |
+  | Sun | 1.22 (1.42) | +113 | 17.0 |
+
+  Profitable on every day, but a thin edge with a lot of timing luck: read the real results against the 7-day
+  average (PF ≈ 1.15), not the best day. Monday was picked as a fixed anchor (the weekly candle), not for its numbers.
 - Any recovery, a stop missing on the exchange, or a watchdog alert at any point: kill switch, then find out why.
