@@ -37,9 +37,10 @@ volume and can include BTC). Per leg at its 40% stop: 26 × 2 × 0.40 = **$20.8*
 **$208** — the most this size can lose in a week, whatever the capital. Capital needs at least 26 × 10 / 0.6 ≈ $434
 with the 40% reserve.
 
-The ceilings (`allow-live.env`) and the gate's limits are in % of the account's **equity on Binance**, not of the
-dashboard's capital — so keep on the sub-account only the capital meant for the bot. Per-trade ≥ 2080 / equity,
-aggregate ≥ 10 × that.
+The ceilings (`allow-live.env`) and the gate's limits are in % of the **dashboard's capital** (at most the account's
+equity on Binance — `risk_manager.risk_basis`, since 2026-11-03): the bot keeps to the capital set even when the
+account holds more, for the size, the count, the per-trade / aggregate / correlated checks and the daily-loss and
+drawdown kill switch alike. Per-trade ≥ 2080 / capital, aggregate ≥ 10 × that.
 
 **Owner's choice: $500** (in `allow-live.env` since 2026-11-03, with ALLOW_LIVE_TRADING=false). $500 − 40% reserve =
 $300 = 11 trades of $26, so the 10-leg basket fits. At this size one leg at its stop is **4.2%** of the account, the
