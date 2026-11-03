@@ -2,6 +2,12 @@
 @tailwind components;
 @tailwind utilities;
 
+/* the self-hosted fonts (app/layout.tsx imports their @font-face rules) */
+:root {
+  --font-cairo: "Cairo Variable";
+  --font-mono: "JetBrains Mono";
+}
+
 /* Base: Cairo readable, 15px */
 html { font-size: 15px; }
 body { line-height: 1.6; }
