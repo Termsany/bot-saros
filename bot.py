@@ -987,7 +987,8 @@ def _capital_plan():
     """The owner's capital plan from the shared risk ledger (dashboard), capped by the last account equity; None = no
     plan set. A ledger that can't be read raises: the entry is refused rather than sized with the service's default."""
     state = riskmgr.load_risk_state(RISK_PATH)
-    return riskmgr.capital_plan(state["limits"], state.get("equity_last"))
+    # sized with the same ceilings the gate applies, so a capped risk per trade gives a smaller trade, not a refused one
+    return riskmgr.capital_plan(riskmgr.capped_limits(state["limits"]), state.get("equity_last"))
 
 def _strategies_sharing():
     """How many strategies share the account's open-trade count: the ones switched on for it (live: the activation
@@ -4118,6 +4119,11 @@ if __name__=="__main__":
         if binance_env() == "live" and not os.getenv("RAQM_RISK_DIR", "").strip():
             # without it the dashboard's kill switch, limits and revoke act on a ledger this process never reads
             p.error("فلوس حقيقية محتاجة RAQM_RISK_DIR — نفس فولدر دفتر المخاطرة اللي الـ API بيستخدمه")
+        if binance_env() == "live":
+            # the dashboard's limits are written by the API: real money needs root's ceilings over them (allow-live.env)
+            try: riskmgr.hard_caps(required=True)
+            except ValueError as e:
+                p.error(f"فلوس حقيقية محتاجة سقف المخاطرة من root في allow-live.env ({', '.join(riskmgr.HARD_CAP_ENV.values())}): {e}")
         try:   # fail at start, not at the first trade: the ledger and the activation record must open read-write
             riskmgr.load_risk_state(RISK_PATH); live_activation.active_record(ACTIVATION_PATH)
         except Exception as e:

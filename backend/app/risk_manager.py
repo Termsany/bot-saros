@@ -42,6 +42,45 @@ def _finite(v):
     return f if math.isfinite(f) else None
 
 
+# Ceilings on the dashboard's limits, from the process environment: the real-money unit reads them from
+# /opt/raqm-live/allow-live.env (root's, chmod 600), which neither the API nor the bot's own user can write. The limits
+# themselves live in the ledger the API writes, so without these a stolen admin session — or the API itself — could
+# set 100% risk per trade and the bot would take it.
+HARD_CAP_ENV = {
+    "risk_per_trade_pct": "RAQM_CAP_RISK_PER_TRADE_PCT",
+    "max_aggregate_risk_pct": "RAQM_CAP_AGGREGATE_RISK_PCT",
+    "max_correlated_risk_pct": "RAQM_CAP_CORRELATED_RISK_PCT",
+    "max_daily_loss_pct": "RAQM_CAP_DAILY_LOSS_PCT",
+    "max_drawdown_pct": "RAQM_CAP_DRAWDOWN_PCT",
+}
+
+
+def hard_caps(*, required=False):
+    """The ceilings set in this process's environment. A value that isn't a number in (0, 100] raises ValueError, and
+    so does a missing one when ``required`` (real money): the gates turn that into a refusal."""
+    caps = {}
+    for key, var in HARD_CAP_ENV.items():
+        raw = os.getenv(var, "").strip()
+        if not raw:
+            if required:
+                raise ValueError(f"{var} is not set")
+            continue
+        value = _finite(raw)
+        if value is None or not 0 < value <= 100:
+            raise ValueError(f"{var}={raw!r} is not a number in (0, 100]")
+        caps[key] = value
+    return caps
+
+
+def capped_limits(limits):
+    """The limits with each one at most its ceiling (a copy; the ledger keeps what the dashboard set)."""
+    out = dict(limits)
+    for key, cap in hard_caps().items():
+        current = _finite(out.get(key, DEFAULT_LIMITS[key]))
+        out[key] = cap if current is None else min(current, cap)
+    return out
+
+
 def capital_plan(limits, equity_usdt=None):
     """What the owner's capital allows, every strategy together: margin per trade and the most trades open at once.
     The capital counts at most what the account really holds (equity), for the size of a trade and for the count, so
@@ -385,7 +424,8 @@ def pre_trade_gate(path, *, strategy, symbol, side, risk_usdt, notional_usdt,
         if state["kill_switch"].get("tripped"):
             con.execute("ROLLBACK")
             return False, f"kill switch is tripped: {state['kill_switch'].get('reason')}"
-        limits = state["limits"]
+        # nothing in this transaction writes the limits back, so the capped copy stays in this process
+        limits = state["limits"] = capped_limits(state["limits"])
         over = _over_capital_plan(state, equity_usdt, 1, strategy, strategies_sharing)
         if over:
             con.execute("ROLLBACK")
@@ -456,7 +496,7 @@ def pre_trade_gate_basket(path, *, strategy, legs, equity_usdt, equity_observed_
         if state["kill_switch"].get("tripped"):
             con.execute("ROLLBACK")
             return False, f"kill switch is tripped: {state['kill_switch'].get('reason')}"
-        limits = state["limits"]
+        limits = state["limits"] = capped_limits(state["limits"])   # not written back: only open_risk rows are
         over = _over_capital_plan(state, equity_usdt, len(legs), strategy, strategies_sharing)   # whole basket or nothing
         if over:
             con.execute("ROLLBACK"); return False, over
@@ -589,13 +629,18 @@ def update_equity_and_check_kill_switch(path, equity_usdt, *, equity_observed_at
         if daily.get("date") != _today():
             daily.update({"date": _today(), "start_equity": equity_usdt, "realized_pnl": 0.0})
         reason = None
+        # a copy: the state is written back below, and the ledger must keep what the dashboard set
+        try:
+            limits = capped_limits(state["limits"])
+        except ValueError as exc:
+            limits = state["limits"]; reason = f"risk ceiling invalid ({exc}); kill switch engaged fail-closed"
         dd = (hwm - equity_usdt) / hwm * 100.0
-        if dd >= float(state["limits"]["max_drawdown_pct"]):
-            reason = f"portfolio drawdown {dd:.2f}% >= limit {state['limits']['max_drawdown_pct']}%"
+        if reason is None and dd >= float(limits["max_drawdown_pct"]):
+            reason = f"portfolio drawdown {dd:.2f}% >= limit {limits['max_drawdown_pct']}%"
         if reason is None and daily.get("start_equity"):
             loss = (daily["start_equity"] - equity_usdt) / daily["start_equity"] * 100.0
-            if loss >= float(state["limits"]["max_daily_loss_pct"]):
-                reason = f"daily loss {loss:.2f}% >= limit {state['limits']['max_daily_loss_pct']}%"
+            if loss >= float(limits["max_daily_loss_pct"]):
+                reason = f"daily loss {loss:.2f}% >= limit {limits['max_daily_loss_pct']}%"
         if reason:
             state["kill_switch"] = {"tripped": True, "reason": reason, "at": _now(), "by": "risk_manager"}
         _write_state_tx(con, state); con.execute("COMMIT")
