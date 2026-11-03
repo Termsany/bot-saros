@@ -2770,20 +2770,8 @@ def try_enter(symbol, analysis, state, ex):
             log(f"فشل {side} {symbol}: {e}")
 
 
-RSI2 = {"top": 10, "below": 5, "trend_ma": 200, "exit_ma": 5, "max_days": 10, "stop": 0.40}
-
-def rsi2_mode():
-    """Paper RSI-2 pullback (Larry Connors): at each daily close, among the top 10 by 30-day volume above their 200-day
-    average, buy when the 2-day RSI is below 5; sell after a close above the 5-day average or 10 days, stop 40%."""
-    return "rsi2_pullback" in (CONFIG.get("enabled_strategies") or [])
-
 def _utc_day(now):
     return now.replace(hour=0, minute=0, second=0, microsecond=0)
-
-def rsi_wilder(closes, n=2):
-    s = pd.Series(closes, dtype=float); d = s.diff().fillna(0)
-    up = d.clip(lower=0).ewm(alpha=1 / n, adjust=False).mean(); dn = (-d.clip(upper=0)).ewm(alpha=1 / n, adjust=False).mean()
-    return float(100.0 if dn.iloc[-1] == 0 else 100 - 100 / (1 + up.iloc[-1] / dn.iloc[-1]))
 
 def _paper_open(state, sym, price, now, extra):
     lev = int(CONFIG.get("leverage", 2)); q = position_size(price) * lev / price
@@ -3241,62 +3229,6 @@ def _guard_stops(ex, state, prices, label):
                     _single_leg_live_exit(ex, state, sym, price, reason)
         except Exception as e: log(f"{label} {sym}: {e}")
 
-def run_once_rsi2(ex):
-    R = RSI2; state = load_state(); now = datetime.now(timezone.utc); day = _utc_day(now); prices = {}
-    if not CONFIG["paper_trading"]:
-        # a block (recovery, kill switch, unknown position) stops entries only — the live adapters refuse them. The
-        # strategy's own exits still run: returning here left open positions without their signal exits
-        reconcile_live(state, ex)
-        if _ENTRY_BLOCK.get("reason"): log(f"⛔ دخول جديد متوقف، الخروج شغّال — {_ENTRY_BLOCK['reason']}")
-    process_paper_closes(state, ex, "rsi2")
-    if not CONFIG["paper_trading"]:
-        process_manual_closes(state, ex, prices); _retry_due_exits(ex, state, "RSI-2")
-    _guard_stops(ex, state, prices, "RSI-2")
-    if state.get("rsi2_day") != day.isoformat():
-        # once per closed daily candle: exits first, then new entries at about today's open
-        universe = volume_universe(ex, R["top"]); watch = []
-        for sym in sorted(set(universe) | set(state["positions"])):
-            try:
-                k = ex.fetch_ohlcv(sym, "1d", limit=R["trend_ma"] + 15)[:-1]   # closed candles only
-                c = [r[4] for r in k]
-                if len(c) < R["exit_ma"] + 1: continue
-                price = float(ex.fetch_ticker(sym)["last"]); prices[sym] = price
-                if sym in state["positions"]:
-                    pos = state["positions"][sym]
-                    held = (day - _utc_day(datetime.fromisoformat(pos["time"]))).days
-                    if c[-1] > sum(c[-R["exit_ma"]:]) / R["exit_ma"] or held >= R["max_days"]:
-                        why = f"قفل فوق متوسط {R['exit_ma']} يوم" if c[-1] > sum(c[-R["exit_ma"]:]) / R["exit_ma"] else f"{R['max_days']} أيام"
-                        if CONFIG.get("paper_trading"):
-                            pnl = _paper_close(ex, state, sym, price, why)
-                        else:
-                            _single_leg_live_exit(ex, state, sym, price, why)
-                        if sym in state["positions"]:
-                            continue
-                        log(f"📉 RSI-2: قفل {sym} @ {price:.6g} ({why}) PnL {pnl:+.4f}" if CONFIG.get("paper_trading") else f"📉 RSI-2: قفل {sym} @ {price:.6g} ({why})")
-                    continue
-                if sym not in universe or len(c) < R["trend_ma"]: continue
-                r2 = rsi_wilder(c, 2); ma = sum(c[-R["trend_ma"]:]) / R["trend_ma"]
-                watch.append({"symbol": sym.split(":")[0], "rsi2": round(r2, 1), "above_200": c[-1] > ma, "price": price})
-                if r2 < R["below"] and c[-1] > ma:
-                    sl = price * (1 - R["stop"])
-                    if CONFIG.get("paper_trading"):
-                        _paper_open(state, sym, price, now, {"sl": sl, "rsi2": round(r2, 1),
-                                                             "exit_at": (day + pd.Timedelta(days=R["max_days"])).isoformat()})
-                    elif not _single_leg_live_entry(ex, state, sym, "long", position_size(price, ex),
-                            price, sl, None, "rsi2_pullback", {"rsi2": round(r2, 1),
-                            "exit_at": (day + pd.Timedelta(days=R["max_days"])).isoformat()}):
-                        continue
-                    log(f"✅ 🟢 RSI-2 {sym} @ {price} (RSI-2 {r2:.1f} في ترند صاعد)")
-                    notify(f"🟢 RSI-2 {sym.split(':')[0]} (Paper)\nRSI-2 {r2:.1f} وفوق متوسط 200 يوم — دخول {price:.6g}\nخروج: أول قفل يومي فوق متوسط 5 أيام (أقصى {R['max_days']} أيام) · وقف {price * (1 - R['stop']):.6g}")
-            except Exception as e: log(f"RSI-2 {sym}: {e}")
-        state.update(rsi2_day=day.isoformat(), rsi2_watch=watch); save_state(state)
-    for sym in state["positions"]:
-        if sym not in prices:
-            try: prices[sym] = float(ex.fetch_ticker(sym)["last"])
-            except Exception: pass
-    write_simple_status("rsi2", state, prices, R, {"day": state.get("rsi2_day"), "watch": state.get("rsi2_watch", [])})
-    log(f"📊 RSI-2: {len(state['positions'])} مفتوحة | PnL محقق {state['stats']['pnl']:+.4f}")
-
 # ── trend-template breakout: what was left of Minervini / Darvas after research/vcp_deep.py (the contraction and the
 #    breakout-volume conditions only hurt). Paper experiment — it added profit but not risk-adjusted return. ──
 TB = {"top": 100, "L": 20, "exit_ma": 20, "stop": 0.40, "slip": 0.0005}
@@ -3572,6 +3504,7 @@ from bots.momentum_ls import MOM, momentum_due, momentum_next, momentum_mode, mo
 from bots.ratio_trend import RATIO, ratio_mode, _daily_closed, _ratio_rank, ratio_members, ratio_signal, _ratio_close_pair, run_once_ratio, write_ratio_status
 from bots.listing_short import LISTING, listing_mode, _listing_close, run_once_listing, write_listing_status
 from bots.vol_breakout import VB, breakout_mode, run_once_breakout
+from bots.rsi2_pullback import RSI2, rsi2_mode, rsi_wilder, run_once_rsi2
 
 if __name__=="__main__":
     import argparse
