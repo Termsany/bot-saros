@@ -79,7 +79,8 @@ it holds it until it closes (shared risk ledger), and each bot leaves the others
 1. The real account's keys, **without withdrawal permission**: `/opt/raqm-live/.env.real` (`BINANCE_API_KEY=`,
    `BINANCE_SECRET=`), owner `raqmlive`, chmod 600.
 2. `/opt/raqm-live/allow-live.env`, owner root, chmod 600: `ALLOW_LIVE_TRADING=true`,
-   `BINANCE_LIVE_ACCOUNT=<a name>` and the ceilings on the dashboard's risk limits, in % of equity — the bot refuses
+   `BINANCE_LIVE_ACCOUNT=<a name>` and the ceilings on the dashboard's risk limits, in % of the dashboard's capital
+   (at most the equity; of the equity when no capital is set) — the bot refuses
    to start without all five, and uses the lower of each ceiling and the dashboard's value (the dashboard's limits are
    written by the API, so they alone can't be trusted with real money):
    `RAQM_CAP_RISK_PER_TRADE_PCT=`, `RAQM_CAP_AGGREGATE_RISK_PCT=`, `RAQM_CAP_CORRELATED_RISK_PCT=`,

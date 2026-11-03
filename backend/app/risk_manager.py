@@ -72,6 +72,17 @@ def hard_caps(*, required=False):
     return caps
 
 
+def risk_basis(limits, equity_usdt):
+    """What the risk limits are a percentage of: the owner's capital when a capital plan is set — at most the account's
+    equity — else the equity (owner, 2026-11-03: the bot keeps to the capital set on the dashboard even when the
+    account holds more). Never above the equity, so it can only make a limit stricter."""
+    equity = _finite(equity_usdt)
+    capital = _finite((limits or {}).get("capital_usdt") or 0)
+    if capital and capital > 0 and equity and equity > 0:
+        return min(capital, equity)
+    return equity
+
+
 def capped_limits(limits):
     """The limits with each one at most its ceiling (a copy; the ledger keeps what the dashboard set)."""
     out = dict(limits)
@@ -430,7 +441,8 @@ def pre_trade_gate(path, *, strategy, symbol, side, risk_usdt, notional_usdt,
         if over:
             con.execute("ROLLBACK")
             return False, over
-        pct = risk_usdt / float(equity_usdt) * 100.0
+        base = risk_basis(limits, equity_usdt)     # every % below is of the capital (≤ equity) when a plan is set
+        pct = risk_usdt / float(base) * 100.0
         cap = float(limits.get("risk_per_trade_pct", DEFAULT_LIMITS["risk_per_trade_pct"]))
         key = f"{strategy}:{symbol}"
         if state["open_risk"].get(key):
@@ -439,14 +451,14 @@ def pre_trade_gate(path, *, strategy, symbol, side, risk_usdt, notional_usdt,
         if pct > cap + 1e-9:
             con.execute("ROLLBACK")
             return False, f"per-trade risk {pct:.3f}% exceeds limit {cap}%"
-        agg = aggregate_open_risk_pct(state, equity_usdt) or 0.0
+        agg = aggregate_open_risk_pct(state, base) or 0.0
         agg_cap = float(limits.get("max_aggregate_risk_pct", DEFAULT_LIMITS["max_aggregate_risk_pct"]))
         if strategy_risk_share is not None:
             strategy_cap = _strategy_cap_pct(limits, strategy_risk_share)
             if strategy_cap is None:
                 con.execute("ROLLBACK")
                 return False, f"invalid strategy risk allocation {strategy_risk_share!r}"
-            strat = strategy_open_risk_pct(state, equity_usdt, strategy) or 0.0
+            strat = strategy_open_risk_pct(state, base, strategy) or 0.0
             if not _plan_set(limits) and strat + pct > strategy_cap + 1e-9:
                 con.execute("ROLLBACK")
                 return False, (f"strategy open risk {strat:.3f}% + new {pct:.3f}% would exceed its allocation "
@@ -455,7 +467,7 @@ def pre_trade_gate(path, *, strategy, symbol, side, risk_usdt, notional_usdt,
             con.execute("ROLLBACK")
             return False, f"aggregate open risk {agg:.3f}% + new {pct:.3f}% would exceed limit {agg_cap}%"
         if correlation_group:
-            corr = correlated_risk_pct(state, equity_usdt, correlation_group, side) or 0.0
+            corr = correlated_risk_pct(state, base, correlation_group, side) or 0.0
             corr_cap = float(limits.get("max_correlated_risk_pct", DEFAULT_LIMITS["max_correlated_risk_pct"]))
             if corr + pct > corr_cap + 1e-9:
                 con.execute("ROLLBACK")
@@ -500,6 +512,7 @@ def pre_trade_gate_basket(path, *, strategy, legs, equity_usdt, equity_observed_
         over = _over_capital_plan(state, equity_usdt, len(legs), strategy, strategies_sharing)   # whole basket or nothing
         if over:
             con.execute("ROLLBACK"); return False, over
+        base = risk_basis(limits, equity_usdt)     # the capital (≤ equity) when a plan is set, as in pre_trade_gate
         requested = []
         for leg in legs:
             try:
@@ -512,25 +525,25 @@ def pre_trade_gate_basket(path, *, strategy, legs, equity_usdt, equity_observed_
                 con.execute("ROLLBACK"); return False, f"risk reservation already exists for {key}"
             if not leg.get("allow_strategy_conflicts") and _conflicting_position(state, leg["symbol"], leg["side"], strategy):
                 con.execute("ROLLBACK"); return False, f"strategy conflict on {leg['symbol']}"
-            pct = risk / float(equity_usdt) * 100.0
+            pct = risk / float(base) * 100.0
             if pct > float(limits.get("risk_per_trade_pct", DEFAULT_LIMITS["risk_per_trade_pct"])) + 1e-9:
                 con.execute("ROLLBACK"); return False, f"per-leg risk {pct:.3f}% exceeds limit"
             requested.append((leg, key, risk, notional))
-        total_pct = sum(x[2] for x in requested) / float(equity_usdt) * 100.0
+        total_pct = sum(x[2] for x in requested) / float(base) * 100.0
         corr_cap = float(limits.get("max_correlated_risk_pct", DEFAULT_LIMITS["max_correlated_risk_pct"]))
         for group in {x[0].get("correlation_group") for x in requested if x[0].get("correlation_group")}:
             for side in {x[0].get("side") for x in requested if x[0].get("correlation_group") == group}:
-                existing = correlated_risk_pct(state, equity_usdt, group, side) or 0.0
-                added = sum(x[2] for x in requested if x[0].get("correlation_group") == group and x[0].get("side") == side) / float(equity_usdt) * 100.0
+                existing = correlated_risk_pct(state, base, group, side) or 0.0
+                added = sum(x[2] for x in requested if x[0].get("correlation_group") == group and x[0].get("side") == side) / float(base) * 100.0
                 if existing + added > corr_cap + 1e-9:
                     con.execute("ROLLBACK"); return False, f"correlated basket risk exceeds limit {corr_cap}%"
-        current_pct = aggregate_open_risk_pct(state, equity_usdt) or 0.0
+        current_pct = aggregate_open_risk_pct(state, base) or 0.0
         cap = float(limits.get("max_aggregate_risk_pct", DEFAULT_LIMITS["max_aggregate_risk_pct"]))
         if strategy_risk_share is not None:
             strategy_cap = _strategy_cap_pct(limits, strategy_risk_share)
             if strategy_cap is None:
                 con.execute("ROLLBACK"); return False, f"invalid strategy risk allocation {strategy_risk_share!r}"
-            strat = strategy_open_risk_pct(state, equity_usdt, strategy) or 0.0
+            strat = strategy_open_risk_pct(state, base, strategy) or 0.0
             if not _plan_set(limits) and strat + total_pct > strategy_cap + 1e-9:
                 con.execute("ROLLBACK")
                 return False, (f"strategy open risk {strat:.3f}% + basket {total_pct:.3f}% would exceed its allocation "
@@ -634,11 +647,13 @@ def update_equity_and_check_kill_switch(path, equity_usdt, *, equity_observed_at
             limits = capped_limits(state["limits"])
         except ValueError as exc:
             limits = state["limits"]; reason = f"risk ceiling invalid ({exc}); kill switch engaged fail-closed"
-        dd = (hwm - equity_usdt) / hwm * 100.0
+        # the dollars lost as a share of the capital when a plan is set (at most the equity they are measured from):
+        # 20% daily loss on $500 of capital is $100, whatever else the account holds
+        dd = (hwm - equity_usdt) / risk_basis(limits, hwm) * 100.0
         if reason is None and dd >= float(limits["max_drawdown_pct"]):
             reason = f"portfolio drawdown {dd:.2f}% >= limit {limits['max_drawdown_pct']}%"
         if reason is None and daily.get("start_equity"):
-            loss = (daily["start_equity"] - equity_usdt) / daily["start_equity"] * 100.0
+            loss = (daily["start_equity"] - equity_usdt) / risk_basis(limits, daily["start_equity"]) * 100.0
             if loss >= float(limits["max_daily_loss_pct"]):
                 reason = f"daily loss {loss:.2f}% >= limit {limits['max_daily_loss_pct']}%"
         if reason:

@@ -121,9 +121,9 @@ function LimitsPanel({ env, cfg, chosen, reload }: { env: "demo"|"live", cfg: an
   useEffect(() => { setVals(saved()); setMsg("") }, [env, ...LIMITS.map(([k]) => c[k])])   // eslint-disable-line react-hooks/exhaustive-deps
   const changed = LIMITS.some(([k]) => vals[k] !== "" && Number(vals[k]) !== Number(c[k]))
   const bad = LIMITS.some(([k]) => vals[k] !== "" && !(Number(vals[k]) > 0 && Number(vals[k]) <= 100))
-  // the gate divides by the account's balance, not by the capital typed on the dashboard
+  // the gate's basis (risk_manager.risk_basis): the capital when a plan is set, at most the account's balance
   const p = plan(Number(c.capital_usdt) || 0, Number(c.capital_margin_override_usdt) || 0, c)
-  const equity = Number(c.equity_last) > 0 ? Number(c.equity_last) : p?.eff
+  const equity = p?.eff ?? (Number(c.equity_last) > 0 ? Number(c.equity_last) : undefined)
   const legs = Math.max(1, ...Array.from(chosen).map(s => OPENS_AT_ONCE[s] || 1))
   const leg = p && equity ? p.loss / equity * 100 : null
   const need: Record<string, number> | null = leg == null ? null : {
@@ -138,7 +138,7 @@ function LimitsPanel({ env, cfg, chosen, reload }: { env: "demo"|"live", cfg: an
   }
   return (
     <Card>
-      <CardHeader title={`حدود المخاطرة (${env === "demo" ? "Demo" : "حقيقي"})`} sub="% من رصيد الحساب على Binance · البوت بيراجعها قبل كل دخول" />
+      <CardHeader title={`حدود المخاطرة (${env === "demo" ? "Demo" : "حقيقي"})`} sub="% من راس المال اللي فوق (ولو الرصيد أقل، من الرصيد) · البوت بيراجعها قبل كل دخول" />
       <div className="grid grid-cols-2 gap-3">
         {LIMITS.map(([k, l, hint]) => (
           <label key={k} className="min-w-0" title={hint}><span className={label}>{l} %</span>
@@ -149,7 +149,7 @@ function LimitsPanel({ env, cfg, chosen, reload }: { env: "demo"|"live", cfg: an
       </div>
       {need && equity ? (
         <p className="mt-3 text-[12px] text-muted">
-          بالمارجن ده ({`$${p!.margin}`}) على رصيد {usd(Math.round(equity))}: الصفقة محتاجة <b className="font-mono" dir="ltr">{need.risk_per_trade_pct.toFixed(2)}%</b>
+          بالمارجن ده ({`$${p!.margin}`}) على {usd(Math.round(equity))}: الصفقة محتاجة <b className="font-mono" dir="ltr">{need.risk_per_trade_pct.toFixed(2)}%</b>
           {legs > 1 && <> · السلة ({legs}) <b className="font-mono" dir="ltr">{need.max_aggregate_risk_pct.toFixed(1)}%</b> · ناحية واحدة <b className="font-mono" dir="ltr">{need.max_correlated_risk_pct.toFixed(1)}%</b></>}
         </p>
       ) : <p className="mt-3 text-[12px] text-faint">حط راس المال والمارجن الأول علشان يتحسب المطلوب.</p>}
