@@ -2770,16 +2770,7 @@ def try_enter(symbol, analysis, state, ex):
             log(f"فشل {side} {symbol}: {e}")
 
 
-# ── Williams volatility breakout + Connors RSI-2: two paper bots on Binance's public market (research/traders_study.py,
-#    traders_robustness.py, breakout_stop_hourly.py) ──
-VB = {"top": 10, "k": 0.7, "ma": 20, "stop": 0.40, "slip": 0.001}
 RSI2 = {"top": 10, "below": 5, "trend_ma": 200, "exit_ma": 5, "max_days": 10, "stop": 0.40}
-
-def breakout_mode():
-    """Paper volatility breakout (Larry Williams): each UTC day, among the top 10 by 30-day volume whose close is above
-    its 20-day average, buy when the price trades 0.7 x yesterday's range above today's open; sell at the next day's
-    open. No intraday stop (it cut profit in every hourly test), only the 40% guard before liquidation."""
-    return "vol_breakout" in (CONFIG.get("enabled_strategies") or [])
 
 def rsi2_mode():
     """Paper RSI-2 pullback (Larry Connors): at each daily close, among the top 10 by 30-day volume above their 200-day
@@ -3250,70 +3241,6 @@ def _guard_stops(ex, state, prices, label):
                     _single_leg_live_exit(ex, state, sym, price, reason)
         except Exception as e: log(f"{label} {sym}: {e}")
 
-def run_once_breakout(ex):
-    V = VB; state = load_state(); now = datetime.now(timezone.utc); day = _utc_day(now); prices = {}
-    if not CONFIG["paper_trading"]:
-        # a block (recovery, kill switch, unknown position) stops entries only — the live adapters refuse them. The
-        # strategy's own exits still run: returning here left open positions without their signal exits
-        reconcile_live(state, ex)
-        if _ENTRY_BLOCK.get("reason"): log(f"⛔ دخول جديد متوقف، الخروج شغّال — {_ENTRY_BLOCK['reason']}")
-    process_paper_closes(state, ex, "breakout")
-    if not CONFIG["paper_trading"]:
-        process_manual_closes(state, ex, prices); _retry_due_exits(ex, state, "بريك أوت")
-    _guard_stops(ex, state, prices, "بريك أوت")
-    if state.get("vb_day") != day.isoformat():
-        # a new UTC day: yesterday's trades close at today's open, then today's triggers
-        day_ms = int(day.timestamp() * 1000); closed = 0.0; n = 0
-        for sym in list(state["positions"]):
-            try:
-                k = ex.fetch_ohlcv(sym, "1d", limit=2)
-                px_open = float(k[-1][1]) if k and k[-1][0] == day_ms else float(ex.fetch_ticker(sym)["last"])
-                if CONFIG.get("paper_trading"):
-                    closed += _paper_close(ex, state, sym, px_open, "خروج افتتاح اليوم")
-                    n += 1
-                elif _single_leg_live_exit(ex, state, sym, px_open, "خروج افتتاح اليوم"):
-                    closed += 1.0; n += 1
-            except Exception as e: log(f"بريك أوت قفل {sym}: {e}")
-        plan = {}
-        for sym in volume_universe(ex, V["top"]):
-            try:
-                k = ex.fetch_ohlcv(sym, "1d", limit=V["ma"] + 3)
-                if not k or k[-1][0] != day_ms: continue                  # today's candle not open yet
-                closes = [r[4] for r in k[:-1]]; prev = k[-2]; rng = prev[2] - prev[3]
-                avg = sum(closes[-V["ma"]:]) / V["ma"]
-                plan[sym] = {"open": k[-1][1], "trigger": k[-1][1] + V["k"] * rng if rng > 0 else None, "above_ma": closes[-1] > avg,
-                             "range": rng}
-            except Exception as e: log(f"بريك أوت {sym}: {e}")
-        state.update(vb_day=day.isoformat(), vb_plan=plan, vb_done=[]); save_state(state)
-        armed = [f"{s.split('/')[0]} {p['trigger']:.6g}" for s, p in plan.items() if p["above_ma"] and p["trigger"]]
-        log(f"📐 بريك أوت: يوم جديد — قفل {n} صفقة {closed:+.2f}$ | مستني اختراق: {', '.join(armed) or 'ولا عملة فوق متوسط 20'}")
-        if n: notify(f"📐 بريك أوت (Paper): قفل {n} صفقة امبارح على افتتاح النهارده — {closed:+.2f}$")
-    _guard_stops(ex, state, prices, "بريك أوت")
-    plan = state.get("vb_plan") or {}
-    for sym, p in plan.items():
-        if not (p.get("above_ma") and p.get("trigger")) or sym in state["positions"] or sym in state.get("vb_done", []): continue
-        try:
-            price = prices.get(sym) or float(ex.fetch_ticker(sym)["last"]); prices[sym] = price
-            if price < p["trigger"]: continue
-            fill = price * (1 + V["slip"])
-            if CONFIG.get("paper_trading"):
-                _paper_open(state, sym, fill, now, {"sl": fill * (1 - V["stop"]), "trigger": p["trigger"],
-                                                    "exit_at": (day + pd.Timedelta(days=1)).isoformat()})
-                state.setdefault("vb_done", []).append(sym); save_state(state)
-            else:
-                pos = _single_leg_live_entry(ex, state, sym, "long", position_size(price, ex),
-                    fill, fill * (1 - V["stop"]), None, "vol_breakout",
-                    {"trigger": p["trigger"], "exit_at": (day + pd.Timedelta(days=1)).isoformat()})
-                if not pos: continue
-                state.setdefault("vb_done", []).append(sym); save_state(state)
-            log(f"✅ 🟢 بريك أوت {sym} @ {fill:.6g} (الاختراق {p['trigger']:.6g})")
-            notify(f"🟢 بريك أوت {sym.split(':')[0]} (Paper)\nاخترق {p['trigger']:.6g} — دخول {fill:.6g}\nخروج: افتتاح بكرة 00:00 UTC · وقف أمان {fill * (1 - V['stop']):.6g}")
-        except Exception as e: log(f"بريك أوت دخول {sym}: {e}")
-    write_simple_status("breakout", state, prices, V, {"day": state.get("vb_day"),
-        "plan": [{"symbol": s.split(":")[0], "open": p["open"], "trigger": p["trigger"], "above_ma": p["above_ma"],
-                  "entered": s in state.get("vb_done", []), "price": prices.get(s)} for s, p in plan.items()]})
-    log(f"📊 بريك أوت: {len(state['positions'])} مفتوحة | PnL محقق {state['stats']['pnl']:+.4f}")
-
 def run_once_rsi2(ex):
     R = RSI2; state = load_state(); now = datetime.now(timezone.utc); day = _utc_day(now); prices = {}
     if not CONFIG["paper_trading"]:
@@ -3644,6 +3571,7 @@ def start_dashboard_server(port=None):
 from bots.momentum_ls import MOM, momentum_due, momentum_next, momentum_mode, momentum_rank, run_once_momentum, write_momentum_status
 from bots.ratio_trend import RATIO, ratio_mode, _daily_closed, _ratio_rank, ratio_members, ratio_signal, _ratio_close_pair, run_once_ratio, write_ratio_status
 from bots.listing_short import LISTING, listing_mode, _listing_close, run_once_listing, write_listing_status
+from bots.vol_breakout import VB, breakout_mode, run_once_breakout
 
 if __name__=="__main__":
     import argparse
