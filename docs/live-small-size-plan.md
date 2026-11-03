@@ -39,15 +39,21 @@ with the 40% reserve.
 
 The ceilings (`allow-live.env`) and the gate's limits are in % of the account's **equity on Binance**, not of the
 dashboard's capital — so keep on the sub-account only the capital meant for the bot. Per-trade ≥ 2080 / equity,
-aggregate ≥ 10 × that. Example for **$1,500** (set 2026-11-03 in `allow-live.env`, with ALLOW_LIVE_TRADING=false):
+aggregate ≥ 10 × that.
+
+**Owner's choice: $500** (in `allow-live.env` since 2026-11-03, with ALLOW_LIVE_TRADING=false). $500 − 40% reserve =
+$300 = 11 trades of $26, so the 10-leg basket fits. At this size one leg at its stop is **4.2%** of the account, the
+whole basket at its stops **41.6% ($208)**, one side **20.8%**:
 
 ```
-RAQM_CAP_RISK_PER_TRADE_PCT=1.5
-RAQM_CAP_AGGREGATE_RISK_PCT=15
-RAQM_CAP_CORRELATED_RISK_PCT=15
-RAQM_CAP_DAILY_LOSS_PCT=10
-RAQM_CAP_DRAWDOWN_PCT=25
+RAQM_CAP_RISK_PER_TRADE_PCT=4.5
+RAQM_CAP_AGGREGATE_RISK_PCT=45
+RAQM_CAP_CORRELATED_RISK_PCT=25
+RAQM_CAP_DAILY_LOSS_PCT=20
+RAQM_CAP_DRAWDOWN_PCT=45
 ```
+
+(For $1,500 the same size would be 1.5 / 15 / 15 / 10 / 25.)
 
 Dashboard, real account:
 - التداول الحقيقي → فلوس حقيقية: capital = the sub-account's capital, manual margin **26**, only `momentum_ls` on.
