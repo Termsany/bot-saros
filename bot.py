@@ -376,13 +376,6 @@ def write_public_status(state, analyses, symbols_allowed):
         tmp.replace(d / "status.json")   # atomic: the page never reads half a file
     except Exception as e: log(f"public status: {e}")
 
-LISTING = {"skip_days": 30, "hold_days": 90, "stop": 0.40, "max_open": 10, "catch_up_days": 3}
-
-def listing_mode():
-    """Paper short of new Binance USDT-M listings 30 days after listing, held 90 days, stop 40% above entry,
-    at most 10 at once — research/short_study.py idea 2 (README "Short side")."""
-    return "listing_short" in (CONFIG.get("enabled_strategies") or [])
-
 def listing_markets(ex):
     """[(symbol, listed_ms, age_days)] for Binance crypto USDT perpetuals (no TradFi, no stablecoins)."""
     ex.load_markets(); now = time.time() * 1000; out = []
@@ -394,112 +387,8 @@ def listing_markets(ex):
         if listed: out.append((sym, listed, (now - listed) / 86_400_000))
     return out
 
-def _listing_close(ex, state, sym, price, reason):
-    pos = state["positions"].pop(sym); q = pos["qty"]; fee = 0.0004
-    funding = 0.0
-    try:   # shorts receive positive funding and pay negative funding
-        since = int(datetime.fromisoformat(pos["time"]).timestamp() * 1000)
-        funding = sum(float(r["fundingRate"]) for r in ex.fetch_funding_rate_history(sym, since=since, limit=1000)) * q * pos["entry"]
-    except Exception as e: log(f"funding {sym}: {e}")
-    pnl = (pos["entry"] - price) * q - (pos["entry"] * q + price * q) * fee + funding
-    margin = pos["entry"] * q / max(1, int(pos.get("leverage", 2)))
-    state["history"].append({"symbol": sym, "side": "short", "entry": pos["entry"], "exit": price, "qty": q, "pnl": pnl, "opened": pos["time"],
-                             "pnl_pct": pnl / margin * 100 if margin else 0, "funding": funding, "reason": reason,
-                             "time": datetime.now(timezone.utc).isoformat(), "type": "paper"})
-    st = state["stats"]; st["trades"] += 1; st["pnl"] += pnl; st["wins" if pnl > 0 else "losses"] += 1
-    save_state(state)
-    log(f"🔒 قفل شورت {sym} — {reason} @ {price:.6g} PnL {pnl:+.4f} (funding {funding:+.4f})")
-    return pnl
-
-def run_once_listing(ex):
-    L = LISTING; state = load_state(); now = datetime.now(timezone.utc)
-    if not CONFIG["paper_trading"]:
-        # a block (recovery, kill switch, unknown position) stops entries only — the live adapters refuse them. The
-        # strategy's own exits still run: returning here left open positions without their signal exits
-        reconcile_live(state, ex)
-        if _ENTRY_BLOCK.get("reason"): log(f"⛔ دخول جديد متوقف، الخروج شغّال — {_ENTRY_BLOCK['reason']}")
-        process_manual_closes(state, ex, {})   # the site's close button (it waited unanswered for the basket bots)
-    process_paper_closes(state, ex, "listing")
-    done = state.setdefault("listing_done", {})
-    mk = listing_markets(ex); prices = {}
-    # open shorts: protective stop and the 90-day exit
-    for sym, pos in list(state["positions"].items()):
-        try:
-            price = float(ex.fetch_ticker(sym)["last"]); prices[sym] = price
-            reason = f"وقف {pos['sl']:.6g}" if price >= pos["sl"] else f"خلصت {L['hold_days']} يوم" if now >= datetime.fromisoformat(pos["exit_at"]) else None
-            if reason:
-                if CONFIG["paper_trading"]:
-                    _listing_close(ex, state, sym, price, reason)
-                else:
-                    leg = {"symbol": sym, "side": "close_short", "action": "exit", "position": pos, "price": price, "order": 0,
-                           "risk_usdt": 0, "notional_usdt": 0, "correlation_group": _correlation_group(sym)}
-                    _phase2_live_basket(ex, state, "listing_short", f"listing-exit:{sym}", [leg], reserve=False)   # booked with its PnL
-        except Exception as e: log(f"شورت {sym}: {e}")
-    # new entries: coins that just turned 30 days old (a few days of slack if the bot was down), oldest listing first;
-    # like the backtest, a coin that comes up while all 10 slots are taken is skipped for good
-    due = sorted([x for x in mk if L["skip_days"] <= x[2] < L["skip_days"] + L["catch_up_days"] and x[0] not in done], key=lambda x: x[1])
-    if not CONFIG["paper_trading"] and (_ENTRY_BLOCK.get("reason") or state.get("recovery_required")): due = []   # retried when unblocked
-    for sym, listed, age in due:
-        if CONFIG["paper_trading"]: done[sym] = now.isoformat()   # live: only once the entry filled (below)
-        if _strategy_full(state, L["max_open"]):
-            done[sym] = now.isoformat()
-            log(f"⏸️ {sym} عدّى {L['skip_days']} يوم بس الـ {L['max_open']} أماكن مليانة — اتساب زي الباك تست"); continue
-        if not CONFIG["paper_trading"]:
-            try:
-                price = float(ex.fetch_ticker(sym)["last"]); prices[sym] = price
-            except Exception as e:
-                log(f"شورت {sym}: {e}"); continue
-            leg = _phase2_leg(sym, "short", position_size(price), price, price * (1 + L["stop"]), None, "listing_short",
-                               extra={"listed": datetime.fromtimestamp(listed / 1000, timezone.utc).isoformat(), "exit_at": (now + pd.Timedelta(days=L["hold_days"])).isoformat()})
-            result = _phase2_live_basket(ex, state, "listing_short", f"listing-entry:{sym}", [leg])
-            if result and result.get("status") == "filled": done[sym] = now.isoformat()
-            continue
-
-        try:
-            price = float(ex.fetch_ticker(sym)["last"]); prices[sym] = price
-            lev = int(CONFIG.get("leverage", 2)); q = position_size(price) * lev / price
-            state["positions"][sym] = {"side": "short", "entry": price, "qty": q, "leverage": lev, "time": now.isoformat(),
-                "sl": price * (1 + L["stop"]), "tp": None, "listed": datetime.fromtimestamp(listed / 1000, timezone.utc).isoformat(),
-                "exit_at": (now + pd.Timedelta(days=L["hold_days"])).isoformat()}
-            log(f"✅ 🔴 شورت وهمي {sym} (اتدرجت من {age:.0f} يوم) @ {price:.6g} وقف {price * (1 + L['stop']):.6g}")
-            notify(f"🔴 شورت {sym.split(':')[0]} — عملة جديدة (اتدرجت من {age:.0f} يوم) · Paper\nدخول {price:.6g} · x{lev} · هامش ${position_size(price):.0f}\nوقف {price * (1 + L['stop']):.6g} · خروج بعد {L['hold_days']} يوم")
-        except Exception as e: log(f"شورت {sym}: {e}")
-    save_state(state)
-    for sym in state["positions"]:
-        if sym not in prices:
-            try: prices[sym] = float(ex.fetch_ticker(sym)["last"])
-            except Exception: pass
-    upcoming = sorted([x for x in mk if x[2] < L["skip_days"]], key=lambda x: -x[2])
-    write_listing_status(state, prices, upcoming)
-    log(f"📊 شورت مفتوح: {len(state['positions'])}/{L['max_open']} | PnL محقق {state['stats']['pnl']:+.4f} | جاي: {len(upcoming)} عملة")
-
 def _r4(x):
     return round(float(x), 4) if x is not None else None
-
-def write_listing_status(state, prices, upcoming):
-    out_dir = CONFIG.get("public_dir")
-    if not out_dir: return
-    pos = []
-    for sym, p in state["positions"].items():
-        price = prices.get(sym, p["entry"]); pnl = (p["entry"] - price) * p["qty"]
-        margin = p["entry"] * p["qty"] / max(1, int(p.get("leverage", 2)))
-        pos.append({"symbol": sym.split(":")[0], "id": sym.split("/")[0] + "USDT", "side": "short", "entry": p["entry"], "price": price,
-                    "qty": p["qty"], "margin": round(margin, 2), "sl": p["sl"], "pnl": round(pnl, 4),
-                    "pnl_pct": round(pnl / margin * 100, 2) if margin else 0, "opened": p["time"], "exit_at": p["exit_at"]})
-    st = state.get("stats", {})
-    data = {"updated": datetime.now(timezone.utc).isoformat(), "mode": "paper" if CONFIG["paper_trading"] else "live",
-            "rules": LISTING, "leverage": int(CONFIG.get("leverage", 2)), "margin": CONFIG.get("trade_amount_usdt"),
-            "started": CONFIG.get("started_at"),
-            "stats": {"closed": st.get("trades", 0), "wins": st.get("wins", 0), "losses": st.get("losses", 0),
-                      "realized": round(float(st.get("pnl", 0)), 4), "unrealized": round(sum(x["pnl"] for x in pos), 4), "open": len(pos)},
-            "positions": sorted(pos, key=lambda x: x["opened"]),
-            "upcoming": [{"symbol": s.split(":")[0], "days_left": round(LISTING["skip_days"] - age, 1)} for s, _, age in upcoming[:12]],
-            "history": [{"symbol": h["symbol"].split(":")[0], "entry": h["entry"], "exit": h["exit"], "pnl": _r4(h.get("pnl")),
-                         "reason": h.get("reason", ""), "time": h.get("time"), "opened": h.get("opened")} for h in state.get("history", [])[-200:]][::-1]}
-    try:
-        d = Path(out_dir); tmp = d / "listing.json.tmp"
-        tmp.write_text(json.dumps(data, ensure_ascii=False, default=str), encoding="utf-8"); tmp.replace(d / "listing.json")
-    except Exception as e: log(f"public listing status: {e}")
 
 def _paper_close(ex, state, sym, price, reason):
     """Close a paper position with fees and the real funding paid/received since entry (longs pay positive funding)."""
@@ -3754,6 +3643,7 @@ def start_dashboard_server(port=None):
 # ── the strategies, one file each (bots/): re-exported here — bot.<name> stays the one name the CLI, the API and the tests use ──
 from bots.momentum_ls import MOM, momentum_due, momentum_next, momentum_mode, momentum_rank, run_once_momentum, write_momentum_status
 from bots.ratio_trend import RATIO, ratio_mode, _daily_closed, _ratio_rank, ratio_members, ratio_signal, _ratio_close_pair, run_once_ratio, write_ratio_status
+from bots.listing_short import LISTING, listing_mode, _listing_close, run_once_listing, write_listing_status
 
 if __name__=="__main__":
     import argparse
