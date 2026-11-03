@@ -56,7 +56,29 @@
   @keyframes up{from{background:rgba(34,211,160,.22)}to{background:transparent}}
   @keyframes down{from{background:rgba(255,84,112,.22)}to{background:transparent}}
   footer{margin-top:34px;color:var(--faint);font-size:12px;line-height:1.9;border-top:1px solid var(--line);padding-top:16px}
+  td.num span{direction:ltr;unicode-bidi:isolate}
   @media (max-width:760px){ .kpis{grid-template-columns:repeat(2,minmax(0,1fr))} h1{font-size:22px} .kpi .value{font-size:20px} }
+  /* phones: every row becomes a card, each value next to its column's name */
+  @media (max-width:640px){
+    .wrap{padding:14px 12px 36px}
+    h1{font-size:20px;margin-top:18px} .sub{font-size:13px}
+    .kpis{gap:8px;margin-top:16px} .card{padding:12px;border-radius:14px}
+    .kpi .value{font-size:18px} .kpi .note{font-size:10px}
+    .chip{border-radius:12px;line-height:1.6}
+    .table{overflow:visible;border:0;background:none;border-radius:0}
+    table{min-width:0} thead{display:none} tbody{display:block}
+    tr{display:grid;grid-template-columns:1fr 1fr;gap:7px 14px;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:12px;margin-bottom:8px}
+    td{display:flex;align-items:baseline;justify-content:space-between;gap:8px;padding:0;border:0;white-space:normal;font-size:12.5px;min-width:0}
+    td.num{direction:rtl;text-align:left}
+    td::before{content:attr(data-l);font-family:Cairo,system-ui,sans-serif;font-size:11px;color:var(--muted);white-space:nowrap}
+    td.coin,td.side{font-size:15px;padding-bottom:7px;border-bottom:1px solid var(--line)}
+    td.coin::before,td.side::before{content:none}
+    td.side{justify-content:flex-end}
+    td.wide{grid-column:1/-1}
+    td.empty{grid-column:1/-1;display:block;padding:14px}
+    td.empty::before{content:none}
+    tr:has(td.empty){display:block}
+  }
 </style>
 </head>
 <body>
@@ -107,11 +129,13 @@ const nextDay = iso => { const d = new Date(iso)
   const date = d.toLocaleDateString("ar-EG", {weekday: "long", day: "numeric", month: "long", timeZone: "UTC", numberingSystem: "latn"})
   const utc = d.toLocaleTimeString("en-GB", {hour: "2-digit", minute: "2-digit", timeZone: "UTC"})
   const cairo = d.toLocaleTimeString("en-GB", {hour: "2-digit", minute: "2-digit", timeZone: "Africa/Cairo"})
-  return `${date} · ${utc} UTC (${cairo} بتوقيت مصر)` }
+  return `${date} · <span dir="ltr">${utc} UTC</span> (<span dir="ltr">${cairo}</span> بتوقيت مصر)` }
 const sideTag = s =>s === "long" ? `<span class="tag profit">LONG</span>` : `<span class="tag loss">SHORT</span>`
 const NAMES = {trend_daily: "ترند يومي", vol_breakout: "اختراق التقلب", rsi2_pullback: "RSI2 الارتداد", trend_breakout: "اختراق الترند",
                listing_short: "شورت العملات الجديدة", momentum_ls: "مومنتم لونج/شورت (أسبوعي)", ratio_trend: "ترند النسبة"}
 const id = sym => String(sym).split(":")[0].replace("/", "")
+// a number cell; data-l is its column's name, shown beside it on a phone (where the table header is hidden)
+const num = (label, cls, val) => `<td class="num mono ${cls}" data-l="${label}"><span>${val}</span></td>`
 
 let D = null, live = {}, prev = {}, dirty = false, ws = null, subs = new Set()
 
@@ -132,16 +156,16 @@ function render(){
       const moved = prev[id(p.symbol)] != null && price !== prev[id(p.symbol)] ? (price > prev[id(p.symbol)] ? "up" : "down") : ""
       prev[id(p.symbol)] = price
       unreal += pnl || 0; open += 1; margin += m; atStops += p.loss_at_sl || 0
-      return `<tr><td class="coin">${esc(String(p.symbol).split(":")[0])}</td><td>${sideTag(p.side)}</td><td class="num mono">${px(p.entry)}</td>
-        <td class="num mono ${moved}">${px(price)}</td><td class="num mono">${px(p.sl)}</td><td class="num mono">${usd(m, false)}</td>
-        <td class="num mono ${tone(pnl)}">${usd(pnl)}</td><td class="num mono ${tone(pnl)}">${pct(m ? pnl / m * 100 : null)}</td>
-        <td class="num mono loss">${usd(p.loss_at_sl)}</td><td class="mono">${day(p.opened)}</td></tr>`
+      return `<tr><td class="coin">${esc(String(p.symbol).split(":")[0])}</td><td class="side">${sideTag(p.side)}</td>${num("الدخول", "", px(p.entry))}
+        ${num("السعر الحالي", moved, px(price))}${num("الوقف", "", px(p.sl))}${num("الهامش", "", usd(m, false))}
+        ${num("الربح $", tone(pnl), usd(pnl))}${num("على الهامش", tone(pnl), pct(m ? pnl / m * 100 : null))}
+        ${num("لو الوقف اتضرب", "loss", usd(p.loss_at_sl))}${num("من", "wide", day(p.opened))}</tr>`
     }).join("")
     const hist = [...b.history].reverse()
     hist.forEach(h => { realized += h.pnl || 0; if(h.pnl > 0) wins++; else if(h.pnl < 0) losses++ })
-    const hrows = hist.map(h => `<tr><td class="coin">${esc(String(h.symbol).split(":")[0])}</td><td>${sideTag(h.side)}</td><td class="num mono">${px(h.entry)}</td>
-        <td class="num mono">${px(h.exit)}</td><td class="num mono ${tone(h.pnl)}">${usd(h.pnl)}</td><td class="num mono ${tone(h.pnl)}">${pct(h.pnl_pct)}</td>
-        <td>${esc(h.reason || "")}</td><td class="mono">${day(h.time)}</td></tr>`).join("")
+    const hrows = hist.map(h => `<tr><td class="coin">${esc(String(h.symbol).split(":")[0])}</td><td class="side">${sideTag(h.side)}</td>${num("الدخول", "", px(h.entry))}
+        ${num("الخروج", "", px(h.exit))}${num("الربح $", tone(h.pnl), usd(h.pnl))}${num("على الهامش", tone(h.pnl), pct(h.pnl_pct))}
+        <td class="wide" data-l="السبب">${esc(h.reason || "")}</td>${num("الوقت", "wide", day(h.time))}</tr>`).join("")
     return `<section>
       <div class="head"><h2>${esc(NAMES[b.strategy] || b.strategy)}</h2><span class="count">${b.positions.length} مفتوحة · رافعة x${lev} · ${b.running ? "البوت شغال" : "البوت مش بيكتب حالته"}</span></div>
       ${b.next_rebalance ? `<div class="chips" style="margin:-4px 0 10px"><span class="chip">التبديل الجاي: <b>${nextDay(b.next_rebalance)}</b></span></div>` : ""}
