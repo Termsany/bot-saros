@@ -99,6 +99,14 @@ class HarnessTests(unittest.TestCase):
         self.assertIn("refusing", str(code))
         self.assertEqual(ex.orders, [])                                    # not a single order sent
 
+    def test_refuses_an_account_with_open_positions(self):
+        # the Demo bots' positions: the run would fail on them and its cleanup could close one
+        ex = Sim(); ex.positions["DOGE/USDT"] = 120.0; ex.positions["BTC/USDT"] = -0.01
+        code, _ = self.run_harness(ex)
+        self.assertIn("refusing", str(code)); self.assertIn("open positions", str(code))
+        self.assertEqual(ex.orders, [])
+        self.assertEqual(ex.positions, {"DOGE/USDT": 120.0, "BTC/USDT": -0.01})   # untouched
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -313,6 +313,13 @@ def main():
     if "demo-fapi.binance.com" not in host:
         sys.exit(f"refusing: private endpoint is {host}, not Binance Demo")
     ex.load_markets()
+    # A flat account only. With the raqm-demo@ bots trading on it, every scenario sees positions it did not open and
+    # the bot rightly blocks entries (2026-11-03: 10 of 18 failed so), the cli check sees their trades as its own — and
+    # the cleanup closes whatever is on its coins, a Demo bot's position included (the account is one-way).
+    busy = sorted(f"{p.get('symbol')} {p.get('contracts')}" for p in ex.fetch_positions() if float(p.get("contracts") or 0))
+    if busy:
+        sys.exit("refusing: the Demo account has open positions (" + ", ".join(busy) + ") — run on a flat account with "
+                 "the Demo bots stopped (systemctl stop 'raqm-demo@*'), or on another Demo account")
     bal = ex.fetch_balance(); print(f"Binance Demo — USDT free {(bal.get('USDT') or {}).get('free')} — {host}", flush=True)
     tmp = Path(tempfile.mkdtemp(prefix="demo_e2e_"))
     botmod.ENTRY_RECHECK_S = 2.0
