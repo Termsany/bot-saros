@@ -1239,9 +1239,13 @@ async def live_strategies(env: str = "live", user: dict = Depends(require_admin)
     rows = []
     for s in LIVE_STRATEGIES:
         st = _live_status_of(s)
-        rows.append({"id": s, "on": s in on, "running": st.get("running", False), "env": st.get("env"),
-                     "positions": len(st.get("positions") or []), "entry_block": st.get("entry_block") or "",
-                     "review": list((st.get("review") or {}).keys())})
+        # one status folder per strategy for both bots (raqm-demo@ and raqm-live@): only the asked account's bot counts —
+        # the real-money view showed the Demo bots' positions as its own (2026-11-03)
+        mine = st.get("env") == env
+        rows.append({"id": s, "on": s in on, "running": bool(mine and st.get("running", False)), "env": st.get("env"),
+                     "positions": len(st.get("positions") or []) if mine else 0,
+                     "entry_block": (st.get("entry_block") or "") if mine else "",
+                     "review": list((st.get("review") or {}).keys()) if mine else []})
     try:
         ledger = risk_manager.load_risk_state(_ledger(env))
         lim = ledger["limits"]

@@ -176,7 +176,7 @@ export function LiveStrategiesView({ env, onEnv, cfg, status, chosen, onToggle, 
 }){
   const envSwitch = (
     <div className="inline-flex rounded-xl border border-line bg-surface p-1">
-      {(["demo", "live"] as const).map(e => (
+      {(["live", "demo"] as const).map(e => (
         <button key={e} onClick={() => onEnv(e)}
           className={`rounded-[9px] px-4 py-1.5 text-[13px] transition ${env === e ? "bg-surface2 font-semibold text-ink" : "text-muted hover:text-ink"}`}>
           {e === "demo" ? "Demo · فلوس وهمية" : "فلوس حقيقية"}
@@ -193,10 +193,12 @@ export function LiveStrategiesView({ env, onEnv, cfg, status, chosen, onToggle, 
   const share = total && onCount ? Math.max(1, Math.floor(total / onCount)) : null
   const starved = share != null ? rows.filter(r => chosen.has(r.id) && (OPENS_AT_ONCE[r.id] || 1) > share) : []
   const changed = rows.some(r => r.on !== chosen.has(r.id))
-  const openPnl = (id: string) => ((status?.strategies?.[id]?.positions || []) as any[]).reduce((a, p) => a + (Number(p.pnl) || 0), 0)
+  // the Demo and the real-money bot of a strategy share one status folder: only this account's bot is shown here
+  const mine = (id: string) => status?.strategies?.[id]?.env === env ? status.strategies[id] : null
+  const openPnl = (id: string) => ((mine(id)?.positions || []) as any[]).reduce((a, p) => a + (Number(p.pnl) || 0), 0)
   const state = (r: any): [string, Tone] => r.review?.length ? ["محتاج مراجعة", "loss"] : !chosen.has(r.id) ? ["متوقفة", "neutral"]
     : r.entry_block ? ["الدخول متوقف", "corona"] : r.running ? ["شغال", "profit"] : ["البوت مش شغال", "neutral"]
-  const withBots = rows.filter(r => status?.strategies?.[r.id]?.running || status?.strategies?.[r.id]?.positions?.length)
+  const withBots = rows.filter(r => mine(r.id)?.running || mine(r.id)?.positions?.length)
 
   return (
     <div className="space-y-5">
@@ -259,7 +261,8 @@ export function LiveStrategiesView({ env, onEnv, cfg, status, chosen, onToggle, 
 /** The admin's own live account: yes/no per strategy (the activation record the bots check before every entry),
  *  and each strategy's bot with its positions. A strategy turned off stops entering; its open positions still exit. */
 export function LiveStrategies(){
-  const [env, setEnv] = useState<"demo"|"live">("demo")
+  // real money first (owner, 2026-11-03: the tab opened on Demo, and the real bot was hard to find)
+  const [env, setEnv] = useState<"demo"|"live">("live")
   const [cfg, setCfg] = useState<any|null|undefined>(undefined)
   const [status, setStatus] = useState<any|null>(null)
   const [chosen, setChosen] = useState<Set<string>>(new Set())

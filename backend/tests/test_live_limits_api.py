@@ -82,6 +82,23 @@ class LiveLimitsApiTests(ApiAuthTests):
         cap = self.c.get("/api/live/strategies?env=live", headers=self.h("admin-token")).json()["capital"]
         self.assertEqual({k: cap[k] for k in LIMITS}, {k: float(v) for k, v in LIMITS.items()})
 
+    def test_each_account_sees_only_its_own_bot(self):
+        # one status folder per strategy for both bots: the real-money view showed the Demo bots as its own (2026-11-03)
+        from datetime import datetime, timezone
+        ipc = Path(self.tmp.name) / "ipc"
+        now = datetime.now(timezone.utc).isoformat()
+        for s, env in (("trend_daily", "demo"), ("momentum_ls", "live")):
+            (ipc / s).mkdir(parents=True)
+            (ipc / s / "live_status.json").write_text(json.dumps({"env": env, "updated": now, "positions": [{"symbol": "X/USDT"}] * 3,
+                                                                  "entry_block": "", "review": {}}), encoding="utf-8")
+        with mock.patch.object(self.m, "IPC_DIR", ipc):
+            live = {r["id"]: r for r in self.c.get("/api/live/strategies?env=live", headers=self.h("admin-token")).json()["strategies"]}
+            demo = {r["id"]: r for r in self.c.get("/api/live/strategies?env=demo", headers=self.h("admin-token")).json()["strategies"]}
+        self.assertEqual((live["momentum_ls"]["running"], live["momentum_ls"]["positions"]), (True, 3))
+        self.assertEqual((live["trend_daily"]["running"], live["trend_daily"]["positions"]), (False, 0))
+        self.assertEqual((demo["trend_daily"]["running"], demo["trend_daily"]["positions"]), (True, 3))
+        self.assertEqual((demo["momentum_ls"]["running"], demo["momentum_ls"]["positions"]), (False, 0))
+
     def test_browser_preflight_allows_patch(self):
         origin = self.m.ALLOWED_ORIGINS[0]
         r = self.c.options("/api/admin/users/u-user/settings", headers={

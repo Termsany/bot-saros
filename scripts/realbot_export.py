@@ -12,7 +12,7 @@ through a link, at most 1 MB.
   sudo -u raqmlive /opt/raqm-live/venv/bin/python -E -s /opt/raqm-live/scripts/realbot_export.py
 """
 import json, os, stat, sys, tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 IPC = Path(os.getenv("RAQM_IPC_ROOT", "/opt/raqm-ipc"))
@@ -23,6 +23,18 @@ STALE_S = 300            # the bots write their status every cycle (1–2 minute
 POSITION_FIELDS = ("symbol", "side", "entry", "price", "qty", "contract_size", "sl", "pnl", "pnl_estimated", "loss_at_sl", "opened")
 TRADE_FIELDS = ("symbol", "side", "entry", "exit", "qty", "pnl", "pnl_pct", "reason", "time", "opened")
 HISTORY = 100
+# the real-money bots' own state (raqmlive's): the basket strategy's last rebalance, for the page's "next rebalance"
+STATE = Path(os.getenv("RAQM_LIVE_STATE", "/opt/raqm-live/state"))
+REBALANCE_WEEKDAY = 0    # Monday, as bot.MOM["weekday"] (test_realbot_export checks it against bot.momentum_next)
+
+
+def next_rebalance(last_iso):
+    """bot.momentum_next without importing the bot: the next Monday 00:00 UTC after the last rebalance."""
+    try:
+        last = datetime.fromisoformat(last_iso)
+    except (TypeError, ValueError):
+        return None
+    return (last + timedelta(days=(REBALANCE_WEEKDAY - last.weekday()) % 7 or 7)).isoformat()
 
 
 def read_status(path):
@@ -49,7 +61,7 @@ def _pick(row, fields):
     return {k: row[k] for k in fields if isinstance(row, dict) and k in row and isinstance(row[k], (str, int, float, bool, type(None)))}
 
 
-def public_bot(strategy, st, now):
+def public_bot(strategy, st, now, next_rebalance_at=None):
     """The page's view of one live bot; None for a Demo bot or anything that isn't a status."""
     if not isinstance(st, dict) or st.get("env") != "live":
         return None
@@ -61,12 +73,19 @@ def public_bot(strategy, st, now):
     history = [_pick(h, TRADE_FIELDS) for h in (st.get("history") or []) if isinstance(h, dict)][-HISTORY:]
     return {"strategy": strategy, "updated": st.get("updated"), "running": age is not None and 0 <= age < STALE_S,
             "leverage": st.get("leverage") if isinstance(st.get("leverage"), (int, float)) else None,
-            "positions": positions, "history": history}
+            "positions": positions, "history": history, "next_rebalance": next_rebalance_at}
 
 
-def build(ipc=IPC, now=None):
+def _next_of(strategy, state_dir):
+    """The basket strategy's next rebalance from its own state's last one; None for the others or unreadable."""
+    if strategy != "momentum_ls":
+        return None
+    return next_rebalance((read_status(state_dir / f"live-{strategy}.json") or {}).get("mom_last"))
+
+
+def build(ipc=IPC, now=None, state_dir=STATE):
     now = now or datetime.now(timezone.utc)
-    bots = [b for b in (public_bot(s, read_status(ipc / s / "live_status.json"), now) for s in STRATEGIES) if b]
+    bots = [b for b in (public_bot(s, read_status(ipc / s / "live_status.json"), now, _next_of(s, state_dir)) for s in STRATEGIES) if b]
     return {"updated": now.isoformat(), "bots": bots}
 
 
