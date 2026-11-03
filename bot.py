@@ -407,10 +407,6 @@ def _paper_close(ex, state, sym, price, reason):
     st = state["stats"]; st["trades"] += 1; st["pnl"] += pnl; st["wins" if pnl > 0 else "losses"] += 1
     return pnl
 
-def trend_mode():
-    """Daily trend runs alone on daily candles, long only, exits when the trend turns (strategies_trend.py)."""
-    return "trend_daily" in (CONFIG.get("enabled_strategies") or [])
-
 def wave_mode():
     """Wave Flats runs alone with its own entries, stops and targets (strategies_wave.py)."""
     return "wave_flats" in (CONFIG.get("enabled_strategies") or [])
@@ -698,18 +694,6 @@ def analyze_wave(symbol, df):
             "sl":sig.get("stop",price*(1-CONFIG["stop_loss_pct"])),"tp":(sig.get("tgt2") or sig.get("tgt1") or price*(1+CONFIG["take_profit_pct"])),
             "rsi":rsi_info["rsi"],"supports":sr_info["supports"],"resistances":sr_info["resistances"],
             "wave":sig or None,"time":datetime.now(timezone.utc).isoformat()}
-
-def analyze_trend(symbol, df):
-    """Daily trend on the closed daily candles (the last row from the exchange is still forming)."""
-    import strategies_trend as stt
-    closed=df.iloc[:-1]; on,size=stt.signal_now(list(closed.close)); exit_below=stt.exit_level(list(closed.close))
-    price=float(df.close.iloc[-1]); lev=int(CONFIG.get("leverage",2))
-    sr_info=sr_signal(df)[2]; rsi_info=rsi_macd_signal(df)[2]
-    reason=f"ترند صاعد — حجم {size*100:.0f}%" if on else "مفيش ترند صاعد"
-    return {"symbol":symbol,"price":price,"total":1.0 if on else 0.0,"decision":"شراء" if on else "انتظار",
-            "breakdown":{"trend_daily":(1.0 if on else 0.0,reason)},"amount_mult":1.0,
-            "sl":price*(1-stt.STOP_SHARE/lev),"tp":None,"rsi":rsi_info["rsi"],"supports":sr_info["supports"],"resistances":sr_info["resistances"],
-            "trend":{"on":on,"size":size,"ts":int(closed.ts.iloc[-1].value//10**6),"exit_below":exit_below},"time":datetime.now(timezone.utc).isoformat()}
 
 def analyze(symbol, df=None, timeframe=None):
     if df is None: df=fetch_ohlcv(symbol, timeframe or CONFIG["timeframe"], limit=candles_needed())
@@ -2291,72 +2275,6 @@ def _write_closed(d, state):
         _CLOSED_WRITTEN["n"] = len(rows)
     except Exception as e: log(f"closed trades: {e}")
 
-def try_enter_trend(symbol, analysis, state, ex):
-    """Daily trend: buy at market when the last closed daily candle turns the trend on; sell when it turns off.
-    Live: market buy, then a stop on the exchange at the protective level (no target — the exit is the signal)."""
-    import strategies_trend as stt
-    sig=analysis.get("trend"); price=analysis["price"]
-    if not sig: return
-    live = not CONFIG["paper_trading"]
-    if in_position(state, symbol):
-        if sig["on"]: return
-        pos=state["positions"][symbol]
-        if live:
-            try:
-                res = close_live_position(ex, symbol, pos, price)
-                _require_verified_close(res)
-            except Exception as e:
-                log(f"⚠️ {symbol}: الترند وقف بس القفل فشل — هيحاول تاني الدورة الجاية: {e}")
-                notify(f"⚠️ {symbol}: الترند وقف بس أمر القفل فشل — البوت هيحاول تاني. الوقف لسه على المنصة."); return
-            exit_px, qty = res["price"], res["qty"]
-        else:
-            exit_px, qty = price, pos["qty"]
-        if live:
-            cs = _position_contract_size(pos)
-            if cs is None:
-                raise RuntimeError("missing contract_size for live PnL")
-            pnl = futures_net_pnl(pos["entry"], exit_px, qty, cs, pos.get("side", "long"), fee_rate=_fee_rate(pos, required=True), funding_pnl=_funding_pnl(pos, required=True))
-            margin = pos["entry"] * qty * cs / max(1, int(pos.get("leverage", CONFIG.get("leverage", 1))))
-        else:
-            pnl = (exit_px-pos["entry"])*qty
-            margin = pos["entry"] * qty
-        mode = _live_label() if live else "Paper"
-        log(f"📉 اغلاق {symbol} — الترند وقف @ {exit_px:.6g} PnL {pnl:+.4f}")
-        state["history"].append({"symbol":symbol,"side":"long","entry":pos["entry"],"exit":exit_px,"qty":qty,"pnl":pnl,"pnl_pct":pnl/margin*100 if margin else 0,"reason":"الترند وقف","time":datetime.now(timezone.utc).isoformat(),"type":"live" if live else "paper","opened":pos.get("time"),"rank":pos.get("rank")})
-        state["stats"]["trades"]+=1; state["stats"]["pnl"]+=float(pnl); state["stats"]["wins" if pnl>0 else "losses"]+=1
-        state["positions"].pop(symbol,None); state["last_trade"][symbol]=datetime.now(timezone.utc).isoformat()
-        if live: _closed_cleanly(state, symbol)
-        save_state(state)
-        if live: _release_position_risk(symbol, pos)
-        return
-    # paper: a coin closed by hand waits for its trend to turn off and on again. Live (the owner's account): a manual
-    # close frees the slot and the strategy keeps trading as usual — it may buy the coin again on its next signal
-    hold = state.get("manual_hold", {}) if not live else {}
-    if symbol in hold:   # closed by hand: wait for the trend to turn off, then a new signal may buy it again
-        if not sig["on"]: hold.pop(symbol, None); save_state(state)
-        return
-    if not analysis.get("in_universe", True): return   # not in the volume top list today: no new trade
-    seen=state.setdefault("trend_seen",{})
-    if not sig["on"] or seen.get(symbol)==sig["ts"]: return   # one entry per closed daily candle, like the backtest
-    if live and _ENTRY_BLOCK["reason"]:
-        log(f"⛔ {symbol} مفيش دخول — {_ENTRY_BLOCK['reason']}"); return   # retried next cycle (trend_seen not marked)
-    seen[symbol]=sig["ts"]; save_state(state)
-    if _strategy_full(state, CONFIG["max_open_positions"]) or not daily_pnl_ok(state): return
-    lev=int(CONFIG.get("leverage",2))
-    margin=position_size(price, ex, stop_price=sig.get("stop"))*sig["size"]
-    if not live:
-        try:
-            res=place_order(ex,symbol,"long",margin,price)
-            sl=res["price"]*(1-stt.STOP_SHARE/lev)
-            state["positions"][symbol]={"side":"long","entry":res["price"],"qty":res["qty"],"cost":res["cost"],"notional":res.get("notional"),"contract_size":res.get("contract_size", 1.0),"contract_size_verified":res.get("contract_size_verified", False),"entry_fee_rate":res.get("entry_fee_rate"),"entry_fee_cost":res.get("entry_fee_cost"),"leverage":res.get("leverage",lev),
-                "time":datetime.now(timezone.utc).isoformat(),"sl":sl,"tp":None,"breakeven":False,"trend":True,"rank":analysis.get("rank")}
-            state["last_trade"][symbol]=datetime.now(timezone.utc).isoformat(); save_state(state)
-            log(f"✅ 🟢 لونج وهمي {symbol} ترند يومي x{lev} @ {res['price']:.6g} حجم {sig['size']*100:.0f}% وقف حماية {sl:.6g}")
-            notify(f"🟢 لونج {symbol} — ترند يومي x{lev} (Paper)\nدخول {res['price']:.6g} · حجم {sig['size']*100:.0f}% من ${position_size(price, ex)*lev:.0f}\nوقف حماية {sl:.6g} · الخروج لما الترند يقف")
-        except Exception as e: log(f"فشل long {symbol}: {e}")
-        return
-    _enter_trend_live(symbol, analysis, state, ex, margin, lev, price)
-
 def _enter_trend_live(symbol, analysis, state, ex, margin, lev, price):
     import strategies_trend as stt
     from backend.app.oco import place_oco_orders
@@ -3440,6 +3358,7 @@ from bots.listing_short import LISTING, listing_mode, _listing_close, run_once_l
 from bots.vol_breakout import VB, breakout_mode, run_once_breakout
 from bots.rsi2_pullback import RSI2, rsi2_mode, rsi_wilder, run_once_rsi2
 from bots.trend_breakout import TB, tbreak_mode, run_once_tbreak
+from bots.trend_daily import trend_mode, analyze_trend, try_enter_trend
 
 if __name__=="__main__":
     import argparse
