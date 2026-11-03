@@ -1,6 +1,6 @@
 "use client"
 import { useCallback, useEffect, useState } from "react"
-import { apiLiveStatus, apiLiveStrategies, apiSetCapital, apiSetLiveStrategies } from "@/lib/api"
+import { apiLiveStatus, apiLiveStrategies, apiSetCapital, apiSetLimits, apiSetLiveStrategies } from "@/lib/api"
 import { LivePositions } from "@/components/LivePositions"
 import { DemoMeasurement } from "@/components/DemoMeasurement"
 import { Card, CardHeader, Pill, Toggle, btn, field, label, type Tone } from "@/components/ui"
@@ -103,6 +103,67 @@ function CapitalPanel({ env, cfg, reload }: { env: "demo"|"live", cfg: any, relo
 // trades a strategy opens at once: a momentum basket is 5 long + 5 short (bot.MOM), a ratio pair 2 legs
 const OPENS_AT_ONCE: Record<string, number> = { momentum_ls: 10, ratio_trend: 2 }
 
+const LIMITS: [string, string, string][] = [
+  ["risk_per_trade_pct", "الصفقة الواحدة", "خسارة صفقة واحدة لو ضربت الوقف"],
+  ["max_aggregate_risk_pct", "كل الصفقات المفتوحة", "مجموع خسارة كل المفتوح لو ضرب الوقف"],
+  ["max_correlated_risk_pct", "صفقات مرتبطة", "نفس الاتجاه في نفس المجموعة (alts / majors)"],
+  ["max_daily_loss_pct", "خسارة اليوم", "يقفل قفل الطوارئ (الدخول بس)"],
+  ["max_drawdown_pct", "أقصى تراجع", "من أعلى رصيد · يقفل قفل الطوارئ"],
+]
+
+/** The account's risk limits, in % of its balance on Binance — the risk gate reads them before every entry. With them,
+ *  what the strategies switched on need at the saved margin: one leg, the biggest basket, and one side of it. */
+function LimitsPanel({ env, cfg, chosen, reload }: { env: "demo"|"live", cfg: any, chosen: Set<string>, reload: () => void }){
+  const c = cfg.capital || {}
+  const saved = () => Object.fromEntries(LIMITS.map(([k]) => [k, c[k] != null ? String(c[k]) : ""]))
+  const [vals, setVals] = useState<Record<string, string>>(saved)
+  const [msg, setMsg] = useState("")
+  useEffect(() => { setVals(saved()); setMsg("") }, [env, ...LIMITS.map(([k]) => c[k])])   // eslint-disable-line react-hooks/exhaustive-deps
+  const changed = LIMITS.some(([k]) => vals[k] !== "" && Number(vals[k]) !== Number(c[k]))
+  const bad = LIMITS.some(([k]) => vals[k] !== "" && !(Number(vals[k]) > 0 && Number(vals[k]) <= 100))
+  // the gate divides by the account's balance, not by the capital typed on the dashboard
+  const p = plan(Number(c.capital_usdt) || 0, Number(c.capital_margin_override_usdt) || 0, c)
+  const equity = Number(c.equity_last) > 0 ? Number(c.equity_last) : p?.eff
+  const legs = Math.max(1, ...Array.from(chosen).map(s => OPENS_AT_ONCE[s] || 1))
+  const leg = p && equity ? p.loss / equity * 100 : null
+  const need: Record<string, number> | null = leg == null ? null : {
+    risk_per_trade_pct: leg, max_aggregate_risk_pct: leg * legs, max_correlated_risk_pct: leg * Math.ceil(legs / 2),
+  }
+  const short = need ? LIMITS.filter(([k]) => need[k] != null && Number(vals[k] || c[k]) < need[k] - 1e-9) : []
+  async function save(){
+    const patch = Object.fromEntries(LIMITS.filter(([k]) => vals[k] !== "" && Number(vals[k]) !== Number(c[k])).map(([k]) => [k, Number(vals[k])]))
+    const lines = LIMITS.filter(([k]) => k in patch).map(([k, l]) => `${l}: ${c[k] ?? "—"}% ← ${patch[k]}%`).join("\n")
+    if(!confirm(`حدود المخاطرة على ${env === "demo" ? "الـ Demo" : "الحساب الحقيقي"}:\n${lines}`)) return
+    try{ await apiSetLimits(env, patch); setMsg("✅ اتحفظ"); reload() } catch(e: any){ setMsg(`⚠️ ${e.message}`) }
+  }
+  return (
+    <Card>
+      <CardHeader title={`حدود المخاطرة (${env === "demo" ? "Demo" : "حقيقي"})`} sub="% من رصيد الحساب على Binance · البوت بيراجعها قبل كل دخول" />
+      <div className="grid grid-cols-2 gap-3">
+        {LIMITS.map(([k, l, hint]) => (
+          <label key={k} className="min-w-0" title={hint}><span className={label}>{l} %</span>
+            <input type="number" min={0} max={100} step="0.01" inputMode="decimal" value={vals[k]} onChange={e => setVals(v => ({ ...v, [k]: e.target.value }))}
+              dir="ltr" className={`${field} font-mono`} aria-label={`${l} (%)`} />
+          </label>
+        ))}
+      </div>
+      {need && equity ? (
+        <p className="mt-3 text-[12px] text-muted">
+          بالمارجن ده ({`$${p!.margin}`}) على رصيد {usd(Math.round(equity))}: الصفقة محتاجة <b className="font-mono" dir="ltr">{need.risk_per_trade_pct.toFixed(2)}%</b>
+          {legs > 1 && <> · السلة ({legs}) <b className="font-mono" dir="ltr">{need.max_aggregate_risk_pct.toFixed(1)}%</b> · ناحية واحدة <b className="font-mono" dir="ltr">{need.max_correlated_risk_pct.toFixed(1)}%</b></>}
+        </p>
+      ) : <p className="mt-3 text-[12px] text-faint">حط راس المال والمارجن الأول علشان يتحسب المطلوب.</p>}
+      {short.map(([k, l]) => <Note key={k} tone="loss">{l} ({vals[k] || c[k]}%) أقل من المطلوب ({need![k].toFixed(2)}%): الدخول هيترفض.</Note>)}
+      {env === "live" && <p className="mt-2 text-[12px] text-faint">على الفلوس الحقيقية البوت بياخد الأقل بين الرقم ده وسقف root في allow-live.env على السيرفر — الموقع مايقدرش يغيّر السقف.</p>}
+      {bad && <Note tone="loss">كل رقم لازم يكون أكبر من 0 ولحد 100.</Note>}
+      <div className="mt-4 flex items-center gap-3">
+        <button onClick={save} disabled={!changed || bad} className={`${btn.primary} flex-1`}>احفظ الحدود</button>
+        {msg && <span className="text-[12px] text-muted">{msg}</span>}
+      </div>
+    </Card>
+  )
+}
+
 export const LABELS: Record<string, string> = {
   trend_daily: "ترند يومي", vol_breakout: "اختراق التقلب", rsi2_pullback: "RSI2 الارتداد", trend_breakout: "اختراق الترند",
   listing_short: "شورت العملات الجديدة", momentum_ls: "مومنتم لونج/شورت", ratio_trend: "ترند النسبة",
@@ -181,7 +242,10 @@ export function LiveStrategiesView({ env, onEnv, cfg, status, chosen, onToggle, 
           </div>
           {starved.map(r => <Note key={r.id} tone="loss">{LABELS[r.id] || r.id} بتفتح {OPENS_AT_ONCE[r.id]} صفقات مع بعض، فبنصيب {share} مش هتدخل خالص: ارفع راس المال أو شغّل استراتيجيات أقل.</Note>)}
         </Card>
-        <CapitalPanel env={env} cfg={cfg} reload={reload} />
+        <div className="space-y-5">
+          <CapitalPanel env={env} cfg={cfg} reload={reload} />
+          <LimitsPanel env={env} cfg={cfg} chosen={chosen} reload={reload} />
+        </div>
       </div>
 
       {env === "demo" && <DemoMeasurement labels={LABELS} />}

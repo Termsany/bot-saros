@@ -100,7 +100,8 @@ app = FastAPI(title="Raqm API", version="2.0.0", lifespan=lifespan,
               docs_url="/docs" if _docs else None, redoc_url=None, openapi_url="/openapi.json" if _docs else None)
 
 ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "https://bot-saros.vercel.app,http://localhost:3000").split(",") if o.strip()]
-app.add_middleware(CORSMiddleware, allow_origins=ALLOWED_ORIGINS, allow_methods=["GET", "POST"], allow_headers=["Authorization", "Content-Type"])
+# PATCH too: the admin page's PATCH calls (user settings, strategies) failed their browser preflight without it
+app.add_middleware(CORSMiddleware, allow_origins=ALLOWED_ORIGINS, allow_methods=["GET", "POST", "PATCH"], allow_headers=["Authorization", "Content-Type"])
 
 def llm_lab_allowed() -> bool:
     """Running LLM-written code is opt-in (ENABLE_LLM_LAB=true) and never on a server that can trade real money:
@@ -1151,6 +1152,19 @@ class CapitalReq(BaseModel):
     capital_min_margin_usdt: Optional[float] = Field(None, ge=5, le=1_000_000)
     capital_margin_override_usdt: Optional[float] = Field(None, ge=0, le=10_000_000)   # 0 = back to the rule
 
+LIMIT_KEYS = ("risk_per_trade_pct", "max_aggregate_risk_pct", "max_correlated_risk_pct", "max_daily_loss_pct", "max_drawdown_pct")
+
+class LimitsReq(BaseModel):
+    """An account's risk limits, in % of its equity. On real money the bot takes the lower of each and root's ceiling
+    (RAQM_CAP_*_PCT in /opt/raqm-live/allow-live.env), which nothing here can change."""
+    model_config = ConfigDict(extra="forbid")
+    env: str = Field(default="live", pattern=r"^(live|demo)$")
+    risk_per_trade_pct: Optional[float] = Field(None, gt=0, le=100)
+    max_aggregate_risk_pct: Optional[float] = Field(None, gt=0, le=100)
+    max_correlated_risk_pct: Optional[float] = Field(None, gt=0, le=100)
+    max_daily_loss_pct: Optional[float] = Field(None, gt=0, le=100)
+    max_drawdown_pct: Optional[float] = Field(None, gt=0, le=100)
+
 def _ledger(env: str) -> Path:
     return (Path(os.getenv("RAQM_RISK_DIR_DEMO", "/opt/raqm-risk-demo")) / "risk_state.json") if env == "demo" else _risk_path()
 
@@ -1235,7 +1249,7 @@ async def live_strategies(env: str = "live", user: dict = Depends(require_admin)
         capital = {"plan": plan, "limits_check": risk_manager.plan_vs_limits(lim, plan), "equity_last": ledger.get("equity_last"),
                    "open_trades": len(ledger.get("open_risk") or {}),
                    **{k: lim.get(k) for k in ("capital_usdt", "capital_reserve_pct", "capital_margin_pct", "capital_min_margin_usdt",
-                                              "capital_margin_override_usdt", "risk_per_trade_pct", "max_aggregate_risk_pct")}}
+                                              "capital_margin_override_usdt") + LIMIT_KEYS}}
     except Exception as e:
         capital = {"error": str(e)}
     return {"env": env, "enabled": live_trading_allowed() if env == "live" else True, "capital": capital,
@@ -1253,6 +1267,22 @@ async def live_capital(req: CapitalReq, user: dict = Depends(require_admin)):
     admin_control.audit(BOT_DIR, str(user.get("email") or user.get("id")), "capital_plan", "ok", {"env": req.env, **patch})
     plan = risk_manager.capital_plan(limits, risk_manager.load_risk_state(_ledger(req.env)).get("equity_last"))
     return {"ok": True, "plan": plan, "limits_check": risk_manager.plan_vs_limits(limits, plan)}
+
+
+@app.post("/api/live/limits")
+async def live_limits(req: LimitsReq, user: dict = Depends(require_admin)):
+    """An account's risk limits from the dashboard (the risk tab only showed them). Per trade can't be above the
+    aggregate: one trade alone would then be refused by the aggregate check anyway."""
+    rate_limit(user["id"], "admin_mutation", 30, 60)
+    patch = {k: v for k, v in req.model_dump().items() if k != "env" and v is not None}
+    if not patch: raise HTTPException(400, "nothing to change")
+    current = risk_manager.load_risk_state(_ledger(req.env))["limits"]
+    merged = {**current, **patch}
+    if float(merged["risk_per_trade_pct"]) > float(merged["max_aggregate_risk_pct"]):
+        raise HTTPException(400, "risk per trade is above the aggregate limit")
+    limits = risk_manager.update_limits(_ledger(req.env), patch)
+    admin_control.audit(BOT_DIR, str(user.get("email") or user.get("id")), "risk_limits", "ok", {"env": req.env, **patch})
+    return {"ok": True, "env": req.env, "limits": {k: limits.get(k) for k in LIMIT_KEYS}}
 
 
 @app.post("/api/live/strategies")
