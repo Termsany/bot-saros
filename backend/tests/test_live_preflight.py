@@ -18,9 +18,12 @@ CAPS = ("RAQM_CAP_RISK_PER_TRADE_PCT=2\nRAQM_CAP_AGGREGATE_RISK_PCT=20\nRAQM_CAP
 
 
 class Futures:
-    def __init__(self, hedged=False, usdt=1500.0): self.hedged, self.usdt = hedged, usdt
+    def __init__(self, hedged=False, usdt=1500.0, positions=()):
+        self.hedged, self.usdt = hedged, usdt
+        self.positions = [{"symbol": s, "contracts": q, "side": "long"} for s, q in positions]
     def fetch_position_mode(self): return {"hedged": self.hedged}
     def fetch_balance(self): return {"USDT": {"total": self.usdt}}
+    def fetch_positions(self, symbols=None): return list(self.positions)
 
 
 class Spot:
@@ -106,6 +109,21 @@ class PreflightTests(unittest.TestCase):
         self.set_up_server()
         self.assertIn("key: withdrawals OFF", self.failed(lp.run(self.paths, "momentum_ls", clients=(Futures(), Spot(enableWithdrawals=True)))))
         self.assertIn("key: restricted to this server's IP", self.failed(lp.run(self.paths, "momentum_ls", clients=(Futures(), Spot(ipRestrict=False)))))
+
+    def test_positions_the_bot_did_not_open_fail(self):
+        # the owner's main account, as found on 2026-11-03: the bot would block every entry next to them
+        self.set_up_server()
+        ex = Futures(positions=[("MMT/USDT:USDT", 120.0), ("ICP/USDT:USDT", 3.0), ("EMPTY/USDT:USDT", 0)])
+        rows = lp.run(self.paths, "momentum_ls", clients=(ex, Spot()))
+        self.assertIn("no positions the bot didn't open", self.failed(rows))
+        why = dict((n, w) for n, _, w in rows)["no positions the bot didn't open"]
+        self.assertIn("ICP/USDT", why); self.assertIn("MMT/USDT", why); self.assertNotIn("EMPTY", why)
+
+    def test_the_bots_own_positions_are_not_foreign(self):
+        self.set_up_server()
+        rm.register_open_risk(self.paths["ledger"], strategy="momentum_ls", symbol="AIN/USDT:USDT", side="long", risk_usdt=20.8, notional_usdt=52)
+        rows = lp.run(self.paths, "momentum_ls", clients=(Futures(positions=[("AIN/USDT:USDT", 302.0)]), Spot()))
+        self.assertNotIn("no positions the bot didn't open", self.failed(rows))
 
     def test_hedge_mode_account_fails(self):
         self.set_up_server()

@@ -174,6 +174,16 @@ def check_binance(keys, strategy, caps, ledger_state, args_line, clients=None):
         rows.append(("USDT on the futures account", equity > 0, f"${equity:,.2f}"))
     except Exception as e:
         rows.append(("futures balance readable", False, f"{type(e).__name__}: {str(e)[:160]}")); equity = 0.0
+    # the account is the bot's alone: next to a position it didn't open it blocks every entry, and on a one-way account
+    # its own trade on that coin would merge with it (2026-11-03: the key was the owner's main account, 5 positions)
+    try:
+        own = {str(r.get("symbol") or "").split(":")[0] for r in ((ledger_state or {}).get("open_risk") or {}).values()}
+        foreign = sorted(str(p.get("symbol")).split(":")[0] for p in fut.fetch_positions()
+                         if float(p.get("contracts") or 0) and str(p.get("symbol")).split(":")[0] not in own)
+        rows.append(("no positions the bot didn't open", not foreign,
+                     "none" if not foreign else f"{len(foreign)} on the account: {', '.join(foreign[:8])} — use a sub-account for the bot alone"))
+    except Exception as e:
+        rows.append(("account positions readable", False, f"{type(e).__name__}: {str(e)[:160]}"))
     if caps and equity > 0:
         # sized as the bot sizes it: the dashboard's capital plan under root's ceilings, else the unit's --amount
         limits = {**riskmgr.DEFAULT_LIMITS, **((ledger_state or {}).get("limits") or {})}
