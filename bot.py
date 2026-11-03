@@ -497,7 +497,31 @@ def write_listing_status(state, prices, upcoming):
         tmp.write_text(json.dumps(data, ensure_ascii=False, default=str), encoding="utf-8"); tmp.replace(d / "listing.json")
     except Exception as e: log(f"public listing status: {e}")
 
-MOM = {"weeks": 2, "top": 50, "n": 5, "min_days": 60, "stop": 0.40, "every_days": 7}
+# weekday 0 = Monday (owner, 2026-11-03): the rebalance follows Binance's weekly candle. The weekday is arbitrary in the
+# backtest too (every 7 days from the data's start) and the results swing with it (PF 1.08–1.22 over the 7 days,
+# Monday 1.15): Monday is a fixed, readable anchor, not a fitted one.
+MOM = {"weeks": 2, "top": 50, "n": 5, "min_days": 60, "stop": 0.40, "every_days": 7, "weekday": 0}
+
+
+def momentum_due(last_iso, today, every_days=MOM["every_days"], weekday=MOM["weekday"]):
+    """The basket is rebuilt at the first cycle after 00:00 UTC on `weekday`; never twice on one day; and if that day
+    was missed (the bot down all day), as soon as `every_days` have passed. No rebalance yet: now. `today` is 00:00 UTC."""
+    if not last_iso:
+        return True
+    last = datetime.fromisoformat(last_iso)
+    if today - last >= pd.Timedelta(days=every_days):
+        return True
+    return weekday is not None and today.weekday() == weekday and last < today
+
+
+def momentum_next(last_iso, every_days=MOM["every_days"], weekday=MOM["weekday"]):
+    """The next rebalance's day (00:00 UTC) after the one recorded: the next `weekday`, within `every_days`."""
+    if not last_iso:
+        return None
+    last = datetime.fromisoformat(last_iso)
+    if weekday is None:
+        return last + pd.Timedelta(days=every_days)
+    return last + pd.Timedelta(days=(weekday - last.weekday()) % 7 or 7)
 
 def momentum_mode():
     """Paper cross-sectional momentum on Binance: every 7 days rank the top 50 USDT perpetuals by 30-day volume on
@@ -557,10 +581,10 @@ def run_once_momentum(ex):
                 pnl = _paper_close(ex, state, sym, price, f"وقف {pos['sl']:.6g}"); save_state(state)
                 log(f"🔒 وقف {pos['side']} {sym} @ {price:.6g} PnL {pnl:+.4f}")
         except Exception as e: log(f"مومنتم {sym}: {e}")
-    # weekly rebalance, at the first cycle after the daily close (00:00 UTC) once 7 days have passed
+    # weekly rebalance, at the first cycle after the daily close (00:00 UTC) on Monday (momentum_due)
     today = now.replace(hour=0, minute=0, second=0, microsecond=0)
     last = state.get("mom_last")
-    if last is None or today - datetime.fromisoformat(last) >= pd.Timedelta(days=M["every_days"]):
+    if momentum_due(last, today, M["every_days"], M.get("weekday")):
         ranked = momentum_rank(ex)
         if len(ranked) >= 20:
             closed = 0.0
@@ -623,7 +647,7 @@ def write_momentum_status(state, prices):
     st = state.get("stats", {}); last = state.get("mom_last")
     data = {"updated": datetime.now(timezone.utc).isoformat(), "mode": "paper" if CONFIG["paper_trading"] else "live", "rules": MOM,
             "leverage": int(CONFIG.get("leverage", 2)), "margin": CONFIG.get("trade_amount_usdt"), "started": CONFIG.get("started_at"),
-            "last_rebalance": last, "next_rebalance": (datetime.fromisoformat(last) + pd.Timedelta(days=MOM["every_days"])).isoformat() if last else None,
+            "last_rebalance": last, "next_rebalance": momentum_next(last).isoformat() if last else None,
             "stats": {"closed": st.get("trades", 0), "wins": st.get("wins", 0), "losses": st.get("losses", 0),
                       "realized": round(float(st.get("pnl", 0)), 4), "unrealized": round(sum(x["pnl"] for x in pos), 4), "open": len(pos)},
             "positions": sorted(pos, key=lambda x: (x["side"], -x["ret"])),
@@ -4001,7 +4025,7 @@ def run_loop():
         notify(f"▶️ ⚠️ HIGH RISK — بوت ratio trend اشتغل ({mode})\nكل الأزواج بين أعلى {R['top']} عملة فوليوم · تجربة لمتابعة الأداء بس")
     elif momentum_mode():
         M=MOM
-        log(f"=== مومنتم: لونج أقوى {M['n']} وشورت أضعف {M['n']} من أعلى {M['top']} فوليوم (عائد {M['weeks']} أسبوع) — {mode} — تبديل كل {M['every_days']} أيام، وقف {M['stop']:.0%} | هامش {CONFIG['trade_amount_usdt']} USDT x{CONFIG.get('leverage',2)} ===")
+        log(f"=== مومنتم: لونج أقوى {M['n']} وشورت أضعف {M['n']} من أعلى {M['top']} فوليوم (عائد {M['weeks']} أسبوع) — {mode} — تبديل كل اتنين 00:00 UTC، وقف {M['stop']:.0%} | هامش {CONFIG['trade_amount_usdt']} USDT x{CONFIG.get('leverage',2)} ===")
         notify(f"▶️ بوت المومنتم اشتغل ({mode})\nكل أسبوع: لونج أقوى {M['n']} وشورت أضعف {M['n']} من أعلى {M['top']} عملة فوليوم")
     elif listing_mode():
         L=LISTING
