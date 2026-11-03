@@ -128,14 +128,20 @@ def check_ledger(paths):
             ("kill switch clear", not ks.get("tripped"), ks.get("reason") or "clear")], st
 
 
-def basket_fits(strategy, margin, leverage, equity, caps):
-    """(ok, why): the strategy's whole basket, every leg at its stop, inside the per-trade and aggregate ceilings."""
+def basket_fits(strategy, margin, leverage, equity, limits, caps):
+    """(ok, why): the strategy's whole basket, every leg at its stop, inside the limits the gate applies — the lower of
+    the dashboard's and root's ceiling. Half the legs share a side (momentum_ls: 5 longs, 5 shorts) and a correlation
+    group (the picks are alts), so that half counts against the correlated limit."""
     legs = BASKET.get(strategy, 1)
     leg_pct = margin * leverage * STOP_DISTANCE / equity * 100.0
-    total = leg_pct * legs
+    total, side = leg_pct * legs, leg_pct * -(-legs // 2)
     why = f"{legs} leg(s) × {leg_pct:.2f}% = {total:.2f}% at margin ${margin:g} x{leverage} on ${equity:,.0f}"
-    if leg_pct > caps["risk_per_trade_pct"] + 1e-9: return False, why + f" — one leg is above the {caps['risk_per_trade_pct']:g}% per-trade ceiling"
-    if total > caps["max_aggregate_risk_pct"] + 1e-9: return False, why + f" — the basket is above the {caps['max_aggregate_risk_pct']:g}% aggregate ceiling"
+    for value, key, what in ((leg_pct, "risk_per_trade_pct", "one leg"), (total, "max_aggregate_risk_pct", "the basket"),
+                             (side, "max_correlated_risk_pct", "one side of the basket")):
+        limit = float(limits[key])
+        if value > limit + 1e-9:
+            by = "root's ceiling" if limit >= float(caps[key]) else "the dashboard's limit (الإدارة ← المخاطر)"
+            return False, why + f" — {what} ({value:.2f}%) is above {key} {limit:g}%, set by {by}"
     return True, why
 
 
@@ -174,7 +180,7 @@ def check_binance(keys, strategy, caps, ledger_state, args_line, clients=None):
             limits[k] = min(float(limits.get(k) if limits.get(k) is not None else c), c)
         plan = riskmgr.capital_plan(limits, equity) if ledger_state else None
         margin = float(plan["margin"]) if plan else _arg(args_line, "--amount", 100.0)
-        rows.append((f"{strategy} basket fits the ceilings", *basket_fits(strategy, margin, int(_arg(args_line, "--leverage", 2)), equity, caps)))
+        rows.append((f"{strategy} basket fits the risk limits", *basket_fits(strategy, margin, int(_arg(args_line, "--leverage", 2)), equity, limits, caps)))
     return rows
 
 
