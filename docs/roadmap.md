@@ -16,7 +16,7 @@ Owner = only the owner can do it (keys, Binance, money, names). Claude = code, s
 | A3 | Revoke the old main-account API key on Binance | Owner | key gone from Binance's API list |
 | A4 | Put real reviewer names in `readiness_evidence.json` | Owner | evidence names people, digest re-made |
 | A5 | Test that a live-bot problem reaches Telegram (one harmless forced alert) | Claude | message received and cleared |
-| A6 | Demo/real can't be mixed up on the dashboard: the strategy switches say which account they change and ask to confirm (today's pause came from that) | Claude | PR merged |
+| A6 | ~~Demo/real can't be mixed up on the dashboard~~: the card says which account it changes (red = real, blue = Demo), the confirm lists what starts **and what stops**, the 15 s refresh no longer wipes unsaved switches, a late answer for the other tab is dropped | Claude | ✓ PR merged |
 | A7 | **Watch the first real rebalance** (Mon 00:00 UTC = 02:00 Cairo): old legs closed with fills/fees/funding, no old stop left, 10 new legs with stops, no recovery | Claude + owner | checklist in the plan §1 all ticked |
 
 ## B. Make it solid — 2026-11-09 → 2026-11-23 (rebalances 2 and 3)
