@@ -9,6 +9,7 @@ import { RefreshCw } from "lucide-react"
 import { StrategyCards } from "@/components/StrategyCards"
 import { LiveBots } from "@/components/LiveBots"
 import { MyAccount } from "@/components/MyAccount"
+import { RealMoney } from "@/components/RealMoney"
 import { PAIRS, NAMES } from "@/lib/pairs"
 import { LIVE_BOTS, STRATEGIES } from "@/lib/strategies"
 import { apiIsAdmin, apiKlines } from "@/lib/api"
@@ -155,12 +156,21 @@ export default function Dashboard(){
         <PageHeader title="لوحة التحكم"
           subtitle={`${loaded ? `${total.running} من ${LIVE_BOTS.length} بوتات شغالة دلوقتي على السيرفر` : "بيحمّل البوتات…"} · الشارت: ${NAMES[symbol]||symbol} على فريم ${tf}`}
           status={<>
-            <Pill tone="signal">PAPER · فلوس وهمية</Pill>
+            <Pill tone="loss">LIVE + PAPER</Pill>
             <Pill tone={candles.length ? "profit" : "neutral"}><Dot tone={candles.length ? "profit" : "neutral"} pulse={!!candles.length}/>{lastUpdated ? `متصل · آخر تحديث ${lastUpdated.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}` : "بيتصل…"}</Pill>
             <span className="grid h-9 w-9 place-items-center rounded-full border border-umbra/60 bg-umbra/20 text-sm font-bold">{initial || "؟"}</span>
           </>}/>
 
-        {/* KPIs — the four bots together */}
+        {/* the real-money bots first; everything below is the paper bots */}
+        <RealMoney/>
+
+        <div className="flex flex-wrap items-baseline gap-2 pt-1">
+          <h2 className="text-[17px] font-bold">بوتات التجربة</h2>
+          <Pill tone="signal">PAPER · فلوس وهمية</Pill>
+          <span className="text-[12px] text-faint">بيشتغلوا على السيرفر بفلوس وهمية — منفصلين عن البوت الحقيقي</span>
+        </div>
+
+        {/* KPIs — the paper bots together */}
         <section className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
           <Kpi label="الربح المحقق" value={signed(total.realized)} chip={`${total.wins}W · ${total.losses}L`} tone={total.realized>=0?"profit":"loss"} sub={`USDT · الـ ${LIVE_BOTS.length} بوتات (Paper)`}/>
           <Kpi label="ربح الصفقات المفتوحة" value={signed(total.unrealized)} tone={total.unrealized>=0?"profit":"loss"} sub="USDT · بسعر آخر دورة"/>
@@ -225,7 +235,7 @@ export default function Dashboard(){
           </Card>
 
           <Card className="flex flex-col">
-            <CardHeader title="البوتات" action={<Pill tone={total.running ? "profit" : "neutral"}>{total.running} شغالة</Pill>}/>
+            <CardHeader title="البوتات (Paper)" action={<Pill tone={total.running ? "profit" : "neutral"}>{total.running} شغالة</Pill>}/>
             <div className="flex-1 space-y-1.5">
               {!loaded && <div className="rounded-xl bg-surface2/50 px-3 py-6 text-center text-xs text-faint">بيحمّل البوتات…</div>}
               {[...bots].sort((a, b) => Number(b.fresh && b.ok) - Number(a.fresh && a.ok) || b.open - a.open).map(b => {
@@ -246,7 +256,7 @@ export default function Dashboard(){
             </div>
             {nextRebalance && (
               <div className="mt-3 rounded-xl border border-corona/35 bg-corona/[0.08] px-3.5 py-3">
-                <div className="text-[12px] font-semibold text-corona">التبديل الأسبوعي الجاي (المومنتم)</div>
+                <div className="text-[12px] font-semibold text-corona">التبديل الأسبوعي الجاي (مومنتم Paper)</div>
                 <div className="text-[14px] font-semibold">{nextRebalance}</div>
               </div>
             )}
