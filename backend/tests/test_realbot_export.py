@@ -42,7 +42,7 @@ class RealbotExportTests(unittest.TestCase):
     def test_only_the_pages_fields_leave_the_server(self):
         self.put("momentum_ls", status())
         bot = rx.build(self.ipc, NOW)["bots"][0]
-        self.assertEqual(set(bot), {"strategy", "updated", "running", "leverage", "positions", "history"})
+        self.assertEqual(set(bot), {"strategy", "updated", "running", "leverage", "positions", "history", "next_rebalance"})
         self.assertEqual(set(bot["positions"][0]), set(rx.POSITION_FIELDS))
         self.assertNotIn("by", bot["history"][0]); self.assertNotIn("rank", bot["history"][0])
         text = json.dumps(bot)
@@ -76,6 +76,23 @@ class RealbotExportTests(unittest.TestCase):
         self.assertEqual([p.name for p in out.parent.iterdir()], ["live.json"])   # no temp file left
         if os.name != "nt":
             self.assertEqual(oct(out.stat().st_mode & 0o777), "0o644")
+
+    def test_next_rebalance_comes_from_the_bots_state_and_matches_the_bot(self):
+        state = Path(self.td.name) / "state"; state.mkdir()
+        (state / "live-momentum_ls.json").write_text(json.dumps({"mom_last": "2026-11-03T00:00:00+00:00", "positions": {}}), encoding="utf-8")
+        self.put("momentum_ls", status()); self.put("trend_daily", dict(status(), strategy="trend_daily"))
+        bots = {b["strategy"]: b for b in rx.build(self.ipc, NOW, state)["bots"]}
+        self.assertEqual(bots["momentum_ls"]["next_rebalance"], "2026-11-09T00:00:00+00:00")   # the Monday after Tuesday
+        self.assertIsNone(bots["trend_daily"]["next_rebalance"])                               # not a weekly basket
+        sys.path.insert(0, str(ROOT)); import bot as botmod
+        self.assertEqual(rx.REBALANCE_WEEKDAY, botmod.MOM["weekday"])
+        for last in ("2026-11-03", "2026-11-09", "2026-11-15", "2026-11-17"):
+            iso = f"{last}T00:00:00+00:00"
+            self.assertEqual(rx.next_rebalance(iso), botmod.momentum_next(iso).isoformat(), last)
+
+    def test_no_state_means_no_next_rebalance(self):
+        self.put("momentum_ls", status())
+        self.assertIsNone(rx.build(self.ipc, NOW, Path(self.td.name) / "missing")["bots"][0]["next_rebalance"])
 
     def test_setup_installs_the_page_and_the_exporter(self):
         s = (ROOT / "deploy" / "vps" / "setup-live.sh").read_text(encoding="utf-8")

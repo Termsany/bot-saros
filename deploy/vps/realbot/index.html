@@ -102,7 +102,13 @@ const tone = v => v > 0 ? "profit" : v < 0 ? "loss" : ""
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"})[c])
 const ago = iso => { if(!iso) return "—"; const s = Math.max(0, (Date.now() - new Date(iso)) / 1000); return s < 90 ? `من ${Math.round(s)} ثانية` : s < 5400 ? `من ${Math.round(s / 60)} دقيقة` : `من ${Math.round(s / 3600)} ساعة` }
 const day = iso => iso ? new Date(iso).toLocaleString("en-GB", {day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "UTC"}) + " UTC" : "—"
-const sideTag = s => s === "long" ? `<span class="tag profit">LONG</span>` : `<span class="tag loss">SHORT</span>`
+// "الاثنين 9 نوفمبر · 00:00 UTC (02:00 بتوقيت مصر)"
+const nextDay = iso => { const d = new Date(iso)
+  const date = d.toLocaleDateString("ar-EG", {weekday: "long", day: "numeric", month: "long", timeZone: "UTC", numberingSystem: "latn"})
+  const utc = d.toLocaleTimeString("en-GB", {hour: "2-digit", minute: "2-digit", timeZone: "UTC"})
+  const cairo = d.toLocaleTimeString("en-GB", {hour: "2-digit", minute: "2-digit", timeZone: "Africa/Cairo"})
+  return `${date} · ${utc} UTC (${cairo} بتوقيت مصر)` }
+const sideTag = s =>s === "long" ? `<span class="tag profit">LONG</span>` : `<span class="tag loss">SHORT</span>`
 const NAMES = {trend_daily: "ترند يومي", vol_breakout: "اختراق التقلب", rsi2_pullback: "RSI2 الارتداد", trend_breakout: "اختراق الترند",
                listing_short: "شورت العملات الجديدة", momentum_ls: "مومنتم لونج/شورت (أسبوعي)", ratio_trend: "ترند النسبة"}
 const id = sym => String(sym).split(":")[0].replace("/", "")
@@ -138,6 +144,7 @@ function render(){
         <td>${esc(h.reason || "")}</td><td class="mono">${day(h.time)}</td></tr>`).join("")
     return `<section>
       <div class="head"><h2>${esc(NAMES[b.strategy] || b.strategy)}</h2><span class="count">${b.positions.length} مفتوحة · رافعة x${lev} · ${b.running ? "البوت شغال" : "البوت مش بيكتب حالته"}</span></div>
+      ${b.next_rebalance ? `<div class="chips" style="margin:-4px 0 10px"><span class="chip">التبديل الجاي: <b>${nextDay(b.next_rebalance)}</b></span></div>` : ""}
       <div class="table"><table><thead><tr><th>العملة</th><th>الجهة</th><th>الدخول</th><th>السعر الحالي</th><th>الوقف على Binance</th><th>الهامش</th><th>الربح $</th><th>على الهامش</th><th>لو الوقف اتضرب</th><th>من</th></tr></thead>
       <tbody>${rows || `<tr><td colspan="10" class="empty">مفيش صفقات مفتوحة دلوقتي</td></tr>`}</tbody></table></div>
     </section>
