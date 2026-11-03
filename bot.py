@@ -3229,72 +3229,6 @@ def _guard_stops(ex, state, prices, label):
                     _single_leg_live_exit(ex, state, sym, price, reason)
         except Exception as e: log(f"{label} {sym}: {e}")
 
-# ── trend-template breakout: what was left of Minervini / Darvas after research/vcp_deep.py (the contraction and the
-#    breakout-volume conditions only hurt). Paper experiment — it added profit but not risk-adjusted return. ──
-TB = {"top": 100, "L": 20, "exit_ma": 20, "stop": 0.40, "slip": 0.0005}
-
-def tbreak_mode():
-    """Paper trend-template breakout: at each daily close, among the top 100 by 30-day volume in a stage-2 uptrend
-    (close > 50 > 150 > 200-day averages), buy when the close breaks the previous 20 days' high; sell after a close
-    below the 20-day average; stop 40%."""
-    return "trend_breakout" in (CONFIG.get("enabled_strategies") or [])
-
-def run_once_tbreak(ex):
-    T = TB; state = load_state(); now = datetime.now(timezone.utc); day = _utc_day(now); prices = {}
-    if not CONFIG["paper_trading"]:
-        # a block (recovery, kill switch, unknown position) stops entries only — the live adapters refuse them. The
-        # strategy's own exits still run: returning here left open positions without their signal exits
-        reconcile_live(state, ex)
-        if _ENTRY_BLOCK.get("reason"): log(f"⛔ دخول جديد متوقف، الخروج شغّال — {_ENTRY_BLOCK['reason']}")
-    process_paper_closes(state, ex, "tbreak")
-    if not CONFIG["paper_trading"]:
-        process_manual_closes(state, ex, prices); _retry_due_exits(ex, state, "اختراق الترند")
-    _guard_stops(ex, state, prices, "اختراق الترند")
-    if state.get("tb_day") != day.isoformat():
-        universe = volume_universe(ex, T["top"]); watch = []; opened = []
-        sma = lambda xs, n: sum(xs[-n:]) / n
-        for sym in sorted(set(universe) | set(state["positions"])):
-            try:
-                k = ex.fetch_ohlcv(sym, "1d", limit=215)[:-1]          # closed candles only
-                c = [r[4] for r in k]; h = [r[2] for r in k]
-                if len(c) < T["exit_ma"] + 1: continue
-                if sym in state["positions"]:
-                    if c[-1] < sma(c, T["exit_ma"]):
-                        price = float(ex.fetch_ticker(sym)["last"]); prices[sym] = price
-                        if CONFIG.get("paper_trading"):
-                            pnl = _paper_close(ex, state, sym, price, f"قفل تحت متوسط {T['exit_ma']} يوم")
-                            log(f"📉 اختراق الترند: قفل {sym} @ {price:.6g} PnL {pnl:+.4f}")
-                        else:
-                            _single_leg_live_exit(ex, state, sym, price, f"قفل تحت متوسط {T['exit_ma']} يوم")
-                        if sym in state["positions"]:
-                            continue
-                        log(f"📉 اختراق الترند: قفل {sym} @ {price:.6g}" if not CONFIG.get("paper_trading") else "")
-                    continue
-                if sym not in universe or len(c) < 201: continue
-                m50, m150, m200 = sma(c, 50), sma(c, 150), sma(c, 200); hi = max(h[-T["L"] - 1:-1])
-                if not (c[-1] > m50 > m150 > m200): continue
-                watch.append({"symbol": sym.split(":")[0], "close": c[-1], "high": hi, "gap_pct": round((hi / c[-1] - 1) * 100, 1)})
-                if c[-1] > hi:
-                    price = float(ex.fetch_ticker(sym)["last"]) * (1 + T["slip"]); prices[sym] = price
-                    if CONFIG.get("paper_trading"):
-                        _paper_open(state, sym, price, now, {"sl": price * (1 - T["stop"]), "breakout": hi})
-                    elif not _single_leg_live_entry(ex, state, sym, "long", position_size(price, ex),
-                            price, price * (1 - T["stop"]), None, "trend_breakout", {"breakout": hi}):
-                        continue
-                    opened.append(f"{sym.split('/')[0]} {price:.6g}")
-                    log(f"✅ 🟢 اختراق الترند {sym} @ {price:.6g} (قفل {c[-1]:.6g} فوق أعلى {T['L']} يوم {hi:.6g})")
-            except Exception as e: log(f"اختراق الترند {sym}: {e}")
-        if opened:
-            notify(f"🟢 اختراق الترند (Paper) — {len(opened)} صفقة جديدة\n" + "\n".join(opened) +
-                   f"\nخروج: قفل يومي تحت متوسط {T['exit_ma']} يوم · وقف 40%")
-        state.update(tb_day=day.isoformat(), tb_watch=sorted(watch, key=lambda w: w["gap_pct"])[:15]); save_state(state)
-    for sym in state["positions"]:
-        if sym not in prices:
-            try: prices[sym] = float(ex.fetch_ticker(sym)["last"])
-            except Exception: pass
-    write_simple_status("tbreak", state, prices, T, {"day": state.get("tb_day"), "watch": state.get("tb_watch", [])})
-    log(f"📊 اختراق الترند: {len(state['positions'])} مفتوحة | PnL محقق {state['stats']['pnl']:+.4f}")
-
 def write_simple_status(name, state, prices, rules, extra):
     """Public <name>.json for a long-only paper bot, in the shape the site reads for momentum.json. Live, it also writes
     the admin page's live status (RAQM_IPC_DIR), so the site's live close button reaches this bot."""
@@ -3505,6 +3439,7 @@ from bots.ratio_trend import RATIO, ratio_mode, _daily_closed, _ratio_rank, rati
 from bots.listing_short import LISTING, listing_mode, _listing_close, run_once_listing, write_listing_status
 from bots.vol_breakout import VB, breakout_mode, run_once_breakout
 from bots.rsi2_pullback import RSI2, rsi2_mode, rsi_wilder, run_once_rsi2
+from bots.trend_breakout import TB, tbreak_mode, run_once_tbreak
 
 if __name__=="__main__":
     import argparse
