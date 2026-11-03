@@ -14,6 +14,8 @@ L=/opt/raqm-live; B=/opt/raqm-bot; SRC=/root/raqm-src
 [ -d "$SRC/.git" ] || git clone -q https://github.com/Termsany/bot-saros.git "$SRC"
 git -C "$SRC" fetch -q origin
 git -C "$SRC" cat-file -e "$SHA^{commit}" || { echo "commit $SHA not found on GitHub" >&2; exit 2; }
+# reviewed means merged: a commit only on another branch is refused, as api/update.sh --manual refuses it
+git -C "$SRC" merge-base --is-ancestor "$SHA" origin/main || { echo "commit $SHA is not on main" >&2; exit 2; }
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 git -C "$SRC" archive "$SHA" | tar -x -C "$T"
 id raqmlive >/dev/null 2>&1 || useradd --system --home-dir "$L" --no-create-home --shell /usr/sbin/nologin raqmlive

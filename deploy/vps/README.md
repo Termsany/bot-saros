@@ -78,8 +78,13 @@ it holds it until it closes (shared risk ledger), and each bot leaves the others
 
 1. The real account's keys, **without withdrawal permission**: `/opt/raqm-live/.env.real` (`BINANCE_API_KEY=`,
    `BINANCE_SECRET=`), owner `raqmlive`, chmod 600.
-2. `/opt/raqm-live/allow-live.env`, owner root, chmod 600: `ALLOW_LIVE_TRADING=true` and
-   `BINANCE_LIVE_ACCOUNT=<a name>`. Set `ALLOW_LIVE_TRADING=true` in `/opt/raqm-api/.env` too (the dashboard's yes/no
+2. `/opt/raqm-live/allow-live.env`, owner root, chmod 600: `ALLOW_LIVE_TRADING=true`,
+   `BINANCE_LIVE_ACCOUNT=<a name>` and the ceilings on the dashboard's risk limits, in % of equity — the bot refuses
+   to start without all five, and uses the lower of each ceiling and the dashboard's value (the dashboard's limits are
+   written by the API, so they alone can't be trusted with real money):
+   `RAQM_CAP_RISK_PER_TRADE_PCT=`, `RAQM_CAP_AGGREGATE_RISK_PCT=`, `RAQM_CAP_CORRELATED_RISK_PCT=`,
+   `RAQM_CAP_DAILY_LOSS_PCT=`, `RAQM_CAP_DRAWDOWN_PCT=`. One momentum_ls stop costs about 0.8 × margin and a basket
+   is 10 legs, so its risk per trade must allow 0.8 × margin and its aggregate 8 × margin. Set `ALLOW_LIVE_TRADING=true` in `/opt/raqm-api/.env` too (the dashboard's yes/no
    needs it) and restart the API.
 3. Install the real-money template — this also freezes the API's automatic updates (`api/update.sh`):
    `install -m 644 /root/raqm-src/deploy/vps/raqm-live@.service /etc/systemd/system/ && systemctl daemon-reload`
