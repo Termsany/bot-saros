@@ -46,7 +46,7 @@ The rule from the roadmap holds everywhere: the real bot is touched last, Demo f
 
 | # | Stage | Kind | Effort | Notes |
 |---|---|---|---|---|
-| 4.1 | 2–3 testers on **their own Demo keys**: allow list, provisioner, per-user ledger and kill switch | ⏸️ | M | the owner gives their user IDs; nothing of theirs touches the owner's bots |
+| 4.1 | 2–3 testers on **their own Demo keys**: allow list, provisioner, per-user ledger and kill switch — 2026-11-04: the owner's gift invitation approves the account (or the admin page's button); a tester's key equal to one of the owner's bots' keys is refused | 🟡 | M | the owner invites the testers; nothing of theirs touches the owner's bots |
 | 4.2 | Key setup in the site: Ed25519 made for the user (Binance's Demo hides HMAC secrets), checked before saving | ⏸️ | M | needed before more than a handful of users |
 | 4.3 | Per-user alerts and status page | ⏸️ | S | |
 | 4.4 | Open Demo to all paying users | ⏸️ | S | after 4.1 ran clean for two weeks |

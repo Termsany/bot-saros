@@ -24,6 +24,7 @@ from app import risk_manager
 from app import live_bots_feed
 from app import admin_users
 from app import plans_invites as pi
+from app import user_approvals
 
 try:
     from dotenv import load_dotenv; load_dotenv()
@@ -1844,6 +1845,13 @@ async def invite_accept(invite_id: str, user: dict = Depends(require_user)):
         await sess.commit()
     _tier_cache.pop(user["id"], None)
     admin_control.audit(BOT_DIR, inv.email, "invite_accept", "ok", {"invite": inv.id[:6], "tier": tier, "until": pi.iso(end)})
+    # the owner's invitation is the owner's approval for the account's own Demo bots (plan 4.1): the provisioner still
+    # checks consent, keys, Demo only and the cap itself. A failure here leaves the plan granted and is shown in the admin.
+    try:
+        user_approvals.set_approved(user["id"], True)
+        admin_control.audit(BOT_DIR, inv.email, "demo_bots_approve", "ok", {"user": user["id"][:8], "by": "invite " + inv.id[:6]})
+    except Exception as e:
+        admin_control.audit(BOT_DIR, inv.email, "demo_bots_approve", "failed", {"user": user["id"][:8], "error": type(e).__name__})
     return {"ok": True, "kind": "gift", "tier": tier, "expires_at": pi.iso(end)}
 
 @app.post("/api/invites/{invite_id}/checkout")
@@ -2080,7 +2088,9 @@ async def user_bots_close_result(strategy: str, rid: str, user: dict = Depends(r
 
 @app.get("/api/admin/user-bots")
 async def admin_user_bots(user: dict = Depends(require_admin)):
-    """Every user who asked for bots: what they asked, the provisioner's answer, their bots' positions and problems."""
+    """Every user who asked for bots or is approved: what they asked, whether the owner approved them, the
+    provisioner's answer, their bots' positions and problems."""
+    approved = user_approvals.read()
     out = []
     try:
         files = sorted(user_bots.DESIRED.glob("*.json"))
@@ -2095,8 +2105,26 @@ async def admin_user_bots(user: dict = Depends(require_admin)):
                     "entry_block": b.get("entry_block") or "", "review": bool(b.get("review")),
                     "unprotected": any(p.get("unprotected") or p.get("sl_unverified") for p in b.get("positions") or [])}
                 for s, b in st["bots"].items()}
-        out.append({"user_id": uid, "desired": user_bots.read_desired(uid), "provision": st["provision"], "bots": bots})
-    return {"users": out, "max_users": user_bots.MAX_USERS}
+        out.append({"user_id": uid, "desired": user_bots.read_desired(uid), "provision": st["provision"], "bots": bots,
+                    "approved": uid in approved})
+    seen = {u["user_id"] for u in out}
+    out += [{"user_id": uid, "desired": None, "provision": None, "bots": {}, "approved": True} for uid in approved if uid not in seen]
+    return {"users": out, "max_users": user_bots.MAX_USERS, "approved": len(approved)}
+
+class UserApproveReq(AdminModel):
+    on: bool
+
+@app.post("/api/admin/user-bots/{uid}/approve")
+async def admin_user_bots_approve(uid: str, req: UserApproveReq, user: dict = Depends(require_admin)):
+    """The owner approves (or removes) an account for its own Demo bots. Removing stops new entries at the next
+    provisioner run; open trades still exit on their own rules and stops."""
+    if not user_bots.UID_RE.match(uid): raise HTTPException(400, "bad user id")
+    try:
+        now = user_approvals.set_approved(uid, req.on)
+    except OSError as e:
+        raise HTTPException(503, f"approval list can't be written: {type(e).__name__}")
+    admin_control.audit(BOT_DIR, await _admin_actor(user), "demo_bots_approve" if req.on else "demo_bots_remove", "ok", {"user": uid[:8]})
+    return {"ok": True, "approved": uid in now}
 
 @app.get("/api/trades")
 async def api_trades(limit: int = 50, user: dict = Depends(require_admin)):
