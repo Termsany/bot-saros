@@ -80,9 +80,9 @@ test("the dashboard in English after the English landing, with the light theme",
   await expectNoSideScroll(page)
   const html = page.locator("html")
   const before = await html.getAttribute("data-theme")
-  await page.getByRole("button", { name: /Switch to (light|dark)/ }).first().click()
+  await page.getByRole("button", { name: /Switch to (light|dark)/ }).filter({ visible: true }).first().click()   // the phone header or the desktop bar
   await expect(html).toHaveAttribute("data-theme", before === "light" ? "dark" : "light")
-  await page.getByTestId("app-lang-switch").first().click()                  // back to Arabic, remembered
+  await page.getByTestId("app-lang-switch").filter({ visible: true }).first().click()   // back to Arabic, remembered
   await expect(html).toHaveAttribute("lang", "ar")
   await expect(page.getByRole("heading", { name: "بوتات التجربة" })).toBeVisible()
 })
