@@ -67,6 +67,7 @@ test("the dashboard shows the real-money bot first, the paper bots apart", async
 
 test("the dashboard in English after the English landing, with the light theme", async ({ page }) => {
   await page.goto("/")                                                        // the English landing remembers the language
+  expect((await page.context().cookies()).find(c => c.name === "raqm-lang")?.value).toBe("en")
   await page.goto("/dashboard")
   await expect(page.locator("html")).toHaveAttribute("lang", "en")
   await expect(page.locator("html")).toHaveAttribute("dir", "ltr")
