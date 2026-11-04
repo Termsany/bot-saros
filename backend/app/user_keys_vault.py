@@ -56,6 +56,18 @@ def _load_all():
         raise RuntimeError(f"user vault can't be decrypted ({type(e).__name__}) — check VAULT_MASTER_KEY") from e
 
 
+def vault_health():
+    """"ok", "empty" (no file yet) or "unreadable" (wrong or missing VAULT_MASTER_KEY, damaged file) — never a key.
+    2026-11-04: the vault was encrypted with an old key file while the API ran with another key, so no user's Demo
+    key could be read or saved, and nothing said so. The watchdog reads this through /api/health."""
+    if not VAULT_PATH.exists():
+        return "empty"
+    try:
+        _load_all(); return "ok"
+    except Exception:
+        return "unreadable"
+
+
 def _write_all(data):
     """New file, then rename over the vault: a crash mid-write used to leave every user's keys unreadable."""
     import os, tempfile
