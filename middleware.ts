@@ -19,4 +19,6 @@ export function middleware(req: NextRequest){
   return res
 }
 
-export const config = { matcher: ["/((?!_next/|api/|favicon|icon|.*\.[a-z0-9]+$).*)"] }
+// Only the pages with a language to choose: every other page renders Arabic without the header (app/layout.tsx).
+// (A catch-all pattern lost its "\\." escape on the way and silently skipped /dashboard and /ar — keep it a list.)
+export const config = { matcher: ["/", "/ar", "/dashboard", "/dashboard/:path*"] }
