@@ -2,7 +2,7 @@
 as deploy/vps/README.md says, and the Binance checks catch a key that can withdraw, isn't IP-restricted, or an account
 in hedge mode — on fake clients, never a real exchange. Owner and mode reads are patched to what each test wrote
 (no pwd on Windows, and Windows keeps no group/other permission bits)."""
-import os, sys, tempfile, unittest
+import os, subprocess, sys, tempfile, unittest
 from pathlib import Path
 from unittest import mock
 
@@ -145,8 +145,41 @@ class PreflightTests(unittest.TestCase):
     def test_readiness_must_match_the_deployed_commit(self):
         self.set_up_server()
         self.write("DEPLOYED_COMMIT", "b" * 40 + "\n", 0o644)
+        self.paths["src"] = self.paths["live"].parent / "no-clone"          # git can't tell: fails closed
         failed = self.failed(lp.run(self.paths, "momentum_ls", clients=(Futures(), Spot())))
-        self.assertIn("readiness bound to the deployed commit", failed)
+        self.assertIn("readiness bound to the deployed code", failed)
+
+    def git_history(self):
+        """A clone with a reviewed commit and a later docs-only one; the live folder holds the reviewed trading code."""
+        src = self.paths["live"].parent / "src"; src.mkdir()
+        g = lambda *a: subprocess.run(["git", "-C", str(src), *a], check=True, capture_output=True, text=True).stdout.strip()
+        g("init", "-q"); g("config", "user.email", "t@t"); g("config", "user.name", "t"); g("config", "core.autocrlf", "false")
+        files = {"bot.py": "print(1)\n", "backend/app/oco.py": "x = 1\n", "deploy/vps/live-requirements.txt": "ccxt==4.5.89\n", "docs/a.md": "a\n"}
+        for rel, text in files.items():
+            (src / rel).parent.mkdir(parents=True, exist_ok=True); (src / rel).write_bytes(text.encode())
+        g("add", "-A"); g("commit", "-qm", "reviewed"); reviewed = g("rev-parse", "HEAD")
+        (src / "docs" / "a.md").write_bytes(b"b\n"); g("commit", "-qam", "docs only"); later = g("rev-parse", "HEAD")
+        live = self.paths["live"]
+        for rel in ("bot.py", "backend/app/oco.py"):
+            (live / rel).parent.mkdir(parents=True, exist_ok=True); (live / rel).write_bytes((src / rel).read_bytes())
+        return src, reviewed, later, g
+
+    def test_a_deploy_that_changes_no_trading_code_keeps_the_binding(self):
+        src, reviewed, later, _ = self.git_history()
+        self.assertEqual(lp.trading_code_diff(src, reviewed, self.paths["live"], later), [])
+
+    def test_changed_or_new_trading_code_or_packages_break_the_binding(self):
+        src, reviewed, later, g = self.git_history()
+        live = self.paths["live"]
+        (live / "bot.py").write_bytes(b"print(2)\n")
+        self.assertEqual(lp.trading_code_diff(src, reviewed, live, later), ["bot.py"])
+        (live / "bot.py").write_bytes((src / "bot.py").read_bytes())
+        (live / "bots").mkdir(); (live / "bots" / "momentum_ls.py").write_bytes(b"y = 1\n")
+        self.assertEqual(lp.trading_code_diff(src, reviewed, live, later), ["bots/momentum_ls.py"])     # not in the review
+        (live / "bots" / "momentum_ls.py").unlink()
+        (src / "deploy/vps/live-requirements.txt").write_bytes(b"ccxt==4.6.0\n"); g("commit", "-qam", "bump")
+        self.assertEqual(lp.trading_code_diff(src, reviewed, live, g("rev-parse", "HEAD")), ["deploy/vps/live-requirements.txt"])
+        self.assertIsInstance(lp.trading_code_diff(src, "c" * 40, live, later), str)                   # unknown commit
 
     def test_ceilings_do_not_leak_into_the_environment(self):
         self.set_up_server()
