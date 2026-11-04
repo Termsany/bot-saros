@@ -170,10 +170,90 @@ def send(text):
                            headers={"Content-Type": "application/json"}), timeout=15)
 
 
-def checks(now, users=False):
-    """problems(), or one problem saying the watchdog itself can't look: a crash here used to mean silence."""
+# The server itself (development-plan 2.4): what stops every bot at once without any bot being "down" first.
+DOMAINS = ("api.da3m.io", "bot.da3m.io", "realbot.da3m.io")   # this server's sites (it also hosts others, not ours)
+DISK_MIN_FREE = (0.10, 5 * 1024 ** 3)   # under 10 % or 5 GB free: SQLite ledgers and logs start failing to write
+MEM_MIN_AVAILABLE = 0.10
+CLOCK_MAX_OFFSET_MS = 1000              # Binance refuses requests outside recvWindow (5 s): alert well before
+CERT_MIN_DAYS = 14                      # certbot renews at 30 days left: 14 means renewal has been failing
+
+
+def _disk(path="/"):
+    import shutil
+    u = shutil.disk_usage(path); return u.free, u.total
+
+
+def _mem():
+    m = {l.split(":")[0]: int(l.split()[1]) * 1024 for l in Path("/proc/meminfo").read_text().splitlines() if l.split()[1:2]}
+    return m["MemAvailable"], m["MemTotal"]
+
+
+def _ntp_synced():
+    r = subprocess.run(["timedatectl", "show", "-p", "NTPSynchronized", "--value"], capture_output=True, text=True, timeout=10)
+    if r.returncode: raise OSError(r.stderr.strip())        # can't tell: skipped, not alerted
+    return r.stdout.strip() == "yes"
+
+
+def _binance_offset_ms():
+    """Local clock minus Binance's (ms), or None when Binance can't be reached (the bots report that themselves)."""
+    import time
     try:
-        return user_problems(now) if users else problems(now)
+        t0 = time.time()
+        with urllib.request.urlopen("https://fapi.binance.com/fapi/v1/time", timeout=5) as r:
+            server = json.loads(r.read())["serverTime"]
+        return (t0 + time.time()) / 2 * 1000 - server
+    except Exception:
+        return None
+
+
+def _cert_days(host, now):
+    """Days until the certificate `host` serves expires (a failed TLS check raises)."""
+    import socket, ssl
+    ctx = ssl.create_default_context()
+    with socket.create_connection((host, 443), timeout=8) as s, ctx.wrap_socket(s, server_hostname=host) as t:
+        end = datetime.fromtimestamp(ssl.cert_time_to_seconds(t.getpeercert()["notAfter"]), timezone.utc)
+    return (end - now).total_seconds() / 86400
+
+
+def server_problems(now, disk=_disk, mem=_mem, ntp=_ntp_synced, offset=_binance_offset_ms, cert=_cert_days, domains=DOMAINS):
+    """{key: (text, checks in a row before alerting)} for the server. A check that can't run is skipped, not alerted
+    (it would page every 5 minutes for a missing tool) — except a site that doesn't answer on HTTPS at all."""
+    out = {}
+    try:
+        free, total = disk()
+        if free < DISK_MIN_FREE[1] or free < DISK_MIN_FREE[0] * total:
+            out["server:disk"] = (f"مساحة السيرفر قربت تخلص: فاضل {free / 1024 ** 3:.1f} GB من {total / 1024 ** 3:.0f} GB", 2)
+    except Exception: pass
+    try:
+        avail, total = mem()
+        if avail < MEM_MIN_AVAILABLE * total:
+            out["server:mem"] = (f"ذاكرة السيرفر قربت تخلص: فاضل {avail / 1024 ** 2:.0f} MB من {total / 1024 ** 2:.0f} MB", 2)
+    except Exception: pass
+    try:
+        if not ntp():
+            out["server:ntp"] = ("ساعة السيرفر مش متزامنة (NTP) — Binance بيرفض الطلبات لو الساعة بعدت", 3)
+    except Exception: pass
+    off = offset()
+    if off is not None and abs(off) > CLOCK_MAX_OFFSET_MS:
+        out["server:clock"] = (f"ساعة السيرفر بعيدة عن Binance بـ {off / 1000:+.1f} ثانية", 2)
+    for host in domains:
+        try:
+            days = cert(host, now)
+            if days < CERT_MIN_DAYS:
+                out[f"cert:{host}"] = (f"شهادة HTTPS بتاعة {host} بتخلص بعد {max(days, 0):.0f} يوم — التجديد التلقائي مش شغال", 1)
+        except Exception as e:
+            out[f"site:{host}"] = (f"{host} مش بيرد على HTTPS: {type(e).__name__}", 3)
+    return out
+
+
+def checks(now, users=False):
+    """problems() and the server's, or one problem saying the watchdog itself can't look: a crash here used to mean silence."""
+    try:
+        if users:
+            return user_problems(now)
+        out = problems(now)
+        out.update(server_problems(now))
+        return out
     except Exception as e:
         return {"watchdog": (f"المراقب نفسه مش قادر يفحص البوتات: {type(e).__name__}: {e}", 2)}
 
