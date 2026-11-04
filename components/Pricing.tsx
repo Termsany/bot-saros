@@ -51,6 +51,7 @@ export function Pricing({ prices }: { prices?: Record<string, number> }){
           </div>
         ))}
       </div>
+      <p className="mt-4 text-center text-[13px] leading-6 text-muted">الباقات بتفتح الـ Backtest وصفقات الاختبار وحاسبة راس المال. <b className="text-ink">لسه مابتشغّلش بوتات على حسابك في Binance</b> — متابعة البوتات مباشر (Paper) مفتوحة للكل. النتايج اللي فاتت مش ضمان لأي نتيجة جاية.</p>
       {err && <div className="mt-4 rounded-xl border border-loss/30 bg-loss/10 px-4 py-3 text-sm text-loss">{err}</div>}
     </>
   )

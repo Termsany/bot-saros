@@ -24,10 +24,10 @@ const GROUPS: { label: string, items: NavItem[] }[] = [
 ]
 
 const PLAN_COPY: Record<string, string> = {
-  free: "بوت الترند اليومي · Backtest 7 أيام",
-  starter: "بوتين: ترند + مومنتم · Backtest 30 يوم",
-  pro: "3 بوتات · Backtest 90 يوم · Futures",
-  elite: "الـ 4 بوتات · Backtest بلا حدود",
+  free: "Backtest الترند اليومي · 7 أيام",
+  starter: "Backtest الترند + المومنتم · 30 يوم",
+  pro: "Backtest 3 استراتيجيات · 90 يوم",
+  elite: "Backtest الـ 4 استراتيجيات · بلا حدود",
 }
 
 function NavLink({ item, on }: { item: NavItem, on: boolean }){

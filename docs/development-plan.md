@@ -56,7 +56,7 @@ The rule from the roadmap holds everywhere: the real bot is touched last, Demo f
 
 | # | Stage | Kind | Effort | Notes |
 |---|---|---|---|---|
-| 5.1 | Pricing page matches what exists: it sells "4 bots", the app runs 7 (3 experimental); say what each plan really gets | 🔒 before selling more | S | a paid plan must not promise what isn't there |
+| 5.1 | ✓ (owner 2026-11-04: plans = follow the bots + Backtest) Pricing page matches what exists: it sells "4 bots", the app runs 7 (3 experimental); say what each plan really gets | 🔒 before selling more | S | a paid plan must not promise what isn't there |
 | 5.2 | Terms, risk disclosure and refund policy on the site; backtest numbers labelled as past results everywhere | 🔒 before marketing | S | |
 | 5.3 | Legal review for the countries sold to: paid trading bots / signals can need a licence | 🔒 before 4.5 or scale | — (lawyer) | the one stage Claude can't do |
 | 5.4 | Stripe in live mode checked end to end (checkout, webhook, downgrade, cancel) | ⏸️ until selling | S | |

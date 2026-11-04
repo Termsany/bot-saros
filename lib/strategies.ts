@@ -53,10 +53,10 @@ export const pfTone = (pf: number) => pf >= 1.05 ? "text-profit" : pf >= 0.95 ? 
 export const sharpeTone = (s: number) => s >= 1 ? "text-profit" : s >= 0.5 ? "text-corona" : "text-loss"
 
 export const TIERS = [
-  { id:"free", name:"Free", price:"0$", per:"/شهر", cta:"ابدأ مجانا", features:["بوت الترند اليومي","متابعة البوت مباشر","Backtest 7 أيام"], count:1, color:"#8B91A7" },
-  { id:"starter", name:"Starter", price:"29$", per:"/شهر", cta:"اشترك", features:["بوتين: ترند + مومنتم","لونج وشورت","Backtest 30 يوم"], count:2, color:"#4CC9F0" },
-  { id:"pro", name:"Pro", price:"59$", per:"/شهر", cta:"اشترك Pro", features:["3 بوتات: + شورت العملات الجديدة","Futures LONG/SHORT","Backtest 90 يوم"], count:3, color:"#7B61FF", popular:true },
-  { id:"elite", name:"Elite", price:"99$", per:"/شهر", cta:"اشترك Elite", features:["الـ 4 بوتات","+ Ratio Trend (High Risk)","Backtest غير محدود"], count:4, color:"#F5B841" },
+  { id:"free", name:"Free", price:"0$", per:"/شهر", cta:"ابدأ مجانا", features:["Backtest الترند اليومي · لحد 7 أيام","صفقات الاختبار وحاسبة راس المال للترند","متابعة كل البوتات مباشر (Paper)"], count:1, color:"#8B91A7" },
+  { id:"starter", name:"Starter", price:"29$", per:"/شهر", cta:"اشترك", features:["Backtest الترند + المومنتم · لحد 30 يوم","صفقات الاختبار وحاسبة راس المال للاتنين","متابعة كل البوتات مباشر (Paper)"], count:2, color:"#4CC9F0" },
+  { id:"pro", name:"Pro", price:"59$", per:"/شهر", cta:"اشترك Pro", features:["+ شورت العملات الجديدة · Backtest لحد 90 يوم","صفقات الاختبار وحاسبة راس المال للتلاتة","متابعة كل البوتات مباشر (Paper)"], count:3, color:"#7B61FF", popular:true },
+  { id:"elite", name:"Elite", price:"99$", per:"/شهر", cta:"اشترك Elite", features:["الـ 4 استراتيجيات + ترند النسبة (High Risk)","Backtest من غير حد للمدة","متابعة كل البوتات مباشر (Paper)"], count:4, color:"#F5B841" },
 ]
 /** The plan that unlocks strategy number i (0-based). */
 export const unlockTier = (i: number) => TIERS.find(t => t.count > i) || TIERS[TIERS.length - 1]
