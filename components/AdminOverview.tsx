@@ -2,15 +2,13 @@
 import { useCallback, useEffect, useState } from "react"
 import { apiLiveStatus, apiLiveStrategies, apiSetLiveStrategies } from "@/lib/api"
 import { Dot, Pill, Toggle, type Tone } from "@/components/ui"
+import { NAME_AR } from "@/lib/strategies"
 
 /** Admin overview, laid out like the Figma frame "04 · الإدارة": key numbers, the Demo account's strategies with their
  *  yes/no and share of the slots, alerts, and the capital plan. Data: /api/live/strategies?env=demo, /api/live/status,
  *  and the admin finance endpoint the page already loads. */
 
-const LABELS: Record<string, string> = {
-  trend_daily: "الترند اليومي", ratio_trend: "ترند النسبة", momentum_ls: "مومنتم لونج/شورت", listing_short: "شورت العملات الجديدة",
-  vol_breakout: "بريك أوت التذبذب", rsi2_pullback: "RSI-2", trend_breakout: "اختراق الترند",
-}
+const LABELS: Record<string, string> = NAME_AR      // lib/strategies.json (development-plan 3.4)
 const LEVEL: Record<string, [string, Tone]> = { low: ["خطورة منخفضة", "profit"], medium: ["خطورة متوسطة", "corona"], high: ["خطورة عالية", "loss"], very_high: ["خطورة عالية جدًا", "loss"] }
 const usd = (v: number) => `${v < 0 ? "−" : ""}$${Math.abs(v).toLocaleString("en-US", { maximumFractionDigits: 2 })}`
 const signedUsd = (v: number) => `${v > 0 ? "+" : ""}${usd(v)}`

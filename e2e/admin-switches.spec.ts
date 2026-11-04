@@ -63,7 +63,7 @@ test("the Demo tab is marked apart, and its save goes to the Demo account only",
   await page.getByRole("button", { name: "Demo · فلوس وهمية" }).click()
   await expect(page.getByText("بتغيّر حساب الـ Demo — فلوس وهمية، وده بيأثر على قياس الـ Demo")).toBeVisible()
   await expect(page.getByText(/بتغيّر الحساب الحقيقي/)).toHaveCount(0)
-  await toggle(page, "ترند النسبة").click()
+  await toggle(page, "ترند النسبة بين العملات").click()
   const asked: string[] = []
   page.once("dialog", d => { asked.push(d.message()); d.accept() })
   await page.getByRole("button", { name: "احفظ التغييرات" }).click()
