@@ -4,7 +4,7 @@
 import { ArrowUpRight, Check, Clock, LineChart, ShieldCheck } from "lucide-react"
 import { Logo } from "@/components/Logo"
 import { LandingNavAuth } from "@/components/AccountMenu"
-import { realPage } from "@/components/RealMoney"
+import { realPage } from "@/lib/real-page"
 import { BOT_PAGE, STATS_META, STRATEGIES, pfTone, sharpeTone } from "@/lib/strategies"
 import { BRAND } from "@/lib/brand"
 import { DIR, LANDING, OTHER, type Locale } from "@/lib/i18n/landing"

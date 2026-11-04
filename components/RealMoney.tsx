@@ -6,14 +6,13 @@ import { Card, CardHeader, Dot, Pill } from "@/components/ui"
 import { STRATEGIES, strategyName } from "@/lib/strategies"
 import { agoText, useLocale, useT } from "@/lib/i18n/locale"
 import type { Locale } from "@/lib/i18n/landing"
+import { realPage } from "@/lib/real-page"
 
 type Pos = { symbol: string; side: "long" | "short"; entry: number; price?: number; qty: number; contract_size?: number; sl?: number; pnl?: number; loss_at_sl?: number }
 type Trade = { pnl?: number }
 type Bot = { strategy: string; updated?: string; running: boolean; leverage?: number; positions: Pos[]; history: Trade[]; next_rebalance?: string | null }
 
-export const REAL_PAGE = "https://realbot.da3m.io"
-/** The real-money page in the reader's language (the page reads ?lang=, deploy/vps/realbot/index.html). */
-export const realPage = (l: Locale) => `${REAL_PAGE}/?lang=${l}`
+export { REAL_PAGE } from "@/lib/real-page"
 const fmt = (v: number, d = 2) => v.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d })
 const signed = (v: number) => `${v > 0 ? "+" : v < 0 ? "−" : ""}${fmt(Math.abs(v))}`
 const px = (v?: number) => v == null ? "—" : Number(v).toLocaleString("en-US", { maximumSignificantDigits: 6 })
