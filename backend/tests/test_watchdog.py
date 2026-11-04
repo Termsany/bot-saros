@@ -71,6 +71,38 @@ class WatchdogTests(unittest.TestCase):
             wd.problems = orig
         self.assertEqual(set(seen), {"watchdog"}); self.assertIn("systemctl missing", seen["watchdog"][0])
 
+    # development-plan 2.4: the server itself
+    def server(self, **kw):
+        GB, MB = 1024 ** 3, 1024 ** 2
+        args = dict(disk=lambda: (35 * GB, 99 * GB), mem=lambda: (3900 * MB, 7900 * MB), ntp=lambda: True,
+                    offset=lambda: 40.0, cert=lambda host, now: 80.0, domains=("a.example", "b.example"))
+        args.update(kw); return wd.server_problems(NOW, **args)
+
+    def test_a_healthy_server_sends_nothing(self):
+        self.assertEqual(self.server(), {})
+
+    def test_each_server_problem_is_found(self):
+        GB, MB = 1024 ** 3, 1024 ** 2
+        def cert(host, now):
+            if host == "b.example": raise ConnectionRefusedError()
+            return 9.0
+        seen = self.server(disk=lambda: (4 * GB, 99 * GB), mem=lambda: (500 * MB, 7900 * MB), ntp=lambda: False,
+                           offset=lambda: -2500.0, cert=cert)
+        self.assertEqual(set(seen), {"server:disk", "server:mem", "server:ntp", "server:clock", "cert:a.example", "site:b.example"})
+        self.assertEqual(seen["cert:a.example"][1], 1)                       # renewal failing: at once
+        self.assertEqual(seen["site:b.example"][1], 3)                       # a site down: after 15 minutes
+
+    def test_a_server_check_that_cannot_run_is_skipped_not_alerted(self):
+        boom = lambda *a: (_ for _ in ()).throw(OSError("no tool"))
+        self.assertEqual(self.server(disk=boom, mem=boom, ntp=boom, offset=lambda: None), {})
+
+    def test_checks_adds_the_server_to_the_bots(self):
+        with mock.patch.object(wd, "problems", lambda now: {"down:demo:x": ("t", 2)}), \
+             mock.patch.object(wd, "server_problems", lambda now: {"server:disk": ("d", 2)}):
+            self.assertEqual(set(wd.checks(NOW)), {"down:demo:x", "server:disk"})
+        with mock.patch.object(wd, "user_problems", lambda now: {}), mock.patch.object(wd, "server_problems", lambda now: 1 / 0):
+            self.assertEqual(wd.checks(NOW, users=True), {})                 # the users' watchdog: their bots only
+
     def test_long_alerts_go_in_parts_telegram_accepts(self):
         lines = ["🐶 مراقب رقم"] + [f"🚨 COIN{i}/USDT في trend_breakout (Demo) مش متأكدين إن وقف الخسارة على Binance" for i in range(66)]
         parts = wd.chunks(lines)
