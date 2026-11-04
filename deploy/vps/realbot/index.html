@@ -55,9 +55,13 @@
   td.up{animation:up 1s} td.down{animation:down 1s}
   @keyframes up{from{background:rgba(34,211,160,.22)}to{background:transparent}}
   @keyframes down{from{background:rgba(255,84,112,.22)}to{background:transparent}}
+  .vs{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+  .vs .value{font-size:20px}
+  .vs .bt{font-size:11px;color:var(--faint);margin-top:4px}
+  .warn{font-size:12px;color:var(--corona);margin:8px 0 0;line-height:1.8}
   footer{margin-top:34px;color:var(--faint);font-size:12px;line-height:1.9;border-top:1px solid var(--line);padding-top:16px}
   td.num span{direction:ltr;unicode-bidi:isolate}
-  @media (max-width:760px){ .kpis{grid-template-columns:repeat(2,minmax(0,1fr))} h1{font-size:22px} .kpi .value{font-size:20px} }
+  @media (max-width:760px){ .kpis,.vs{grid-template-columns:repeat(2,minmax(0,1fr))} h1{font-size:22px} .kpi .value{font-size:20px} }
   /* phones: every row becomes a card, each value next to its column's name */
   @media (max-width:640px){
     .wrap{padding:14px 12px 36px}
@@ -109,6 +113,8 @@
     <div class="card kpi"><div class="label">لو كل الوقفات اتضربت</div><div class="value mono loss" id="atStops">—</div><div class="note">أقصى خسارة للمفتوح دلوقتي</div></div>
   </div>
 
+  <div id="summary"></div>
+
   <div id="bots"></div>
 
   <footer>
@@ -138,6 +144,47 @@ const id = sym => String(sym).split(":")[0].replace("/", "")
 const num = (label, cls, val) => `<td class="num mono ${cls}" data-l="${label}"><span>${val}</span></td>`
 
 let D = null, live = {}, prev = {}, dirty = false, ws = null, subs = new Set()
+
+// The backtest of the same basket, every Binance USDT-M perpetual 2019-09 → 2026-10, fees + real funding
+// (lib/demo-baseline.json "momentum_ls" "all"; backend/tests/test_realbot_summary.py keeps these equal to it).
+const BACKTEST = {momentum_ls: {win_rate: 48.7, avg_win_pct: 36.3, avg_loss_pct: -29.0, profit_factor: 1.19}}
+const SAMPLE = 30          // closed trades before a comparison means anything (the Demo measurement's rule)
+const monthOf = iso => new Date(iso).toLocaleDateString("ar-EG", {month: "long", year: "numeric", timeZone: "UTC", numberingSystem: "latn"})
+
+/** Every closed trade, by month, and the whole run next to the backtest (development-plan 7.1). */
+function summary(bots){
+  const closed = bots.flatMap(b => b.history.filter(h => h.time && h.pnl != null).map(h => ({...h, strategy: b.strategy})))
+  const opened = bots.flatMap(b => [...b.positions, ...b.history].map(x => x.opened).filter(Boolean)).sort()
+  if(!opened.length) return ""
+  const stat = rows => { const w = rows.filter(r => r.pnl > 0), l = rows.filter(r => r.pnl < 0), pc = rows.map(r => r.pnl_pct).filter(v => v != null)
+    const gw = w.reduce((a, r) => a + r.pnl, 0), gl = -l.reduce((a, r) => a + r.pnl, 0)
+    return {n: rows.length, net: rows.reduce((a, r) => a + r.pnl, 0), win: rows.length ? w.length / rows.length * 100 : null,
+      pf: gl > 0 ? gw / gl : null, avg: pc.length ? pc.reduce((a, v) => a + v, 0) / pc.length : null,
+      avgWin: w.filter(r => r.pnl_pct != null).length ? w.reduce((a, r) => a + (r.pnl_pct ?? 0), 0) / w.filter(r => r.pnl_pct != null).length : null,
+      avgLoss: l.filter(r => r.pnl_pct != null).length ? l.reduce((a, r) => a + (r.pnl_pct ?? 0), 0) / l.filter(r => r.pnl_pct != null).length : null,
+      weeks: new Set(rows.map(r => r.time.slice(0, 10))).size} }
+  const months = {}
+  closed.forEach(r => { const k = r.time.slice(0, 7); (months[k] = months[k] || []).push(r) })
+  const all = stat(closed)
+  const mrows = Object.keys(months).sort().reverse().map(k => { const m = stat(months[k])
+    return `<tr><td class="coin">${monthOf(months[k][0].time)}</td>${num("صفقات مقفولة", "", m.n)}${num("أيام قفل", "", m.weeks)}
+      ${num("نسبة الكسب", "", m.win == null ? "—" : m.win.toFixed(0) + "%")}${num("الصافي $", tone(m.net), usd(m.net))}${num("متوسط الصفقة", tone(m.avg), pct(m.avg))}</tr>` }).join("")
+  const bt = BACKTEST[bots[0]?.strategy] || {}
+  const vsCard = (label, val, cls, btText) => `<div class="card kpi"><div class="label">${label}</div><div class="value mono ${cls}">${val}</div><div class="bt">${btText}</div></div>`
+  const small = all.n < SAMPLE
+  return `<section>
+    <div class="head"><h2>الملخص من أول ما اشتغل</h2><span class="count">من ${day(opened[0])} · ${all.n} صفقة مقفولة</span></div>
+    <div class="vs">
+      ${vsCard("الصافي المحقق", usd(all.net), tone(all.net), "بعد الرسوم والـ funding")}
+      ${vsCard("نسبة الكسب", all.win == null ? "—" : all.win.toFixed(1) + "%", "", `الباكتست ${bt.win_rate ?? "—"}%`)}
+      ${vsCard("Profit factor", all.pf == null ? "—" : all.pf.toFixed(2), all.pf == null ? "" : all.pf >= 1 ? "profit" : "loss", `الباكتست ${bt.profit_factor ?? "—"}`)}
+      ${vsCard("متوسط الكسب / الخسارة", `${pct(all.avgWin)} / ${pct(all.avgLoss)}`, "", `الباكتست +${bt.avg_win_pct ?? "—"}% / ${bt.avg_loss_pct ?? "—"}% من الهامش`)}
+    </div>
+    ${small ? `<p class="warn">لسه ${all.n} صفقة من ${SAMPLE} على الأقل: الأرقام دي لسه مش كفاية نحكم بيها على الاستراتيجية — الباكتست نفسه فيه أسابيع خسارة كتير.</p>` : ""}
+    <div class="table" style="margin-top:12px"><table><thead><tr><th>الشهر</th><th>صفقات مقفولة</th><th>أيام قفل</th><th>نسبة الكسب</th><th>الصافي $</th><th>متوسط الصفقة (من الهامش)</th></tr></thead>
+    <tbody>${mrows || `<tr><td colspan="6" class="empty">لسه مفيش صفقات اتقفلت — أول تبديل ${bots[0]?.next_rebalance ? nextDay(bots[0].next_rebalance) : "الاتنين الجاي"}</td></tr>`}</tbody></table></div>
+  </section>`
+}
 
 function posPnl(p){
   const price = live[id(p.symbol)] ?? p.price, sg = p.side === "long" ? 1 : -1
@@ -179,6 +226,7 @@ function render(){
     </section>`
   }).join("")
   $("bots").innerHTML = html || `<section><div class="card empty">مفيش بوت بفلوس حقيقية شغال دلوقتي.</div></section>`
+  $("summary").innerHTML = summary(D.bots)
   $("unrealized").textContent = usd(unreal); $("unrealized").className = `value mono ${tone(unreal)}`
   $("realized").textContent = usd(realized); $("realized").className = `value mono ${tone(realized)}`
   $("wl").textContent = `${wins} كسبانة · ${losses} خسرانة`

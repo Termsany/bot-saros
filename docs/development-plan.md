@@ -74,7 +74,7 @@ The rule from the roadmap holds everywhere: the real bot is touched last, Demo f
 
 | # | Stage | Kind | Effort | Notes |
 |---|---|---|---|---|
-| 7.1 | realbot.da3m.io as the public proof: monthly summary, costs (with 2.5) | ⏸️ | S | |
+| 7.1 | realbot.da3m.io as the public proof: monthly summary, costs (with 2.5) — 2026-11-04: the summary since the start next to the backtest and a row per month; costs still to come with 2.5 | 🟡 | S | |
 | 7.2 | Landing page: real results next to backtest, plain risk wording | ⏸️ | S | with 5.2 |
 | 7.3 | Arabic/English, SEO | ✂️ | M | |
 
