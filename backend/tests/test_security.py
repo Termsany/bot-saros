@@ -82,7 +82,8 @@ class ApiAuthTests(unittest.TestCase):
         public = {"/api/health", "/api/chart", "/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc",
                   "/api/plans", "/api/invites/{invite_id}", "/api/health/bots"}
         checked = 0
-        for r in app.routes:
+        from app.routes import all_routes
+        for r in all_routes(app):          # the routers' endpoints too (development-plan 3.2)
             if not hasattr(r, "methods") or r.path in public:
                 continue
             for m in r.methods - {"HEAD", "OPTIONS"}:
