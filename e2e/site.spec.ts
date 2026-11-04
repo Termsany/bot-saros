@@ -87,6 +87,24 @@ test("the dashboard in English after the English landing, with the light theme",
   await expect(page.getByRole("heading", { name: "بوتات التجربة" })).toBeVisible()
 })
 
+test("the Backtest page in English after the English landing, Arabic after the switch", async ({ page }) => {
+  await page.goto("/")
+  await page.evaluate(() => localStorage.setItem("raqm-theme", "light"))
+  await page.goto("/backtest")
+  const html = page.locator("html")
+  await expect(html).toHaveAttribute("lang", "en")
+  await expect(html).toHaveAttribute("dir", "ltr")
+  await expect(html).toHaveAttribute("data-theme", "light")                       // a themed page now
+  await expect(page.getByRole("heading", { name: "Run settings" })).toBeVisible()
+  await expect(page.getByRole("button", { name: "Run the backtest" })).toBeVisible()
+  await expect(page.getByText("Market and range")).toBeVisible()
+  await expectNoSideScroll(page)
+  await page.getByTestId("app-lang-switch").filter({ visible: true }).first().click()
+  await expect(html).toHaveAttribute("lang", "ar")
+  await expect(page.getByRole("heading", { name: "إعدادات التشغيل" })).toBeVisible()
+  await expect(page.getByRole("button", { name: "شغّل الـ Backtest" })).toBeVisible()
+})
+
 test("a page not built for the light theme stays dark", async ({ page }) => {
   await page.goto("/")
   await page.evaluate(() => localStorage.setItem("raqm-theme", "light"))
