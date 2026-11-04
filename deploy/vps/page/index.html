@@ -328,8 +328,10 @@ const EN = {
 const REASONS_EN = {"تبديل أسبوعي": "Weekly rebalance", "الترند وقف": "Trend stopped", "الترند اتقلب": "Trend flipped", "اشارة عكسية": "Opposite signal",
   "اشارة عكسية قوية": "Strong opposite signal", "قفل يدوي من Binance": "Closed by hand on Binance", "اتقفلت يدوي من Binance": "Closed by hand on Binance",
   "قفل يدوي من الموقع": "Closed by hand from the site", "الوقف اترفض — قفل فوري": "Stop rejected — closed at once", "خروج افتتاح اليوم": "Exit at the day's open",
-  "وقف خسارة": "Stop loss", SL: "Stop loss", TP: "Target"}
-const rsn = r => L === "en" ? REASONS_EN[r] || r : r
+  "وقف خسارة": "Stop loss", SL: "Stop loss", TP: "Target",
+  "قفل يدوي (أدمن)": "Closed by hand (admin)", "قفل فوق متوسط 5 يوم": "Closed above the 5-day average"}
+// "وقف 0.0346" = the stop hit at that price
+const rsn = r => { if(L !== "en") return r; if(REASONS_EN[r]) return REASONS_EN[r]; const m = /^وقف (.+)$/.exec(r || ""); return m ? `Stop at ${m[1]}` : r }
 const norm = t => t.replace(/\s+/g, " ").trim()
 const FIXED = []        // [text node, its Arabic] — every fixed text on the page
 { const w = document.createTreeWalker(document.querySelector(".wrap"), NodeFilter.SHOW_TEXT)
@@ -372,14 +374,16 @@ function render(){
   const pos = d.positions.map(p => {
     const price = priceOf(p.symbol, p.price)
     const pnl = (price - p.entry) * p.qty * (p.side === "short" ? -1 : 1)
-    return { ...p, price, pnl, pnl_pct: p.margin ? pnl / p.margin * 100 : 0 }
+    return { ...p, price, pnl, pnl_pct: p.margin ? pnl / p.margin * 100 : null }
   })
   const s = d.stats, unreal = pos.reduce((a, p) => a + p.pnl, 0), total = s.realized + unreal
   $("realized").innerHTML = `<span class="${tone(s.realized)}">${usd(s.realized)}</span>`
   $("wl").textContent = tx(`${s.closed} صفقة اتقفلت · ${s.wins} كسبانة / ${s.losses} خسرانة`, `${s.closed} closed · ${s.wins} won / ${s.losses} lost`)
   $("unrealized").innerHTML = `<span class="${tone(unreal)}">${usd(unreal)}</span>`
   $("open").textContent = s.open
-  $("marginUsed").textContent = `${tx("هامش مستخدم", "margin in use")} $${pos.reduce((a, p) => a + p.margin, 0).toFixed(0)}`
+  const known = pos.filter(p => p.margin != null)
+  $("marginUsed").textContent = pos.length && !known.length ? tx("الهامش مش معروف للصفقات دي", "margin not known for these trades")
+    : `${tx("هامش مستخدم", "margin in use")} $${known.reduce((a, p) => a + p.margin, 0).toFixed(0)}`
   $("total").innerHTML = `<span class="${tone(total)}">${usd(total)}</span>`
   $("since").textContent = d.started ? tx(`البوت شغال ${ago(d.started)}`, `started ${ago(d.started)}`) : ""
 
@@ -392,9 +396,9 @@ function render(){
       <td class="num mono">${px(p.entry)}</td>
       <td class="num mono ${flash}">${px(p.price)}</td>
       <td class="num mono" style="color:var(--faint)">${px(p.sl)}</td>
-      <td class="num mono">$${Number(p.margin).toFixed(2)}</td>
+      <td class="num mono">${p.margin == null ? "—" : "$" + Number(p.margin).toFixed(2)}</td>
       <td class="num mono ${tone(p.pnl)}">${usd(p.pnl)}</td>
-      <td class="num mono ${tone(p.pnl_pct)}">${p.pnl_pct > 0 ? "+" : ""}${p.pnl_pct.toFixed(1)}%</td>
+      <td class="num mono ${tone(p.pnl_pct)}">${p.pnl_pct == null ? "—" : (p.pnl_pct > 0 ? "+" : "") + p.pnl_pct.toFixed(1) + "%"}</td>
       <td class="mono" style="color:var(--muted)">${day(p.opened)}</td></tr>`}).join("")
     : `<tr><td colspan="8" class="empty">${tx("مفيش صفقات مفتوحة — البوت مستني ترند صاعد", "No open trades — the bot is waiting for an uptrend")}</td></tr>`
 

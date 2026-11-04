@@ -27,12 +27,14 @@ export const REAL = () => ({
 const PAPER_PAGE: Record<string, () => unknown> = {
   status: () => ({ updated: now(), started: now(), mode: "paper", leverage: 2, margin: 100, universe_size: 10, poll_seconds: 60,
     stats: { realized: 3.5, closed: 2, wins: 1, losses: 1, open: 1 },
-    positions: [{ symbol: "SOL/USDT", side: "long", entry: 150, price: 152, qty: 1, margin: 50, sl: 90, opened: now() }],
+    positions: [{ symbol: "SOL/USDT", side: "long", entry: 150, price: 152, qty: 1, margin: 50, sl: 90, opened: now() },
+                { symbol: "ENA/USDT", side: "long", entry: 0.2, price: 0.21, qty: 100, margin: null, sl: 0.12, opened: now() }],   // contract size unknown
     signals: [{ symbol: "SOL/USDT", price: 152, on: true, in_list: true }, { symbol: "BTC/USDT", price: 70000, on: false, in_list: true }],
     history: [{ symbol: "BNB/USDT", entry: 700, exit: 707, pnl: 1.0, reason: "الترند وقف", time: now() }] }),
   momentum: () => ({ updated: now(), next_rebalance: "2026-11-09T00:00:00+00:00", stats: { realized: -2, closed: 1, wins: 0, losses: 1 },
     positions: [{ symbol: "AGT/USDT", id: "AGTUSDT", side: "short", ret: -30, entry: 0.05, price: 0.045, qty: 1000, margin: 25, sl: 0.07 }],
-    history: [{ symbol: "IDOL/USDT", side: "long", entry: 0.0181, exit: 0.0204, pnl: -2, reason: "تبديل أسبوعي", time: now() }] }),
+    history: [{ symbol: "IDOL/USDT", side: "long", entry: 0.0181, exit: 0.0204, pnl: -2, reason: "تبديل أسبوعي", time: now() },
+              { symbol: "AIN/USDT", side: "short", entry: 0.25, exit: 0.0346, pnl: -1, reason: "وقف 0.0346", time: now() }] }),
 }
 
 const json = (body: unknown) => ({ status: 200, contentType: "application/json", body: JSON.stringify(body) })
