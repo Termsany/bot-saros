@@ -159,6 +159,10 @@ test("bot.da3m.io, the paper bots' page: Arabic by default, English and light af
   await expect(page.getByText("0 long · 1 short")).toBeVisible()
   await expect(page.getByText("Trend stopped")).toBeVisible()                   // the bot's Arabic close reason, in English
   await expect(page.getByText("Weekly rebalance")).toBeVisible()
+  await expect(page.getByText("Stop at 0.0346")).toBeVisible()                  // "وقف <price>"
+  const ena = page.locator("#positions tr", { hasText: "ENA" })                // margin unknown → "—", never $0.00
+  await expect(ena.locator("td").nth(4)).toHaveText("—")
+  await expect(ena.locator("td").nth(6)).toHaveText("—")
   await expect(page).toHaveTitle("RAQM — live paper bots")
   await expect(page.locator("#listingSec")).toBeHidden()                       // a bot without a file stays hidden
   const before = await html.getAttribute("data-theme")
