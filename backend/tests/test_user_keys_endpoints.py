@@ -11,7 +11,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "backend"))
 
 from fastapi.testclient import TestClient
-from app import auth, keys_vault, user_keys_vault, user_live_activation
+from app import auth, user_keys_vault, user_live_activation
 
 USER_A = {"id": "u-aaa", "email": "a@example.com", "email_confirmed": True}
 USER_B = {"id": "u-bbb", "email": "b@example.com", "email_confirmed": True}
@@ -30,7 +30,6 @@ class UserKeysEndpointsTests(unittest.TestCase):
         from cryptography.fernet import Fernet
         self.patches = [
             mock.patch.object(auth, "_verify_token", fake_verify),
-            mock.patch.object(keys_vault, "VAULT_PATH", Path(self.tmp.name) / "vault.json"),
             mock.patch.object(user_keys_vault, "VAULT_PATH", Path(self.tmp.name) / "user_vault.json"),
             mock.patch.dict(os.environ, {"ADMIN_EMAILS": "admin@example.com", "ALLOW_LIVE_TRADING": "",
                                          "VAULT_MASTER_KEY": Fernet.generate_key().decode()}),
