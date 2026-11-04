@@ -215,6 +215,12 @@ and 50 by the aggregate risk; each of the 7 strategies gets 8 slots.
   10 Demo legs left open without a bot. The selection is the owner's to restore on the dashboard (التداول الحقيقي →
   Demo).
 
+- **2026-11-03 22:52:35 UTC: six Demo positions closed by hand, not counted.** Every open Demo position (trend_daily
+  1000PEPE, HYPE, NEAR, ZEC; ratio_trend's BTC/ETH pair) was closed in the same second from the Binance iOS app
+  (client ids `ios_…`), while the Demo API key was being replaced; the bots, without a working key until 00:02, booked
+  them at 00:04 as "قفل يدوي من Binance" and removed their stops (none left, checked). These closes are excluded from
+  the measurement like the ones of 2026-10-30. Since 2026-11-04 00:02 the Demo bots run on a server-made Ed25519 key.
+
 ## Deployment (2026-11-01)
 
 `215596c` (PR #63) runs on the VPS: the 7 paper bots, the API, the real-orders copy in `/opt/raqm-live`, the 7
