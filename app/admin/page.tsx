@@ -8,7 +8,7 @@ import { LiveStrategies } from "@/components/LiveStrategies"
 import { AdminUserBots } from "@/components/AdminUserBots"
 import { AdminOverview } from "@/components/AdminOverview"
 import { AdminInvites, PlanPrices } from "@/components/AdminInvites"
-import { TIERS } from "@/lib/strategies"
+import { CATALOG_STRATEGIES, NAME_AR, TIERS } from "@/lib/strategies"
 import { apiIsAdmin } from "@/lib/api"
 import { authHeaders } from "@/lib/supabase"
 
@@ -33,16 +33,12 @@ const sections: [string, string, React.ComponentType<{ size?: number; strokeWidt
   ["settings", "الإعدادات", Settings2],
 ]
 
-/** Arabic labels for all 8 admin_control.STRATEGIES ids — the last one (default)
+/** Arabic labels for all 8 admin_control.STRATEGIES ids (lib/strategies.json) — the last one (default)
  *  has no running VPS service and must always show "no_service", never fabricated data. */
-const STRATEGY_LABELS_AR: Record<string, string> = {
-  trend_daily: "ترند يومي", listing_short: "شورت العملات الجديدة", momentum_ls: "مومنتم لونج/شورت",
-  ratio_trend: "ترند النسبة", vol_breakout: "اختراق التقلب", rsi2_pullback: "RSI2 الارتداد",
-  trend_breakout: "اختراق الترند", default: "Default",
-}
+const STRATEGY_LABELS_AR: Record<string, string> = { ...NAME_AR, default: "Default" }
 // the design's main tabs (Figma "04 · الإدارة"); the rest open from "المزيد"
 const PRIMARY_TABS = ["overview", "real", "live", "strategies", "risk", "users", "finance", "health", "audit"]
-const REAL_BOT_IDS = ["trend_daily", "listing_short", "momentum_ls", "ratio_trend", "vol_breakout", "rsi2_pullback", "trend_breakout"]
+const REAL_BOT_IDS = CATALOG_STRATEGIES.map(c => c.id)
 const NO_SERVICE_IDS = ["default"]
 const ALL_STRATEGY_IDS = [...REAL_BOT_IDS, ...NO_SERVICE_IDS]
 
@@ -816,7 +812,7 @@ function AuditList({ items }: { items: Json[] }) {
 function UserSettingsEditRow({ user, busy, onSave }: { user: Json; busy: boolean; onSave: (patch: { capital?: number; strategy?: string }) => void }) {
   const [capital, setCapital] = useState(user.capital != null ? String(user.capital) : "")
   const [strategy, setStrategy] = useState(user.strategy || "")
-  const strategies = ["trend_daily", "momentum_ls", "listing_short", "ratio_trend"]
+  const strategies = CATALOG_STRATEGIES.filter(c => c.planned).map(c => c.id)
   return (
     <tr className="border-t border-line">
       <td colSpan={8} className="px-2 py-3">

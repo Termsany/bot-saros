@@ -62,10 +62,8 @@ def main(argv=None):
     if baseline is None:
         text, far = "📊 قياس الـ Demo الأسبوعي: ملف الباكتست (lib/demo-baseline.json) مش موجود — مقدرناش نقارن", 0
     else:
-        labels = {
-            "trend_daily": "الترند اليومي", "listing_short": "شورت العملات الجديدة", "momentum_ls": "مومنتم (سلة)",
-            "ratio_trend": "ترند النسبة", "vol_breakout": "بريك أوت التذبذب", "rsi2_pullback": "RSI-2",
-            "trend_breakout": "اختراق الترند"}
+        from app import strategy_catalog
+        labels = strategy_catalog.NAME_AR                    # lib/strategies.json, the site's names
         text, far = report(demo_measure.measure(load_closed(), baseline, datetime.now(timezone.utc)), labels)
     print(text)
     if "--telegram" in argv:
