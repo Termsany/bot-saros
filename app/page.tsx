@@ -206,6 +206,7 @@ export default async function Page(){
             <div className="flex gap-5 text-sm text-muted">
               <a href="/backtest" className="hover:text-ink">Backtest</a>
               <a href="#pricing" className="hover:text-ink">الباقات</a>
+              <a href="/terms" className="hover:text-ink">الشروط والمخاطر</a>
               <FooterAuthLink/>
             </div>
           </div>
