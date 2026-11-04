@@ -104,6 +104,10 @@ class RebalanceCheckTests(unittest.TestCase):
         self.assertIn("OnCalendar=Mon *-*-* 00:20:00 UTC", t)
         u = (ROOT / "deploy" / "vps" / "raqm-rebalance-check.service").read_text(encoding="utf-8")
         self.assertIn("User=raqmlive", u); self.assertIn("--rebalance-day --telegram", u); self.assertIn("ProtectSystem=strict", u)
+        # then the costs (development-plan 2.5), from where setup-live.sh installs them, never failing the check
+        self.assertIn("ExecStart=-/usr/bin/env RAQM_LIVE_ROOT=/opt/raqm-live", u); self.assertIn("rebalance_costs.py --telegram", u)
+        self.assertLess(u.index("rebalance_check.py"), u.index("rebalance_costs.py"))
+        self.assertIn('"$T/scripts/rebalance_costs.py" /usr/local/lib/raqm/rebalance_costs.py', s)
 
 
 if __name__ == "__main__":

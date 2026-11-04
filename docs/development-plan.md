@@ -29,7 +29,7 @@ The rule from the roadmap holds everywhere: the real bot is touched last, Demo f
 | 2.2 | ✓ (PR #101, docs/restore.md) Restore test of the backups (real ledger + state into a scratch folder) | 🔒 before 1.4 | S | a server loss today has an untested way back |
 | 2.3 | ✓ (PR #101) CI starts `python bot.py` as the server does, on a fake exchange (roadmap B2) | 🔒 before PR #89 | S | an entry-point break would reach the server |
 | 2.4 | ✓ (this PR, watchdog) Server health alerts: disk, memory, clock drift (Binance rejects a request outside its recvWindow, 5 s by default), certificate expiry | ⏸️ | S | silent failure modes the watchdog can't see |
-| 2.5 | Real costs per rebalance kept by the bot and shown on realbot.da3m.io / dashboard (roadmap B3) | ⏸️ | M | read by hand from Binance each week |
+| 2.5 | Real costs per rebalance kept by the bot and shown on realbot.da3m.io / dashboard (roadmap B3) — first step done 2026-11-04: `scripts/rebalance_costs.py` sends fees, slippage and the week's funding to Telegram after each Monday check; first reading: fees 0.05 % a fill vs the backtest's 0.04 % | 🟡 | M | read by hand from Binance each week |
 | 2.6 | Monthly key rotation with `set_demo_keys.sh` / a new real key; quarterly dependency updates | ⏸️ ongoing | S each | slow drift, not a sudden risk |
 | 2.7 | Second server or a cold standby image | ✂️ | M | worth it only at a larger size |
 

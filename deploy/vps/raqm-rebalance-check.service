@@ -16,6 +16,9 @@ UnsetEnvironment=PYTHONPATH PYTHONHOME PYTHONSTARTUP PYTHONUSERBASE PYTHONINSPEC
 # exit 1 = something to look at (already sent to Telegram): not a unit failure
 SuccessExitStatus=1
 ExecStart=/opt/raqm-live/venv/bin/python -E -s scripts/rebalance_check.py --rebalance-day --telegram
+# then what the rebalance cost: fees, slippage, the week's funding (scripts/rebalance_costs.py, development-plan 2.5).
+# "-": a failure here must not hide the check above, which has already been sent
+ExecStart=-/usr/bin/env RAQM_LIVE_ROOT=/opt/raqm-live /opt/raqm-live/venv/bin/python -E -s /usr/local/lib/raqm/rebalance_costs.py --telegram
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
