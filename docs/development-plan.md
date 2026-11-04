@@ -65,7 +65,7 @@ The rule from the roadmap holds everywhere: the real bot is touched last, Demo f
 
 | # | Stage | Kind | Effort | Notes |
 |---|---|---|---|---|
-| 6.1 | Weekly Demo check of the 6 strategies against [demo-baseline.md](demo-baseline.md) (roadmap B5) | 🔒 for 1.5 | S/week | |
+| 6.1 | ✓ (2026-11-04, `scripts/demo_weekly.py`, raqm-demo-weekly.timer Sundays 18:00 UTC to Telegram) Weekly Demo check of the 6 strategies against [demo-baseline.md](demo-baseline.md) (roadmap B5) | 🔒 for 1.5 | S/week | a strategy past its sample and far from the baseline is named to switch off (6.2) |
 | 6.2 | A strategy far below baseline after its sample: switched off, not re-tuned | 🔒 | S | |
 | 6.3 | New strategy ideas: backtest → Demo sample → small size, the same path as momentum_ls | ⏸️ | L each | never straight to real money |
 | 6.4 | LLM Lab: keep as research only, or remove | ✂️ | S | nothing it makes reaches a bot without 6.3's path |
