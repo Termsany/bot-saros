@@ -11,7 +11,17 @@ export const THEME_INIT = `try{var t=localStorage.getItem("${KEY}");if(!t)t=matc
 /** Dark / light switch for the landing pages. The colours are CSS variables (app/globals.css), so it only flips an attribute. */
 export function ThemeToggle({ locale }: { locale: Locale }){
   const [theme, setTheme] = useState<"dark" | "light">("dark")
-  useEffect(() => { setTheme(document.documentElement.dataset.theme === "light" ? "light" : "dark") }, [])
+  useEffect(() => {
+    // THEME_INIT set the attribute before the first paint, but React can drop it when it takes over <html>
+    // (the server's <html> has no data-theme): put the saved / system choice back if it went missing.
+    const el = document.documentElement
+    if (!el.dataset.theme) {
+      let saved: string | null = null
+      try { saved = localStorage.getItem(KEY) } catch {}
+      el.dataset.theme = saved === "light" || saved === "dark" ? saved : matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark"
+    }
+    setTheme(el.dataset.theme === "light" ? "light" : "dark")
+  }, [])
   const t = LANDING[locale].theme
   const next = theme === "dark" ? "light" : "dark"
   function flip(){

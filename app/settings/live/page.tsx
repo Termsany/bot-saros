@@ -6,6 +6,53 @@ import { ShieldCheck, Eye, EyeOff, Power, CheckCircle2 } from "lucide-react"
 import { authHeaders } from "@/lib/supabase"
 import { CONSENT_TEXT } from "@/lib/liveConsent"
 import { UserBots } from "@/components/UserBots"
+import { useLocale, useT } from "@/lib/i18n/locale"
+
+// The page's words (Figma "RAQM — Global Redesign 2026"); the consent text itself stays English (the server compares it).
+const T = {
+  ar: {
+    rLev: "الرافعة من 1 لـ 5", rTrade: "المخاطرة لكل صفقة لحد 1%", rMax: "أقصى مخاطرة مفتوحة لحد 3%", rOrder: "المخاطرة لكل صفقة لازم تكون أقل من أقصى مخاطرة مفتوحة",
+    needKeys: "ضع API Key و Secret", saved: "تم الحفظ بشكل مشفر ✓", saveFailed: "فشل الحفظ", needConsent: "لازم تكتب نص الموافقة بالكامل وتعلّم المربع",
+    consented: "تم تسجيل موافقتك على Binance Demo — اختار البوتات تحت", enableFailed: "فشل التفعيل", confirmOff: "إيقاف التداول الحقيقي الخاص بك الآن؟", off: "تم إيقاف LIVE",
+    sKeys: "مفاتيح المنصة", sKeysDone: "اتحفظت · من غير سحب", sKeysNow: "احفظ مفاتيحك", sRisk: "حدود المخاطرة", sRiskDone: (l: number, r: number) => `x${l} · ${r}% للصفقة`,
+    sConsent: "الموافقة", sConsentDone: "اتكتبت ✓", sConsentNow: "اقرا واكتب النص", sOn: "التفعيل", sOnDone: (x?: string) => `شغال على ${x}`, sOnWait: "مستني الخطوات اللي قبله",
+    fLev: "الرافعة (1–5)", fTrade: "المخاطرة لكل صفقة % (لحد 1)", fMax: "أقصى مخاطرة مفتوحة % (لحد 3)",
+    title: "بوتاتي على Binance (Demo)", subtitle: "مفاتيح Binance Demo بتاعتك · فلوس وهمية · مستقل تمامًا عن حساب الإدارة",
+    onPill: (env: string, x?: string) => `● ${env} على ${x}`, notOn: "مش مفعّل",
+    c1: "1 · مفاتيح المنصة", c1Sub: "بتتشفر على السيرفر ومش بترجع للمتصفح تاني", exchange: "المنصة", hide: "اخفي", show: "اظهر", okxOnly: "Passphrase (OKX بس)", saveEnc: "احفظ متشفّر",
+    c2: "2 · حدود المخاطرة", c2Sub: "بتتسجل مع الموافقة · السيرفر بيرفض أي قيمة برا الحدود دي",
+    riskLine: (r: number, m: number) => <>لو الوقف اتضرب في صفقة: بتخسر <b className="font-mono text-loss">{r}%</b> من رصيدك · كل الصفقات المفتوحة مع بعض: <b className="font-mono text-ink">{m}%</b> بالكتير</>,
+    c3: "3 · الموافقة والتفعيل", c3Sub: "على مسؤوليتك الخاصة",
+    agreed: (x?: string, demo?: boolean, l?: number, r?: number, m?: number) => `موافق على ${x}${demo ? " Demo" : ""} · x${l} · ${r}% للصفقة · أقصى ${m}%`,
+    withdraw: "اسحب موافقتك (الدخول بيقف)",
+    meaning: "معنى الموافقة: الحساب والمفاتيح بتوعك، وانت بتشغّل التداول الحقيقي بفلوسك وعلى مسؤوليتك، بعيد عن إدارة المنصة. وفاهم إن ده ممكن يخسّرك فلوس، وانت المسؤول بالكامل.",
+    typeExact: "اكتب النص الإنجليزي ده بالظبط (السيرفر بيقارنه حرف بحرف):", typeHere: "اكتب نص الموافقة بالكامل هنا", understood: "قريت وفاهم المخاطر بالكامل",
+    agreeBtn: (x?: string) => `وافق على ${x} Demo (فلوس وهمية)`, keysFirst: (x?: string) => `احفظ مفاتيح ${x} الأول.`,
+    account: "حالة حسابك", keysOf: (x: string) => `مفاتيح ${x}`, keyPaper: "محفوظة · Paper", keyNone: "مش موجودة", realTrading: "التداول الحقيقي", running: "شغال",
+    demoOnly: <><b className="text-corona">دلوقتي على Binance Demo بس</b> (فلوس وهمية): اعمل مفاتيح من وضع Demo Trading في Binance. الفلوس الحقيقية مقفولة لحد ما الاستراتيجيات تخلص قياسها.</>,
+  },
+  en: {
+    rLev: "Leverage is 1 to 5", rTrade: "Risk per trade is up to 1%", rMax: "Max open risk is up to 3%", rOrder: "Risk per trade must be below the max open risk",
+    needKeys: "Enter the API key and secret", saved: "Saved, encrypted ✓", saveFailed: "Saving failed", needConsent: "Type the whole consent text and tick the box",
+    consented: "Your consent for Binance Demo is recorded — pick your bots below", enableFailed: "Enabling failed", confirmOff: "Stop your own trading now?", off: "LIVE stopped",
+    sKeys: "Exchange keys", sKeysDone: "Saved · no withdrawals", sKeysNow: "Save your keys", sRisk: "Risk limits", sRiskDone: (l: number, r: number) => `x${l} · ${r}% per trade`,
+    sConsent: "Consent", sConsentDone: "Typed ✓", sConsentNow: "Read and type the text", sOn: "Enable", sOnDone: (x?: string) => `Running on ${x}`, sOnWait: "Waiting for the steps before",
+    fLev: "Leverage (1–5)", fTrade: "Risk per trade % (up to 1)", fMax: "Max open risk % (up to 3)",
+    title: "My Binance Demo bots", subtitle: "Your own Binance Demo keys · play money · fully apart from the admin account",
+    onPill: (env: string, x?: string) => `● ${env} on ${x}`, notOn: "Not enabled",
+    c1: "1 · Exchange keys", c1Sub: "Encrypted on the server and never sent back to the browser", exchange: "Exchange", hide: "Hide", show: "Show", okxOnly: "Passphrase (OKX only)", saveEnc: "Save encrypted",
+    c2: "2 · Risk limits", c2Sub: "Recorded with your consent · the server refuses any value outside these limits",
+    riskLine: (r: number, m: number) => <>If a trade's stop is hit, you lose <b className="font-mono text-loss">{r}%</b> of your balance · all open trades together: <b className="font-mono text-ink">{m}%</b> at most</>,
+    c3: "3 · Consent and enabling", c3Sub: "At your own risk",
+    agreed: (x?: string, demo?: boolean, l?: number, r?: number, m?: number) => `Agreed on ${x}${demo ? " Demo" : ""} · x${l} · ${r}% per trade · max ${m}%`,
+    withdraw: "Withdraw your consent (entries stop)",
+    meaning: "What the consent means: the account and keys are yours, and you run the trading with your money and at your own risk, apart from the platform's management. You understand this can lose you money, and you are fully responsible.",
+    typeExact: "Type this English text exactly (the server compares it letter by letter):", typeHere: "Type the whole consent text here", understood: "I have read and fully understand the risks",
+    agreeBtn: (x?: string) => `Agree on ${x} Demo (play money)`, keysFirst: (x?: string) => `Save your ${x} keys first.`,
+    account: "Your account", keysOf: (x: string) => `${x} keys`, keyPaper: "Saved · Paper", keyNone: "None", realTrading: "Trading", running: "Running",
+    demoOnly: <><b className="text-corona">Binance Demo only for now</b> (play money): create keys in Binance's Demo Trading mode. Real money stays locked until the strategies finish their measurement.</>,
+  },
+}
 
 const EXCHANGES = [
   { id: "binance", name: "Binance" },
@@ -24,6 +71,8 @@ type LiveStatus = { enabled: boolean; exchange?: string; leverage?: number; risk
  * these requests for a client to spoof.
  */
 export default function UserLiveSettingsPage() {
+  const t = useT(T)
+  const locale = useLocale()
   const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
   const [status, setStatus] = useState<Record<string, KeyStatus>>({})
   const [liveStatus, setLiveStatus] = useState<LiveStatus>({ enabled: false })
@@ -40,10 +89,10 @@ export default function UserLiveSettingsPage() {
   const [leverage, setLeverage] = useState(2)
   const [riskPerTrade, setRiskPerTrade] = useState(0.25)
   const [maxRisk, setMaxRisk] = useState(1)
-  const riskError = !(leverage >= 1 && leverage <= 5) ? "الرافعة من 1 لـ 5"
-    : !(riskPerTrade > 0 && riskPerTrade <= 1) ? "المخاطرة لكل صفقة لحد 1%"
-    : !(maxRisk > 0 && maxRisk <= 3) ? "أقصى مخاطرة مفتوحة لحد 3%"
-    : riskPerTrade > maxRisk ? "المخاطرة لكل صفقة لازم تكون أقل من أقصى مخاطرة مفتوحة" : ""
+  const riskError = !(leverage >= 1 && leverage <= 5) ? t.rLev
+    : !(riskPerTrade > 0 && riskPerTrade <= 1) ? t.rTrade
+    : !(maxRisk > 0 && maxRisk <= 3) ? t.rMax
+    : riskPerTrade > maxRisk ? t.rOrder : ""
 
   async function loadStatus() {
     try {
@@ -61,7 +110,7 @@ export default function UserLiveSettingsPage() {
   // successful submit and are NEVER re-populated from the backend (status is
   // configured/paper booleans only — the raw values never round-trip back here).
   async function saveKeys() {
-    if (!apiKey || !secret) { setMsg({ type: "error", text: "ضع API Key و Secret" }); return }
+    if (!apiKey || !secret) { setMsg({ type: "error", text: t.needKeys }); return }
     setBusy(true); setMsg(null)
     try {
       const r = await fetch(`${API}/api/user/keys/save`, {
@@ -70,11 +119,11 @@ export default function UserLiveSettingsPage() {
       })
       const j = await r.json().catch(() => ({}))
       if (r.ok && j.ok) {
-        setMsg({ type: "success", text: "تم الحفظ بشكل مشفر ✓" })
+        setMsg({ type: "success", text: t.saved })
         setApiKey(""); setSecret(""); setPassphrase("")
         loadStatus()
       } else {
-        setMsg({ type: "error", text: j.detail || "فشل الحفظ" })
+        setMsg({ type: "error", text: j.detail || t.saveFailed })
       }
     } catch (e: any) {
       setMsg({ type: "error", text: String(e?.message || e) })
@@ -86,7 +135,7 @@ export default function UserLiveSettingsPage() {
   async function enableLive() {
     if (riskError) { setMsg({ type: "error", text: riskError }); return }
     if (confirmText !== CONSENT_TEXT || !agreeChecked) {
-      setMsg({ type: "error", text: "لازم تكتب نص الموافقة بالكامل وتعلّم المربع" })
+      setMsg({ type: "error", text: t.needConsent })
       return
     }
     setBusy(true); setMsg(null)
@@ -98,11 +147,11 @@ export default function UserLiveSettingsPage() {
       })
       const j = await r.json().catch(() => ({}))
       if (r.ok) {
-        setMsg({ type: "success", text: "تم تسجيل موافقتك على Binance Demo — اختار البوتات تحت" })
+        setMsg({ type: "success", text: t.consented })
         setConfirmText(""); setAgreeChecked(false)
         loadStatus()
       } else {
-        setMsg({ type: "error", text: j.detail || "فشل التفعيل" })
+        setMsg({ type: "error", text: j.detail || t.enableFailed })
       }
     } catch (e: any) {
       setMsg({ type: "error", text: String(e?.message || e) })
@@ -112,11 +161,11 @@ export default function UserLiveSettingsPage() {
   }
 
   async function disableLive() {
-    if (!confirm("إيقاف التداول الحقيقي الخاص بك الآن؟")) return
+    if (!confirm(t.confirmOff)) return
     setBusy(true)
     try {
       await fetch(`${API}/api/user/live/disable`, { method: "POST", headers: await authHeaders() })
-      setMsg({ type: "success", text: "تم إيقاف LIVE" })
+      setMsg({ type: "success", text: t.off })
       loadStatus()
     } finally {
       setBusy(false)
@@ -127,20 +176,20 @@ export default function UserLiveSettingsPage() {
   const consentReady = confirmText === CONSENT_TEXT && agreeChecked
   const exName = EXCHANGES.find(e => e.id === exchange)?.name
   const steps: [string, string, "done" | "now" | "todo"][] = [
-    ["مفاتيح المنصة", keysReady ? "اتحفظت · من غير سحب" : "احفظ مفاتيحك", keysReady ? "done" : "now"],
-    ["حدود المخاطرة", riskError ? riskError : `x${leverage} · ${riskPerTrade}% للصفقة`, !keysReady ? "todo" : riskError ? "now" : "done"],
-    ["الموافقة", consentReady ? "اتكتبت ✓" : "اقرا واكتب النص", !keysReady || riskError ? "todo" : consentReady ? "done" : "now"],
-    ["التفعيل", liveStatus.enabled ? `شغال على ${liveStatus.exchange}` : "مستني الخطوات اللي قبله", liveStatus.enabled ? "done" : consentReady ? "now" : "todo"],
+    [t.sKeys, keysReady ? t.sKeysDone : t.sKeysNow, keysReady ? "done" : "now"],
+    [t.sRisk, riskError ? riskError : t.sRiskDone(leverage, riskPerTrade), !keysReady ? "todo" : riskError ? "now" : "done"],
+    [t.sConsent, consentReady ? t.sConsentDone : t.sConsentNow, !keysReady || riskError ? "todo" : consentReady ? "done" : "now"],
+    [t.sOn, liveStatus.enabled ? t.sOnDone(liveStatus.exchange) : t.sOnWait, liveStatus.enabled ? "done" : consentReady ? "now" : "todo"],
   ]
   const riskFields: [string, number, (v: number) => void, number][] = [
-    ["الرافعة (1–5)", leverage, setLeverage, 1],
-    ["المخاطرة لكل صفقة % (لحد 1)", riskPerTrade, setRiskPerTrade, 0.05],
-    ["أقصى مخاطرة مفتوحة % (لحد 3)", maxRisk, setMaxRisk, 0.25],
+    [t.fLev, leverage, setLeverage, 1],
+    [t.fTrade, riskPerTrade, setRiskPerTrade, 0.05],
+    [t.fMax, maxRisk, setMaxRisk, 0.25],
   ]
   return (
-    <AppShell active="/settings/live">
-      <PageHeader title="بوتاتي على Binance (Demo)" subtitle="مفاتيح Binance Demo بتاعتك · فلوس وهمية · مستقل تمامًا عن حساب الإدارة"
-        status={<Pill tone={liveStatus.enabled ? "profit" : "neutral"}>{liveStatus.enabled ? `● ${liveStatus.environment === "demo" ? "Demo" : "LIVE"} على ${liveStatus.exchange}` : "مش مفعّل"}</Pill>}/>
+    <AppShell active="/settings/live" themed>
+      <PageHeader title={t.title} subtitle={t.subtitle}
+        status={<Pill tone={liveStatus.enabled ? "profit" : "neutral"}>{liveStatus.enabled ? t.onPill(liveStatus.environment === "demo" ? "Demo" : "LIVE", liveStatus.exchange) : t.notOn}</Pill>}/>
 
       <ol className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {steps.map(([t, h, s], i) => (
@@ -159,9 +208,9 @@ export default function UserLiveSettingsPage() {
         <div className="min-w-0 space-y-5">
           {/* Save/update own key — write-only form, never re-displayed */}
           <Card>
-            <CardHeader title="1 · مفاتيح المنصة" sub="بتتشفر على السيرفر ومش بترجع للمتصفح تاني"/>
+            <CardHeader title={t.c1} sub={t.c1Sub}/>
             <div className="grid gap-3 sm:grid-cols-2">
-              <label className="block"><span className={label}>المنصة</span>
+              <label className="block"><span className={label}>{t.exchange}</span>
                 <select value={exchange} onChange={e => setExchange(e.target.value)} className={field}>
                   {EXCHANGES.map(ex => <option key={ex.id} value={ex.id}>{ex.name}</option>)}
                 </select>
@@ -170,20 +219,20 @@ export default function UserLiveSettingsPage() {
                 <input value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="API key" className={`${field} font-mono`} dir="ltr"/>
               </label>
               <label className="relative block"><span className={label}>Secret</span>
-                <input value={secret} onChange={e => setSecret(e.target.value)} type={show ? "text" : "password"} placeholder="Secret" className={`${field} pr-10 font-mono`} dir="ltr"/>
-                <button type="button" onClick={() => setShow(!show)} aria-label={show ? "اخفي" : "اظهر"} className="absolute bottom-3 right-3 text-faint hover:text-ink">{show ? <EyeOff size={15}/> : <Eye size={15}/>}</button>
+                <input value={secret} onChange={e => setSecret(e.target.value)} type={show ? "text" : "password"} placeholder="Secret" className={`${field} pe-10 font-mono`} dir="ltr"/>
+                <button type="button" onClick={() => setShow(!show)} aria-label={show ? t.hide : t.show} className="absolute bottom-3 end-3 text-faint hover:text-ink">{show ? <EyeOff size={15}/> : <Eye size={15}/>}</button>
               </label>
               {exchange === "okx" && (
-                <label className="block"><span className={label}>Passphrase (OKX بس)</span>
+                <label className="block"><span className={label}>{t.okxOnly}</span>
                   <input value={passphrase} onChange={e => setPassphrase(e.target.value)} type={show ? "text" : "password"} className={`${field} font-mono`} dir="ltr"/>
                 </label>
               )}
             </div>
-            <button onClick={saveKeys} disabled={busy} className={`${btn.secondary} mt-4`}><ShieldCheck size={15}/> احفظ متشفّر</button>
+            <button onClick={saveKeys} disabled={busy} className={`${btn.secondary} mt-4`}><ShieldCheck size={15}/> {t.saveEnc}</button>
           </Card>
 
           <Card>
-            <CardHeader title="2 · حدود المخاطرة" sub="بتتسجل مع الموافقة · السيرفر بيرفض أي قيمة برا الحدود دي"/>
+            <CardHeader title={t.c2} sub={t.c2Sub}/>
             <div className="grid gap-3 sm:grid-cols-3">
               {riskFields.map(([l, v, set, step]) => (
                 <label key={l} className="block"><span className={label}>{l}</span>
@@ -192,56 +241,56 @@ export default function UserLiveSettingsPage() {
               ))}
             </div>
             <div className={`mt-4 rounded-xl px-4 py-3 text-[13px] ${riskError ? "bg-loss/10 text-loss" : "bg-surface2 text-muted"}`}>
-              {riskError || <>لو الوقف اتضرب في صفقة: بتخسر <b className="font-mono text-loss">{riskPerTrade}%</b> من رصيدك · كل الصفقات المفتوحة مع بعض: <b className="font-mono text-ink">{maxRisk}%</b> بالكتير</>}
+              {riskError || t.riskLine(riskPerTrade, maxRisk)}
             </div>
           </Card>
 
           {/* Explicit consent + enable/disable */}
           <Card className={liveStatus.enabled ? "border-profit/40" : "border-corona/30"}>
-            <CardHeader title="3 · الموافقة والتفعيل" sub="على مسؤوليتك الخاصة"/>
+            <CardHeader title={t.c3} sub={t.c3Sub}/>
             {liveStatus.enabled ? (
               <div className="space-y-3">
-                <div className="flex items-center gap-2 text-sm text-profit"><CheckCircle2 size={16}/> موافق على {liveStatus.exchange}{liveStatus.environment === "demo" ? " Demo" : ""} · x{liveStatus.leverage} · {liveStatus.risk_per_trade_pct}% للصفقة · أقصى {liveStatus.max_aggregate_risk_pct}%</div>
-                <button onClick={disableLive} disabled={busy} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-loss px-4 py-2.5 text-sm font-semibold text-void"><Power size={15}/> اسحب موافقتك (الدخول بيقف)</button>
+                <div className="flex items-center gap-2 text-sm text-profit"><CheckCircle2 size={16}/> {t.agreed(liveStatus.exchange, liveStatus.environment === "demo", liveStatus.leverage, liveStatus.risk_per_trade_pct, liveStatus.max_aggregate_risk_pct)}</div>
+                <button onClick={disableLive} disabled={busy} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-loss px-4 py-2.5 text-sm font-semibold text-void"><Power size={15}/> {t.withdraw}</button>
               </div>
             ) : (
               <div className="space-y-3">
-                <p className="text-[14px] leading-7 text-muted">معنى الموافقة: الحساب والمفاتيح بتوعك، وانت بتشغّل التداول الحقيقي بفلوسك وعلى مسؤوليتك، بعيد عن إدارة المنصة. وفاهم إن ده ممكن يخسّرك فلوس، وانت المسؤول بالكامل.</p>
-                <p className="text-[12px] text-faint">اكتب النص الإنجليزي ده بالظبط (السيرفر بيقارنه حرف بحرف):</p>
+                <p className="text-[14px] leading-7 text-muted">{t.meaning}</p>
+                <p className="text-[12px] text-faint">{t.typeExact}</p>
                 <div className="rounded-xl border border-line bg-void p-3 font-mono text-[12px] leading-6" dir="ltr">{CONSENT_TEXT}</div>
-                <textarea value={confirmText} onChange={e => setConfirmText(e.target.value)} placeholder="اكتب نص الموافقة بالكامل هنا" rows={3} className={`${field} font-mono text-[12px]`} dir="ltr"/>
+                <textarea value={confirmText} onChange={e => setConfirmText(e.target.value)} placeholder={t.typeHere} rows={3} className={`${field} font-mono text-[12px]`} dir="ltr"/>
                 <label className="flex items-center gap-2 text-sm font-semibold">
                   <input type="checkbox" checked={agreeChecked} onChange={e => setAgreeChecked(e.target.checked)} className="h-4 w-4 accent-corona"/>
-                  قريت وفاهم المخاطر بالكامل
+                  {t.understood}
                 </label>
-                <button onClick={enableLive} disabled={busy || !consentReady || !!riskError || !keysReady} className={`${btn.primary} w-full`}>وافق على {exName} Demo (فلوس وهمية)</button>
-                {!keysReady && <p className="text-[12px] text-faint">احفظ مفاتيح {exName} الأول.</p>}
+                <button onClick={enableLive} disabled={busy || !consentReady || !!riskError || !keysReady} className={`${btn.primary} w-full`}>{t.agreeBtn(exName)}</button>
+                {!keysReady && <p className="text-[12px] text-faint">{t.keysFirst(exName)}</p>}
               </div>
             )}
           </Card>
 
-          <UserBots consent={liveStatus} />
+          <UserBots consent={liveStatus} locale={locale} />
         </div>
 
         <Card>
-          <h2 className="mb-3 text-[17px] font-bold">حالة حسابك</h2>
+          <h2 className="mb-3 text-[17px] font-bold">{t.account}</h2>
           {/* Key-configured status per exchange — configured/paper booleans only, never the key value */}
           <div className="divide-y divide-line">
             {EXCHANGES.map(ex => {
               const st = status[ex.id] || { configured: false, paper: true }
               return (
                 <div key={ex.id} className="flex items-center justify-between py-2.5 text-[13px]">
-                  <span className="text-muted">مفاتيح {ex.name}</span>
-                  <Pill tone={st.configured ? (st.paper ? "corona" : "profit") : "neutral"}>{st.configured ? (st.paper ? "محفوظة · Paper" : "LIVE") : "مش موجودة"}</Pill>
+                  <span className="text-muted">{t.keysOf(ex.name)}</span>
+                  <Pill tone={st.configured ? (st.paper ? "corona" : "profit") : "neutral"}>{st.configured ? (st.paper ? t.keyPaper : "LIVE") : t.keyNone}</Pill>
                 </div>
               )
             })}
             <div className="flex items-center justify-between py-2.5 text-[13px]">
-              <span className="text-muted">التداول الحقيقي</span>
-              <Pill tone={liveStatus.enabled ? "profit" : "neutral"}>{liveStatus.enabled ? "شغال" : "مش مفعّل"}</Pill>
+              <span className="text-muted">{t.realTrading}</span>
+              <Pill tone={liveStatus.enabled ? "profit" : "neutral"}>{liveStatus.enabled ? t.running : t.notOn}</Pill>
             </div>
           </div>
-          <p className="mt-4 rounded-xl border border-corona/40 bg-corona/[0.06] p-3 text-[12px] leading-6 text-muted"><b className="text-corona">دلوقتي على Binance Demo بس</b> (فلوس وهمية): اعمل مفاتيح من وضع Demo Trading في Binance. الفلوس الحقيقية مقفولة لحد ما الاستراتيجيات تخلص قياسها.</p>
+          <p className="mt-4 rounded-xl border border-corona/40 bg-corona/[0.06] p-3 text-[12px] leading-6 text-muted">{t.demoOnly}</p>
         </Card>
       </div>
     </AppShell>

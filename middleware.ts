@@ -4,7 +4,7 @@ import { NextResponse, type NextRequest } from "next/server"
 // - the landing pages are their own language — / English, /ar Arabic — and remember it in the raqm-lang cookie;
 // - the pages already built in both languages (BILINGUAL) follow that cookie, Arabic when there is none;
 // - every other page is Arabic.
-const BILINGUAL = ["/dashboard", "/backtest"]
+const BILINGUAL = ["/dashboard", "/backtest", "/settings/live"]
 const COOKIE = "raqm-lang"
 
 export function middleware(req: NextRequest){
@@ -21,4 +21,4 @@ export function middleware(req: NextRequest){
 
 // Only the pages with a language to choose: every other page renders Arabic without the header (app/layout.tsx).
 // (A catch-all pattern lost its "\\." escape on the way and silently skipped /dashboard and /ar — keep it a list.)
-export const config = { matcher: ["/", "/ar", "/dashboard", "/dashboard/:path*", "/backtest"] }
+export const config = { matcher: ["/", "/ar", "/dashboard", "/dashboard/:path*", "/backtest", "/settings/live"] }
