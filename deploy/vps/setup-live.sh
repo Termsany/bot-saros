@@ -149,6 +149,8 @@ install -m 644 -o root -g root "$T/deploy/vps/raqm-realbot-export.service" /etc/
 install -m 644 -o root -g root "$T/deploy/vps/raqm-realbot-export.timer" /etc/systemd/system/raqm-realbot-export.timer
 install -m 644 -o root -g root "$T/deploy/vps/raqm-rebalance-check.service" /etc/systemd/system/raqm-rebalance-check.service
 install -m 644 -o root -g root "$T/deploy/vps/raqm-rebalance-check.timer" /etc/systemd/system/raqm-rebalance-check.timer
+install -m 644 -o root -g root "$T/deploy/vps/raqm-demo-weekly.service" /etc/systemd/system/raqm-demo-weekly.service
+install -m 644 -o root -g root "$T/deploy/vps/raqm-demo-weekly.timer" /etc/systemd/system/raqm-demo-weekly.timer
 # Phase 2 (docs/phase2-design.md): the users' bot template and the provisioner. The timer is NOT enabled here —
 # switching users' bots on is a deliberate step: systemctl enable --now raqm-users-provision.timer
 install -m 644 -o root -g root "$T/deploy/vps/raqm-user@.service" /etc/systemd/system/raqm-user@.service
@@ -167,6 +169,7 @@ systemctl enable --now raqm-watchdog.timer >/dev/null 2>&1 || echo "warning: raq
 systemctl enable --now raqm-backup.timer >/dev/null 2>&1 || echo "warning: raqm-backup.timer not enabled" >&2
 systemctl enable --now raqm-realbot-export.timer >/dev/null 2>&1 || echo "warning: raqm-realbot-export.timer not enabled" >&2
 systemctl enable --now raqm-rebalance-check.timer >/dev/null 2>&1 || echo "warning: raqm-rebalance-check.timer not enabled" >&2
+systemctl enable --now raqm-demo-weekly.timer >/dev/null 2>&1 || echo "warning: raqm-demo-weekly.timer not enabled" >&2
 systemctl enable --now raqm-watchdog-users.timer >/dev/null 2>&1 || echo "warning: raqm-watchdog-users.timer not enabled" >&2
 systemctl enable --now raqm-backup-users.timer >/dev/null 2>&1 || echo "warning: raqm-backup-users.timer not enabled" >&2
 # new group lists reach a process only when it starts: the API (try-restart: only if running). The live bots are not
