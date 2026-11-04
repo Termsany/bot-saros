@@ -6,7 +6,7 @@ import { Pill } from "@/components/ui"
 import { AccountMenu, signOut } from "@/components/AccountMenu"
 import { apiIsAdmin } from "@/lib/api"
 import { authHeaders, getMyPlan, getUser, type MyPlan } from "@/lib/supabase"
-import { Activity, Bot, CandlestickChart, House, KeyRound, LayoutDashboard, LogOut, ShieldCheck, Sparkles } from "lucide-react"
+import { Activity, Bot, CandlestickChart, House, LayoutDashboard, LogOut, ShieldCheck, Sparkles } from "lucide-react"
 
 type NavItem = { href: string, label: string, icon: typeof House, adminOnly?: boolean }
 const GROUPS: { label: string, items: NavItem[] }[] = [
@@ -17,8 +17,7 @@ const GROUPS: { label: string, items: NavItem[] }[] = [
     { href: "/llm-lab", label: "مختبر AI", icon: Sparkles },
   ] },
   { label: "الحساب", items: [
-    { href: "/settings/keys", label: "مفاتيح المنصات", icon: KeyRound },
-    { href: "/settings/live", label: "التداول الحقيقي", icon: Bot },
+    { href: "/settings/live", label: "بوتاتي على Binance (Demo)", icon: Bot },
     { href: "/admin", label: "الإدارة", icon: ShieldCheck, adminOnly: true },
   ] },
 ]

@@ -37,6 +37,17 @@ test("the dashboard shows the real-money bot first, the paper bots apart", async
   await expectNoSideScroll(page)
 })
 
+test("one place for keys: the old keys page is out of the menus", async ({ page }) => {
+  await page.goto("/dashboard")
+  await expect(page.locator('a[href="/settings/live"]').first()).toBeAttached()
+  await expect(page.locator('a[href="/settings/live"]').first()).toContainText("بوتاتي على Binance (Demo)")
+  await expect(page.locator('a[href="/settings/keys"]')).toHaveCount(0)        // 2026-11-04: it fed nothing
+  await expect(page.getByText("مفاتيح المنصات")).toHaveCount(0)
+  await page.goto("/settings/keys")                                            // an old link explains where keys are
+  await expect(page.getByText("الصفحة دي اتشالت")).toBeVisible()
+  await expect(page.locator("input")).toHaveCount(0)
+})
+
 test("realbot.da3m.io shows the positions, as cards on a phone", async ({ page, isMobile }) => {
   await page.goto("http://realbot.test/")
   await expect(page.getByText("AGT/USDT").first()).toBeVisible()

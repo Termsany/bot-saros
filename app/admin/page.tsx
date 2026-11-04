@@ -21,7 +21,7 @@ const sections: [string, string, React.ComponentType<{ size?: number; strokeWidt
   ["users", "المستخدمون والباقات", UsersIcon],
   ["finance", "المالية", CircleDollarSign],
   ["live", "البوتات الحية", Bot],
-  ["real", "التداول الحقيقي", WalletCards],
+  ["real", "البوت الحقيقي (حسابي)", WalletCards],
   ["strategies", "الاستراتيجيات", BarChart3],
   ["paper", "المحفظة الورقية", WalletCards],
   ["risk", "المخاطر والأمان", ShieldCheck],
@@ -396,7 +396,7 @@ export default function AdminPage() {
     <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} items={paletteItems} />
     <AppShell active="/admin">
       <div className="space-y-5">
-        <PageHeader title="مركز تحكم الإدارة" subtitle="تشغيل ومراقبة آمنة · بيانات حقيقية · التداول الحقيقي مقفول" alerts={false}
+        <PageHeader title="مركز تحكم الإدارة" subtitle="تشغيل ومراقبة آمنة · بيانات حقيقية · بوتك بالفلوس الحقيقية في «البوت الحقيقي (حسابي)»" alerts={false}
           status={<>
             <GlobalHealthDot severity={globalSeverity} />
             <Pill tone="profit"><span className="h-2 w-2 rounded-full bg-profit" />آخر تحديث <b className="font-mono tabular">{lastRefreshed ? lastRefreshed.toLocaleTimeString("en-GB") : "—"}</b></Pill>
