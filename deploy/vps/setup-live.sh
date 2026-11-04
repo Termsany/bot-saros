@@ -47,6 +47,8 @@ install -m 644 -o root -g root "$T/scripts/backup.py" "$L/scripts/backup.py"    
 install -m 644 -o root -g root "$T/scripts/provision_users.py" "$L/scripts/provision_users.py"   # Phase 2 users' bots (root)
 install -m 644 -o root -g root "$T/scripts/live_preflight.py" "$L/scripts/live_preflight.py"     # checks before real money (root, read only)
 install -m 644 -o root -g root "$T/scripts/realbot_export.py" "$L/scripts/realbot_export.py"     # realbot.da3m.io's live.json (raqmlive)
+install -m 644 -o root -g root "$T/scripts/rebalance_check.py" "$L/scripts/rebalance_check.py"   # the real basket vs Binance after a rebalance (read only)
+install -m 644 -o root -g root "$T/scripts/restore_check.py" "$L/scripts/restore_check.py"     # checks a backup restores (docs/restore.md)
 # the owner's helpers (run by hand with sudo): a new Demo key (HMAC or a server-made Ed25519 key), the evidence reviewers
 install -d -o root -g root -m 755 /usr/local/lib/raqm
 install -m 644 -o root -g root "$T/deploy/vps/tools/set_demo_keys.sh" /usr/local/lib/raqm/set_demo_keys.sh
@@ -133,6 +135,8 @@ install -d -o raqmlive -g www-data -m 755 /var/www/realbot.da3m.io
 install -m 644 -o root -g root "$T/deploy/vps/realbot/index.html" /var/www/realbot.da3m.io/index.html
 install -m 644 -o root -g root "$T/deploy/vps/raqm-realbot-export.service" /etc/systemd/system/raqm-realbot-export.service
 install -m 644 -o root -g root "$T/deploy/vps/raqm-realbot-export.timer" /etc/systemd/system/raqm-realbot-export.timer
+install -m 644 -o root -g root "$T/deploy/vps/raqm-rebalance-check.service" /etc/systemd/system/raqm-rebalance-check.service
+install -m 644 -o root -g root "$T/deploy/vps/raqm-rebalance-check.timer" /etc/systemd/system/raqm-rebalance-check.timer
 # Phase 2 (docs/phase2-design.md): the users' bot template and the provisioner. The timer is NOT enabled here —
 # switching users' bots on is a deliberate step: systemctl enable --now raqm-users-provision.timer
 install -m 644 -o root -g root "$T/deploy/vps/raqm-user@.service" /etc/systemd/system/raqm-user@.service
@@ -150,6 +154,7 @@ systemctl daemon-reload
 systemctl enable --now raqm-watchdog.timer >/dev/null 2>&1 || echo "warning: raqm-watchdog.timer not enabled" >&2
 systemctl enable --now raqm-backup.timer >/dev/null 2>&1 || echo "warning: raqm-backup.timer not enabled" >&2
 systemctl enable --now raqm-realbot-export.timer >/dev/null 2>&1 || echo "warning: raqm-realbot-export.timer not enabled" >&2
+systemctl enable --now raqm-rebalance-check.timer >/dev/null 2>&1 || echo "warning: raqm-rebalance-check.timer not enabled" >&2
 systemctl enable --now raqm-watchdog-users.timer >/dev/null 2>&1 || echo "warning: raqm-watchdog-users.timer not enabled" >&2
 systemctl enable --now raqm-backup-users.timer >/dev/null 2>&1 || echo "warning: raqm-backup-users.timer not enabled" >&2
 # new group lists reach a process only when it starts: the API (try-restart: only if running). The live bots are not
