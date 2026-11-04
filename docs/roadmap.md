@@ -13,8 +13,8 @@ Owner = only the owner can do it (keys, Binance, money, names). Claude = code, s
 |---|---|---|---|
 | A1 | ~~Demo measurement restarted~~ (6 strategies back on, 2026-11-03 21:55 UTC) | Claude, owner's go | ✓ every Demo bot's `entry_block` empty |
 | A2 | ~~Close the leftover Demo `momentum_ls` legs~~ (9, not 10: closed 2026-11-03 ~22:02 UTC by the bot's own rebalance exit, net ≈ −2.3 USDT; no order left on them, Demo ledger holds only trend_daily 4 + ratio_trend 2) | Claude, owner's go | ✓ Demo account has only legs some bot owns |
-| A3 | Revoke the old main-account API key on Binance | Owner | key gone from Binance's API list |
-| A4 | Put real reviewer names in `readiness_evidence.json` | Owner | evidence names people, digest re-made |
+| A3 | ~~Revoke the old main-account API key on Binance~~ (owner, 2026-11-04; on the way the Demo key was deleted too and replaced by a server-made Ed25519 key, PRs #97–#98) | Owner | ✓ key gone from Binance's API list |
+| A4 | ~~Put real reviewer names in `readiness_evidence.json`~~ — the truth, not placeholders: "Mustafa (owner, not independent)" and "Claude Opus 5.5 (AI code review, not independent)" (2026-11-04, `set_reviewers.py`). **No independent human review exists: accepted by the owner at this size; required before C** | Owner | ✓ evidence names who reviewed, digest re-made |
 | A5 | ~~Test that a live-bot problem reaches Telegram~~ (2026-11-03: the watchdog's own check and send on a copy of the real status with one stop marked unverified; alert + clear received by the owner) | Claude | ✓ message received and cleared |
 | A6 | ~~Demo/real can't be mixed up on the dashboard~~: the card says which account it changes (red = real, blue = Demo), the confirm lists what starts **and what stops**, the 15 s refresh no longer wipes unsaved switches, a late answer for the other tab is dropped | Claude | ✓ PR merged |
 | A7 | **Watch the first real rebalance** (Mon 00:00 UTC = 02:00 Cairo): old legs closed with fills/fees/funding, no old stop left, 10 new legs with stops, no recovery | Claude + owner | checklist in the plan §1 all ticked |
@@ -35,6 +35,8 @@ About 30 closed real legs. Compare with the baseline (win rate ≈ 49 %, PF ≈ 
 read against the 7-weekday average, PF ≈ 1.15):
 - **within it** → raise one step: $26 → $40 per leg, ceilings and capital recomputed, preflight 13/13, 3 more rebalances;
 - **far below it** → switch `momentum_ls` off on real money (not re-tuned), back to Demo only.
+
+**Before any step up: an independent review** of the order path by a programmer other than the owner, its findings fixed, and the evidence's reviewers updated (A4 records that none exists yet).
 
 Never more than one step up at a time, and never inside the week of a loss bigger than the basket's normal range.
 
