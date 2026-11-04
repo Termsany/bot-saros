@@ -5,7 +5,7 @@ import { Logo } from "@/components/Logo"
 import { Pill } from "@/components/ui"
 import { AccountMenu, signOut } from "@/components/AccountMenu"
 import { apiIsAdmin } from "@/lib/api"
-import { getMyPlan, getUser, type MyPlan } from "@/lib/supabase"
+import { authHeaders, getMyPlan, getUser, type MyPlan } from "@/lib/supabase"
 import { Activity, Bot, CandlestickChart, House, KeyRound, LayoutDashboard, LogOut, ShieldCheck, Sparkles } from "lucide-react"
 
 type NavItem = { href: string, label: string, icon: typeof House, adminOnly?: boolean }
@@ -38,6 +38,28 @@ function NavLink({ item, on }: { item: NavItem, on: boolean }){
       {on && <i className="absolute left-2 top-1/2 h-[18px] w-[3px] -translate-y-1/2 rounded bg-corona"/>}
       <Icon size={20} strokeWidth={1.8} className={on ? "text-corona" : ""}/><span>{item.label}</span>
     </a>
+  )
+}
+
+/** A paid subscriber's way out (terms: cancel anytime): Stripe's own portal, for the customer on their profile. */
+function ManageSubscription(){
+  const [state, setState] = useState<"" | "loading" | string>("")
+  async function open(){
+    setState("loading")
+    try{
+      const r = await fetch("/api/stripe/portal", { method: "POST", headers: await authHeaders() })
+      const j = await r.json().catch(() => ({}))
+      if(r.ok && j.url){ window.location.href = j.url; return }
+      setState(j.error || "مش متاحة دلوقتي")
+    }catch{ setState("مش متاحة دلوقتي") }
+  }
+  return (
+    <div>
+      <button onClick={open} disabled={state === "loading"} className="block w-full rounded-lg border border-line py-2 text-center text-xs font-semibold text-muted transition hover:text-ink disabled:opacity-60">
+        {state === "loading" ? "بيفتح…" : "إدارة الاشتراك / الإلغاء"}
+      </button>
+      {state && state !== "loading" && <p className="mt-1.5 text-[11px] leading-5 text-loss">{state}</p>}
+    </div>
   )
 }
 
@@ -84,6 +106,7 @@ export function AppShell({ active, tier: tierProp, engine, nextIn, children }: {
               باقة {gift.tier} هدية · فاضل <b className="font-mono">{Math.max(0, Math.ceil((new Date(gift.expires_at).getTime() - Date.now()) / 86_400_000))}</b> يوم
             </div>}
             {(tier !== "elite" || gift) && <a href="/#pricing" className="block rounded-lg bg-corona py-2 text-center text-xs font-bold text-void transition hover:bg-corona-soft">{gift ? "اشترك قبل ما الهدية تخلص" : "رقّي باقتك"}</a>}
+            {tier !== "free" && !gift && <ManageSubscription/>}
             {engine && (
               <div className={`flex items-center justify-between rounded-lg px-3 py-2 text-xs ${engine.running ? "bg-profit/10 text-profit" : "bg-line/60 text-muted"}`}>
                 <span className="font-semibold">{engine.running ? "● المحرك شغال" : "○ المحرك واقف"}</span>
