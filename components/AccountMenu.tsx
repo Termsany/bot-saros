@@ -1,6 +1,6 @@
 "use client"
 import { useEffect, useRef, useState } from "react"
-import { Bot, ChevronDown, KeyRound, LayoutDashboard, LogOut, ShieldCheck } from "lucide-react"
+import { Bot, ChevronDown, LayoutDashboard, LogOut, ShieldCheck } from "lucide-react"
 import { Pill } from "@/components/ui"
 import { apiIsAdmin } from "@/lib/api"
 import { getMyTier, supabase } from "@/lib/supabase"
@@ -44,8 +44,7 @@ export function AccountMenu({ email, tier, isAdmin, compact = false }: { email: 
   const initial = (email.trim()[0] || "?").toUpperCase()
   const links = [
     { href: "/dashboard", label: "لوحة التحكم", icon: LayoutDashboard },
-    { href: "/settings/keys", label: "مفاتيح المنصات", icon: KeyRound },
-    { href: "/settings/live", label: "التداول الحقيقي", icon: Bot },
+    { href: "/settings/live", label: "بوتاتي على Binance (Demo)", icon: Bot },
     ...(isAdmin ? [{ href: "/admin", label: "الإدارة", icon: ShieldCheck }] : []),
   ]
   return (

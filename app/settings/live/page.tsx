@@ -139,7 +139,7 @@ export default function UserLiveSettingsPage() {
   ]
   return (
     <AppShell active="/settings/live">
-      <PageHeader title="التداول الحقيقي على حسابك" subtitle="حسابك، مفاتيحك، قرارك · مستقل تمامًا عن حساب الإدارة"
+      <PageHeader title="بوتاتي على Binance (Demo)" subtitle="مفاتيح Binance Demo بتاعتك · فلوس وهمية · مستقل تمامًا عن حساب الإدارة"
         status={<Pill tone={liveStatus.enabled ? "profit" : "neutral"}>{liveStatus.enabled ? `● ${liveStatus.environment === "demo" ? "Demo" : "LIVE"} على ${liveStatus.exchange}` : "مش مفعّل"}</Pill>}/>
 
       <ol className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
