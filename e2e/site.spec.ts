@@ -32,7 +32,7 @@ test("the Arabic landing is right to left and says the same", async ({ page }) =
 test("the hero's live card shows the real basket, and the theme switch flips light and dark", async ({ page }) => {
   await page.goto("/")
   const card = page.getByTestId("live-card")
-  await expect(card.getByText("AGT", { exact: true })).toBeVisible()          // from /api/realbot (e2e/fixtures.ts REAL)
+  await expect(card.getByText("AGT/USDT", { exact: true })).toBeVisible()     // from /api/realbot (e2e/fixtures.ts REAL)
   await expect(card.getByText("Next rebalance", { exact: false })).toBeVisible()
   await expect(page.getByTestId("real-vs-backtest").getByText("after 30 trades (1/30)").first()).toBeVisible()
   const html = page.locator("html")
