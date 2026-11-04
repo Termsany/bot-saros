@@ -1,0 +1,24 @@
+# The real momentum_ls basket against Binance after the weekly rebalance (scripts/rebalance_check.py): read only, the
+# result to the watchdog's Telegram chat. Run by raqm-rebalance-check.timer, or by hand: systemctl start raqm-rebalance-check
+[Unit]
+Description=Raqm: check the real momentum_ls rebalance against Binance (read only)
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=raqmlive
+Group=raqmlive
+WorkingDirectory=/opt/raqm-live
+EnvironmentFile=/opt/raqm-live/.env.real
+EnvironmentFile=-/opt/raqm-live/.env.telegram
+Environment=BINANCE_ENV=live
+UnsetEnvironment=PYTHONPATH PYTHONHOME PYTHONSTARTUP PYTHONUSERBASE PYTHONINSPECT
+# exit 1 = something to look at (already sent to Telegram): not a unit failure
+SuccessExitStatus=1
+ExecStart=/opt/raqm-live/venv/bin/python -E -s scripts/rebalance_check.py --rebalance-day --telegram
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+# reads only; the SQLite-free files it opens need no write access
+ReadOnlyPaths=/opt/raqm-live /opt/raqm-ipc

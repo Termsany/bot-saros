@@ -1,0 +1,11 @@
+# 20 minutes after the weekly rebalance (bot.MOM weekday 0 = Monday, 00:00 UTC): the bot's first cycle after midnight
+# closes and opens the basket in a few minutes.
+[Unit]
+Description=Raqm: check the real rebalance on Mondays at 00:20 UTC
+
+[Timer]
+OnCalendar=Mon *-*-* 00:20:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target
