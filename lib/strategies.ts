@@ -58,6 +58,8 @@ export const LIVE_BOTS: LiveStrategy[] = [...STRATEGIES, ...EXPERIMENTS]
 export const strategyName = (s: { name: string; nameAr: string }, locale: "en" | "ar") => locale === "en" ? s.name : s.nameAr
 /** Every strategy's Arabic name, by id (for pages that only have the id). */
 export const NAME_AR: Record<string, string> = Object.fromEntries(CATALOG_STRATEGIES.map(c => [c.id, c.nameAr]))
+/** …and its English name. */
+export const NAME_EN: Record<string, string> = Object.fromEntries(CATALOG_STRATEGIES.map(c => [c.id, c.name]))
 
 /** Text colour for a profit factor / Sharpe: green good, gold roughly flat, red losing. */
 export const pfTone = (pf: number) => pf >= 1.05 ? "text-profit" : pf >= 0.95 ? "text-corona" : "text-loss"
