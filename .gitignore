@@ -42,3 +42,7 @@ risk_state*.sqlite3
 *.log
 
 testnet_e2e_runs/
+
+# Playwright (npm run test:e2e)
+playwright-report/
+test-results/
