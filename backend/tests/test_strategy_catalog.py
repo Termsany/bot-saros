@@ -61,6 +61,14 @@ class StrategyCatalogTests(unittest.TestCase):
         self.assertTrue({s["id"] for s in CAT if s["planned"]} <= set(stats))
         self.assertEqual(set(assigned("research/baseline_stats.py", "LABELS")), set(IDS))
 
+    def test_no_page_keeps_its_own_strategy_names(self):
+        """The site's names come from the file (lib/strategies.ts NAME_AR): a page with its own list drifts (the admin
+        page had two, with different names for the same strategy, 2026-11-04)."""
+        for f in [*(ROOT / "components").glob("*.tsx"), *(ROOT / "app").rglob("*.tsx")]:
+            text = f.read_text(encoding="utf-8")
+            listed = re.findall(r'\b(?:%s)\s*:\s*"[^"]*[\u0600-\u06FF][^"]*"' % "|".join(IDS), text)
+            self.assertEqual(listed, [], f"{f.relative_to(ROOT)} names strategies itself: use NAME_AR from lib/strategies")
+
     def test_the_plans_unlock_exactly_the_planned_ones(self):
         ts = (ROOT / "lib" / "strategies.ts").read_text(encoding="utf-8")
         counts = [int(c) for c in re.findall(r'count:(\d+)', ts)]

@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { apiLiveStatus, apiLiveStrategies, apiSetCapital, apiSetLimits, apiSetLiveStrategies } from "@/lib/api"
 import { LivePositions } from "@/components/LivePositions"
+import { NAME_AR } from "@/lib/strategies"
 import { DemoMeasurement } from "@/components/DemoMeasurement"
 import { Card, CardHeader, Pill, Toggle, btn, field, label, type Tone } from "@/components/ui"
 
@@ -164,10 +165,8 @@ function LimitsPanel({ env, cfg, chosen, reload }: { env: "demo"|"live", cfg: an
   )
 }
 
-export const LABELS: Record<string, string> = {
-  trend_daily: "ترند يومي", vol_breakout: "اختراق التقلب", rsi2_pullback: "RSI2 الارتداد", trend_breakout: "اختراق الترند",
-  listing_short: "شورت العملات الجديدة", momentum_ls: "مومنتم لونج/شورت", ratio_trend: "ترند النسبة",
-}
+/** The strategies' names: the one list (lib/strategies.json, development-plan 3.4), as everywhere on the site. */
+export const LABELS: Record<string, string> = NAME_AR
 
 /** The drawing only (no fetching), so it can be checked with sample data. */
 export function LiveStrategiesView({ env, onEnv, cfg, status, chosen, onToggle, account, onAccount, onSave, saving, msg, reload }: {
