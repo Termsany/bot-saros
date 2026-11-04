@@ -5,6 +5,8 @@ working there, and only then the real bot, outside a rebalance. Each step ships 
 
 Where things stand: [production-readiness.md](production-readiness.md). The small-size plan: [live-small-size-plan.md](live-small-size-plan.md).
 
+The whole application, all tracks: [development-plan.md](development-plan.md).
+
 Owner = only the owner can do it (keys, Binance, money, names). Claude = code, server, checks.
 
 ## A. Protect the live bot — now → Monday 2026-11-09
