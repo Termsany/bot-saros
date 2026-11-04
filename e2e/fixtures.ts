@@ -26,13 +26,28 @@ export const REAL = () => ({
 const json = (body: unknown) => ({ status: 200, contentType: "application/json", body: JSON.stringify(body) })
 const REALBOT_HTML = readFileSync(path.join(__dirname, "..", "deploy", "vps", "realbot", "index.html"), "utf-8")
 
+/** A fake API for a test: (method, path, body) → a JSON answer, or undefined for a 404. Every call is recorded. */
+export type ApiCall = { method: string, path: string, query: string, body: any }
+export type ApiHandler = (call: ApiCall) => unknown | Promise<unknown>
+const SITE_PORT = "3100"     // playwright.config.ts: the site; any other localhost port is the (fake) API
+
 /** Answers what the pages need, blocks every other outside request (Binance, Supabase, the API, fonts). */
-async function offline(page: Page){
-  await page.route("**/*", route => {
-    const url = new URL(route.request().url())
-    if (url.hostname === "localhost") {
+async function offline(page: Page, api?: { handler: ApiHandler, calls: ApiCall[] }){
+  await page.route("**/*", async route => {
+    const req = route.request(), url = new URL(req.url())
+    if (url.hostname === "localhost" && url.port === SITE_PORT) {
       if (url.pathname === "/api/realbot") return route.fulfill(json(REAL()))
       return route.continue()
+    }
+    // the signed-in user, for Supabase's /auth/v1/user (the session itself comes from storage: signInAsAdmin)
+    if (api && url.pathname === "/auth/v1/user") return route.fulfill(json(ADMIN_USER))
+    if (api && url.pathname.startsWith("/api/")) {
+      if (req.method() === "OPTIONS") return route.fulfill({ status: 204, headers: CORS })
+      const call = { method: req.method(), path: url.pathname, query: url.search, body: req.postDataJSON?.() ?? null }
+      api.calls.push(call)
+      const answer = await api.handler(call)
+      return answer === undefined ? route.fulfill({ status: 404, headers: CORS, contentType: "application/json", body: "{}" })
+        : route.fulfill({ status: 200, headers: CORS, contentType: "application/json", body: JSON.stringify(answer) })
     }
     if (url.hostname === "bot.da3m.io") return route.fulfill(json(PAPER(url.pathname.replace(/^\/|\.json$/g, ""))))
     if (url.hostname === "realbot.test") {
@@ -45,6 +60,31 @@ async function offline(page: Page){
 
 export const test = base.extend<{ page: Page }>({
   page: async ({ page }, use) => { await offline(page); await use(page) },
+})
+
+const CORS = { "access-control-allow-origin": "*", "access-control-allow-headers": "authorization, content-type", "access-control-allow-methods": "GET, POST, PATCH" }
+export const ADMIN_USER = { id: "00000000-0000-4000-8000-0000000000ad", email: "admin@example.com", aud: "authenticated", role: "authenticated",
+  email_confirmed_at: "2026-01-01T00:00:00Z", app_metadata: {}, user_metadata: {}, created_at: "2026-01-01T00:00:00Z" }
+
+/** A Supabase session in the browser's storage (any project's key), so the site sends a bearer token; nothing checks
+ *  it but the fake API. Never a real token. */
+async function signInAsAdmin(page: Page){
+  const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url")
+  const exp = Math.floor(Date.now() / 1000) + 3600
+  const token = `${b64({ alg: "HS256", typ: "JWT" })}.${b64({ sub: ADMIN_USER.id, email: ADMIN_USER.email, exp, role: "authenticated" })}.e2e`
+  const session = { access_token: token, refresh_token: "e2e-refresh", token_type: "bearer", expires_in: 3600, expires_at: exp, user: ADMIN_USER }
+  await page.addInitScript(raw => {
+    const get = Storage.prototype.getItem
+    Storage.prototype.getItem = function(key: string){
+      return /^sb-.*-auth-token$/.test(key) ? (get.call(this, key) ?? raw) : get.call(this, key)
+    }
+  }, JSON.stringify(session))
+}
+
+/** The admin signed in, against a fake API: `api.handler` answers, `api.calls` records what the page sent. */
+export const adminTest = base.extend<{ page: Page, api: { handler: ApiHandler, calls: ApiCall[] } }>({
+  api: async ({}, use) => { await use({ handler: () => undefined, calls: [] }) },
+  page: async ({ page, api }, use) => { await signInAsAdmin(page); await offline(page, api); await use(page) },
 })
 export { expect }
 
