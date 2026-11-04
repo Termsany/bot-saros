@@ -149,6 +149,7 @@ let D = null, live = {}, prev = {}, dirty = false, ws = null, subs = new Set()
 // (lib/demo-baseline.json "momentum_ls" "all"; backend/tests/test_realbot_summary.py keeps these equal to it).
 const BACKTEST = {momentum_ls: {win_rate: 48.7, avg_win_pct: 36.3, avg_loss_pct: -29.0, profit_factor: 1.19}}
 const SAMPLE = 30          // closed trades before a comparison means anything (the Demo measurement's rule)
+const ltr = v => `<span dir="ltr">${v}</span>`   // a number or date inside Arabic text keeps its own order
 const monthOf = iso => new Date(iso).toLocaleDateString("ar-EG", {month: "long", year: "numeric", timeZone: "UTC", numberingSystem: "latn"})
 
 /** Every closed trade, by month, and the whole run next to the backtest (development-plan 7.1). */
@@ -173,12 +174,12 @@ function summary(bots){
   const vsCard = (label, val, cls, btText) => `<div class="card kpi"><div class="label">${label}</div><div class="value mono ${cls}">${val}</div><div class="bt">${btText}</div></div>`
   const small = all.n < SAMPLE
   return `<section>
-    <div class="head"><h2>الملخص من أول ما اشتغل</h2><span class="count">من ${day(opened[0])} · ${all.n} صفقة مقفولة</span></div>
+    <div class="head"><h2>الملخص من أول ما اشتغل</h2><span class="count">من ${ltr(day(opened[0]))} · ${all.n} صفقة مقفولة</span></div>
     <div class="vs">
       ${vsCard("الصافي المحقق", usd(all.net), tone(all.net), "بعد الرسوم والـ funding")}
-      ${vsCard("نسبة الكسب", all.win == null ? "—" : all.win.toFixed(1) + "%", "", `الباكتست ${bt.win_rate ?? "—"}%`)}
-      ${vsCard("Profit factor", all.pf == null ? "—" : all.pf.toFixed(2), all.pf == null ? "" : all.pf >= 1 ? "profit" : "loss", `الباكتست ${bt.profit_factor ?? "—"}`)}
-      ${vsCard("متوسط الكسب / الخسارة", `${pct(all.avgWin)} / ${pct(all.avgLoss)}`, "", `الباكتست +${bt.avg_win_pct ?? "—"}% / ${bt.avg_loss_pct ?? "—"}% من الهامش`)}
+      ${vsCard("نسبة الكسب", all.win == null ? "—" : all.win.toFixed(1) + "%", "", `الباكتست ${ltr((bt.win_rate ?? "—") + "%")}`)}
+      ${vsCard("Profit factor", all.pf == null ? "—" : all.pf.toFixed(2), all.pf == null ? "" : all.pf >= 1 ? "profit" : "loss", `الباكتست ${ltr(bt.profit_factor ?? "—")}`)}
+      ${vsCard("متوسط الكسب / الخسارة", `${pct(all.avgWin)} / ${pct(all.avgLoss)}`, "", `الباكتست ${ltr(`+${bt.avg_win_pct ?? "—"}% / ${bt.avg_loss_pct ?? "—"}%`)} من الهامش`)}
     </div>
     ${small ? `<p class="warn">لسه ${all.n} صفقة من ${SAMPLE} على الأقل: الأرقام دي لسه مش كفاية نحكم بيها على الاستراتيجية — الباكتست نفسه فيه أسابيع خسارة كتير.</p>` : ""}
     <div class="table" style="margin-top:12px"><table><thead><tr><th>الشهر</th><th>صفقات مقفولة</th><th>أيام قفل</th><th>نسبة الكسب</th><th>الصافي $</th><th>متوسط الصفقة (من الهامش)</th></tr></thead>
