@@ -139,9 +139,10 @@ def rate_limit(user_id: str, key: str, max_calls: int, per_s: int):
 
 # Plan limits — enforced here, not only in the UI (a plan unlocks the first N of this list).
 # Keep in sync with lib/strategies.ts STRATEGIES order and TIERS counts: the four paper bots on the VPS.
-STRATEGY_ORDER = ["trend_daily", "momentum_ls", "listing_short", "ratio_trend"]
+from app import strategy_catalog
+STRATEGY_ORDER = list(strategy_catalog.PLANNED)   # lib/strategies.json, the same order as the site
 TIER_STRATEGY_COUNT = {"free": 1, "starter": 2, "pro": 3, "elite": 4}
-SOLO_STRATEGIES = ("trend_daily", "momentum_ls", "listing_short", "ratio_trend")  # own entries/exits
+SOLO_STRATEGIES = strategy_catalog.PLANNED  # own entries/exits
 PER_COIN = ("trend_daily",)  # the others trade a whole portfolio of coins — no single-coin backtest
 # Max backtest range in days (end date inclusive). None = unlimited. Keep in sync with lib/strategies.ts BACKTEST_DAYS.
 TIER_BACKTEST_DAYS = {"free": 7, "starter": 30, "pro": 90, "elite": None}
@@ -859,7 +860,7 @@ async def save_settings(req: SettingsReq, user: dict = Depends(require_user)):
 BOT_PUBLIC_DIR = Path(os.getenv("BOT_PUBLIC_DIR", "/var/www/bot.da3m.io"))      # the bots' public JSON (read only)
 PAPER_IPC = Path(os.getenv("RAQM_PAPER_IPC", "/opt/raqm-ipc-paper"))             # close requests to the paper bots
 PAPER_BOTS = ("status", "momentum", "listing", "ratio", "breakout", "rsi2", "tbreak")
-STRATEGY_FILE = {"trend_daily": "status", "momentum_ls": "momentum", "listing_short": "listing", "ratio_trend": "ratio"}
+STRATEGY_FILE = {s: strategy_catalog.LIVE_FILE[s] for s in strategy_catalog.PLANNED}
 COIN_RE = re.compile(r"^[A-Z0-9]{1,20}/USDT(:USDT)?$")
 PAIR_RE = re.compile(r"^[A-Z0-9]{1,20}/USDT:USDT\|[A-Z0-9]{1,20}/USDT:USDT$")
 
@@ -1125,7 +1126,7 @@ async def llm_evolve(prompt: str = "innovative crypto futures strategy combining
 IPC_DIR = Path(os.getenv("RAQM_IPC_DIR", "/opt/raqm-ipc"))
 LIVE_SYMBOL_RE = re.compile(r"^[A-Z0-9]{1,20}/USDT(:USDT)?$")
 # Keep in sync with bot.LIVE_READY_STRATEGIES (test_admin_live_strategies.py checks it)
-LIVE_STRATEGIES = ("trend_daily", "vol_breakout", "rsi2_pullback", "trend_breakout", "listing_short", "momentum_ls", "ratio_trend")
+LIVE_STRATEGIES = strategy_catalog.IDS
 
 class LiveCloseReq(BaseModel):
     strategy: str = Field(pattern=r"^[a-z0-9_]{1,30}$")

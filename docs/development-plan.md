@@ -40,7 +40,7 @@ The rule from the roadmap holds everywhere: the real bot is touched last, Demo f
 | 3.1 | PR #89: one file per strategy (after 1.1 and 2.3; Demo, then the real bot) | ⏸️ | S | none; easier strategy work after it |
 | 3.2 | Split `backend/app/main.py` (74 endpoints, one file) into routers: admin, user, live, keys, llm… — first step done 2026-11-04: the dead admin keys API (`/api/keys/*`, keys_vault, exchange_manager) removed | 🟡 | M | none now; grows harder with every endpoint |
 | 3.3 | ✓ (e2e/, CI job `e2e`; the A6 switches need a signed-in admin: not covered yet) Frontend tests: Playwright smoke for dashboard, live page (the A6 switches), backtest, auth | ⏸️ | M | UI regressions are found by the owner (as on 2026-11-03) |
-| 3.4 | One shared definition of the strategies for bot, API and site (today: bot.py, lib/strategies.ts, the API's lists) | ⏸️ | M | names and counts drift (see 5.1) |
+| 3.4 | ✓ (2026-11-04, `lib/strategies.json`) One shared definition of the strategies for bot, API and site: the site and the API read it; bot.py, the real-money modules and the server scripts keep their lists, checked against it in CI (`test_strategy_catalog.py`) | ⏸️ | M | names and counts drift (see 5.1) |
 
 ## Track 4 — Users (Phase 2, [phase2-design.md](phase2-design.md))
 
