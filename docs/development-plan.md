@@ -76,7 +76,7 @@ The rule from the roadmap holds everywhere: the real bot is touched last, Demo f
 |---|---|---|---|---|
 | 7.1 | realbot.da3m.io as the public proof: monthly summary, costs (with 2.5) — 2026-11-04: the summary since the start next to the backtest and a row per month; costs still to come with 2.5 | 🟡 | S | |
 | 7.2 | ✓ (2026-11-04, Figma "RAQM — Global Redesign 2026") Landing page: real results next to backtest, plain risk wording | ⏸️ | S | with 5.2 |
-| 7.3 | Arabic/English, SEO — landing done 2026-11-04 (/ English, /ar Arabic, hreflang, dark/light); the app's pages are still Arabic and dark | 🟡 | M | |
+| 7.3 | Arabic/English, SEO — landing done 2026-11-04 (/ English, /ar Arabic, hreflang, dark/light); the dashboard too (language from the landing, a switch; light theme); the other app pages are still Arabic and dark | 🟡 | M | |
 
 ## Suggested order (owner can move any ⏸️ / ✂️ later)
 

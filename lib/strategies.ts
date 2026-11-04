@@ -54,6 +54,8 @@ const EXPERIMENT_DETAILS: Record<string, Pick<Strategy, "desc" | "sides" | "risk
 export const EXPERIMENTS: LiveStrategy[] = CATALOG_STRATEGIES.filter(c => !c.planned)
   .map(c => ({ id: c.id, name: c.name, nameAr: c.nameAr, live: c.live, ...EXPERIMENT_DETAILS[c.id], experimental: true }))
 export const LIVE_BOTS: LiveStrategy[] = [...STRATEGIES, ...EXPERIMENTS]
+/** A strategy's name in the page's language. */
+export const strategyName = (s: { name: string; nameAr: string }, locale: "en" | "ar") => locale === "en" ? s.name : s.nameAr
 /** Every strategy's Arabic name, by id (for pages that only have the id). */
 export const NAME_AR: Record<string, string> = Object.fromEntries(CATALOG_STRATEGIES.map(c => [c.id, c.nameAr]))
 
