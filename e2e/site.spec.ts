@@ -53,6 +53,12 @@ test("realbot.da3m.io shows the positions, as cards on a phone", async ({ page, 
   await expect(page.getByText("AGT/USDT").first()).toBeVisible()
   await expect(page.getByText("التبديل الجاي")).toBeVisible()
   await expect(page.getByText("IDOL/USDT").first()).toBeVisible()             // closed trades
+  // the summary (plan 7.1): the whole run next to the backtest, a warning while the sample is small, one row a month
+  await expect(page.getByRole("heading", { name: "الملخص من أول ما اشتغل" })).toBeVisible()
+  await expect(page.getByText("1 صفقة مقفولة", { exact: false })).toBeVisible()
+  await expect(page.getByText("الباكتست 1.19")).toBeVisible()
+  await expect(page.getByText("لسه 1 صفقة من 30", { exact: false })).toBeVisible()
+  await expect(page.locator('td[data-l="الصافي $"]').first()).toContainText("+$9.96")
   await expectNoSideScroll(page)
   const header = page.locator("thead").first()
   if (isMobile) {
