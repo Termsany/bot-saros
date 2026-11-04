@@ -145,6 +145,32 @@ test("realbot.da3m.io shows the positions, as cards on a phone", async ({ page, 
   }
 })
 
+test("bot.da3m.io, the paper bots' page: Arabic by default, English and light after the switches, remembered", async ({ page }) => {
+  await page.goto("http://paperbot.test/")
+  const html = page.locator("html")
+  await expect(html).toHaveAttribute("lang", "ar")                           // the browser is Arabic (playwright.config.ts)
+  await expect(page.getByRole("heading", { name: "بوت الترند اليومي — مباشر" })).toBeVisible()
+  await expect(page.getByText("SOL").first()).toBeVisible()
+  await expect(page.getByText("0 لونج · 1 شورت")).toBeVisible()                // momentum
+  await page.getByTestId("paper-lang").click()
+  await expect(html).toHaveAttribute("dir", "ltr")
+  await expect(page.getByRole("heading", { name: "Daily Trend bot — live" })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "Today's list" })).toBeVisible()
+  await expect(page.getByText("0 long · 1 short")).toBeVisible()
+  await expect(page.getByText("Trend stopped")).toBeVisible()                   // the bot's Arabic close reason, in English
+  await expect(page.getByText("Weekly rebalance")).toBeVisible()
+  await expect(page).toHaveTitle("RAQM — live paper bots")
+  await expect(page.locator("#listingSec")).toBeHidden()                       // a bot without a file stays hidden
+  const before = await html.getAttribute("data-theme")
+  await page.getByRole("button", { name: /Switch to (light|dark)/ }).click()
+  await expect(html).toHaveAttribute("data-theme", before === "light" ? "dark" : "light")
+  await expectNoSideScroll(page)
+  await page.reload()
+  await expect(html).toHaveAttribute("lang", "en")
+  await expect(html).toHaveAttribute("data-theme", before === "light" ? "dark" : "light")
+  await expect(page.getByRole("heading", { name: "Daily Trend bot — live" })).toBeVisible()
+})
+
 test("realbot.da3m.io in English from the site's link, light theme, back to Arabic", async ({ page }) => {
   await page.goto("http://realbot.test/?lang=en")
   const html = page.locator("html")

@@ -23,8 +23,21 @@ export const REAL = () => ({
   }],
 })
 
+/** bot.da3m.io's own page (deploy/vps/page/index.html), served at paperbot.test: the trend bot and momentum, the rest absent. */
+const PAPER_PAGE: Record<string, () => unknown> = {
+  status: () => ({ updated: now(), started: now(), mode: "paper", leverage: 2, margin: 100, universe_size: 10, poll_seconds: 60,
+    stats: { realized: 3.5, closed: 2, wins: 1, losses: 1, open: 1 },
+    positions: [{ symbol: "SOL/USDT", side: "long", entry: 150, price: 152, qty: 1, margin: 50, sl: 90, opened: now() }],
+    signals: [{ symbol: "SOL/USDT", price: 152, on: true, in_list: true }, { symbol: "BTC/USDT", price: 70000, on: false, in_list: true }],
+    history: [{ symbol: "BNB/USDT", entry: 700, exit: 707, pnl: 1.0, reason: "الترند وقف", time: now() }] }),
+  momentum: () => ({ updated: now(), next_rebalance: "2026-11-09T00:00:00+00:00", stats: { realized: -2, closed: 1, wins: 0, losses: 1 },
+    positions: [{ symbol: "AGT/USDT", id: "AGTUSDT", side: "short", ret: -30, entry: 0.05, price: 0.045, qty: 1000, margin: 25, sl: 0.07 }],
+    history: [{ symbol: "IDOL/USDT", side: "long", entry: 0.0181, exit: 0.0204, pnl: -2, reason: "تبديل أسبوعي", time: now() }] }),
+}
+
 const json = (body: unknown) => ({ status: 200, contentType: "application/json", body: JSON.stringify(body) })
 const REALBOT_HTML = readFileSync(path.join(__dirname, "..", "deploy", "vps", "realbot", "index.html"), "utf-8")
+const PAPER_HTML = readFileSync(path.join(__dirname, "..", "deploy", "vps", "page", "index.html"), "utf-8")
 
 /** A fake API for a test: (method, path, body) → a JSON answer, or undefined for a 404. Every call is recorded. */
 export type ApiCall = { method: string, path: string, query: string, body: any }
@@ -53,6 +66,11 @@ async function offline(page: Page, api?: { handler: ApiHandler, calls: ApiCall[]
     if (url.hostname === "realbot.test") {
       if (url.pathname === "/live.json") return route.fulfill(json(REAL()))
       return route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: REALBOT_HTML })
+    }
+    if (url.hostname === "paperbot.test") {
+      const file = url.pathname.replace(/^\/|\.json$/g, "")
+      if (url.pathname.endsWith(".json")) return PAPER_PAGE[file] ? route.fulfill(json(PAPER_PAGE[file]())) : route.fulfill({ status: 404, body: "" })
+      return route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: PAPER_HTML })
     }
     return route.abort()
   })
