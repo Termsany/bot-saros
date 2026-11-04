@@ -501,29 +501,14 @@ async def bot_stop(user: dict = Depends(require_admin)):
 
 def _get_exchange_for_cycle(paper: bool):
     """Returns (name, instance, is_paper) or None.
-    LIVE trades on the first LIVE exchange only — positions state is shared, so executing the
-    same signal on several exchanges would corrupt it. If LIVE was requested but nothing is
-    available, returns None (skip the cycle) instead of silently falling back to paper, which
-    would "close" real positions only in the local state."""
+    The dashboard loop is paper only: real orders run as the strategies' own services (bot.py --live), with the key
+    on the server only. The admin key vault that used to feed a LIVE branch here was removed on 2026-11-04 (nothing
+    could reach it: bot_loop refuses paper=False), so a LIVE request is skipped, never silently traded on paper."""
     import ccxt as _ccxt
     if paper:
         return ("paper", _ccxt.bybit({"enableRateLimit": True}), True)
-    if not live_trading_allowed():
-        print("LIVE requested but ALLOW_LIVE_TRADING is not true — skipping cycle")
-        return None
-    try:
-        from app.exchange_manager import get_all_instances
-        instances = get_all_instances("live")
-    except Exception as e:
-        print(f"exchange_manager fail {e}")
-        return None
-    if not instances:
-        print("LIVE requested but no exchange is LIVE in the vault — skipping cycle")
-        return None
-    name, inst = next(iter(instances.items()))
-    if len(instances) > 1:
-        print(f"WARNING: {len(instances)} LIVE exchanges — only {name} will trade")
-    return (name, inst, False)
+    print("LIVE requested from the dashboard loop — refused, paper only")
+    return None
 
 async def bot_loop(cfg, task_id=None):
     """يحلل كل poll_seconds ويحفظ في DB + يرسل تليجرام"""
@@ -1931,58 +1916,12 @@ async def admin_activation(user: dict = Depends(require_admin)):
 async def admin_audit(limit: int=100, user: dict = Depends(require_admin)):
     return {"items":admin_control.list_audit(BOT_DIR,max(1,min(limit,200)))}
 
-# ── Keys Vault — Multi-Exchange (encrypted, never expose secrets)
+# The admin-only /api/keys/* endpoints and their vault.json were removed on 2026-11-04 (development-plan 3.2): they
+# fed only the paper dashboard loop. Users' Demo keys are below; the real bot's key lives on the server only.
 from pydantic import BaseModel as _BM2
 
-class SaveKeyReq(_BM2):
-    exchange: str
-    apiKey: str
-    secret: str
-    passphrase: str = ""
-
-@app.get("/api/keys/status")
-async def keys_status(user: dict = Depends(require_admin)):
-    from app.keys_vault import load_all_status
-    return load_all_status()
-
-@app.post("/api/keys/save")
-async def keys_save(req: SaveKeyReq, user: dict = Depends(require_admin)):
-    from app.keys_vault import save_keys
-    try:
-        save_keys(req.exchange.lower().strip(), req.apiKey.strip(), req.secret.strip(), req.passphrase.strip())
-        return {"ok": True}
-    except Exception as e:
-        raise HTTPException(400, str(e))
-
-@app.post("/api/keys/delete")
-async def keys_delete(exchange: str = "", body: dict = None, user: dict = Depends(require_admin)):
-    from app.keys_vault import delete_keys
-    ex = (body or {}).get("exchange") or exchange
-    ex = str(ex).lower().strip()
-    if not ex: raise HTTPException(400, "exchange required")
-    ok = delete_keys(ex)
-    return {"ok": bool(ok)}
-
-@app.post("/api/keys/paper")
-async def keys_paper(body: dict, user: dict = Depends(require_admin)):
-    from app.keys_vault import set_paper
-    ex = str(body.get("exchange","")).lower().strip()
-    paper = body.get("paper", True) is not False  # only an explicit false switches to LIVE
-    if not ex: raise HTTPException(400, "exchange required")
-    if not paper and not live_trading_allowed():
-        raise HTTPException(400, "LIVE disabled — set ALLOW_LIVE_TRADING=true on the backend first")
-    ok = set_paper(ex, paper)
-    return {"ok": bool(ok), "paper": paper}
-
-@app.get("/api/keys/live")
-async def keys_live(user: dict = Depends(require_admin)):
-    """Which exchanges are LIVE (for bot)"""
-    from app.keys_vault import get_exchanges_for_trading
-    return {"live": get_exchanges_for_trading()}
-
 # ── Per-user Keys Vault + Live Enable — any registered user, own account only.
-# Separate from the admin-only /api/keys/* and /api/admin/* paths above, which are
-# untouched. Every endpoint here is scoped by the authenticated user's own id
+# Separate from the admin-only /api/admin/* paths. Every endpoint here is scoped by the authenticated user's own id
 # (Depends(require_user)) — never by an id supplied in the request body — so a user
 # can only ever read/write their own key and their own live-enable record.
 USER_LIVE_ACTIVATION_PATH = BOT_DIR / "user_live_activation.sqlite3"

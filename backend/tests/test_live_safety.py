@@ -108,11 +108,11 @@ class FuturesSetupTests(unittest.TestCase):
 
 class VaultTests(unittest.TestCase):
     def setUp(self):
-        from backend.app import keys_vault as kv
+        from backend.app import user_keys_vault as kv
         self.kv = kv
         self.td = tempfile.TemporaryDirectory()
         self._paths = (kv.VAULT_PATH, kv.MASTER_KEY_PATH)
-        kv.VAULT_PATH = Path(self.td.name) / "vault.json"; kv.MASTER_KEY_PATH = Path(self.td.name) / ".master.key"
+        kv.VAULT_PATH = Path(self.td.name) / "user_vault.json"; kv.MASTER_KEY_PATH = Path(self.td.name) / ".master.key"
         self._env = {k: os.environ.get(k) for k in ("VAULT_MASTER_KEY", "ALLOW_LIVE_TRADING", "RENDER", "VERCEL", "RAILWAY_ENVIRONMENT")}
         for k in self._env: os.environ.pop(k, None)
     def tearDown(self):
@@ -131,12 +131,18 @@ class VaultTests(unittest.TestCase):
     def test_wrong_key_does_not_wipe_saved_keys(self):
         from cryptography.fernet import Fernet
         os.environ["VAULT_MASTER_KEY"] = Fernet.generate_key().decode()
-        self.kv.save_keys("binance", "k1", "s1")
+        self.kv.save_user_keys("u1", "binance", "k1", "s1")
         before = self.kv.VAULT_PATH.read_bytes()
         os.environ["VAULT_MASTER_KEY"] = Fernet.generate_key().decode()   # wrong key
         with self.assertRaises(RuntimeError):
-            self.kv.save_keys("bybit", "k2", "s2")
+            self.kv.save_user_keys("u2", "binance", "k2", "s2")
         self.assertEqual(self.kv.VAULT_PATH.read_bytes(), before)
+
+    def test_the_admin_vault_is_gone(self):
+        """2026-11-04: the admin keys vault fed nothing; it must not come back unnoticed."""
+        import importlib.util
+        self.assertIsNone(importlib.util.find_spec("backend.app.keys_vault"))
+        self.assertIsNone(importlib.util.find_spec("backend.app.exchange_manager"))
 
 
 if __name__ == "__main__":
