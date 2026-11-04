@@ -7,23 +7,52 @@
 <meta name="description" content="صفقات بوت رقم الحقيقية مباشرة على Binance Futures">
 <meta name="robots" content="noindex">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64' fill='none'%3E%3Ccircle cx='32' cy='32' r='27' stroke='%23F5B841' stroke-width='3'/%3E%3Crect x='20' y='34' width='6.5' height='10' rx='1.6' fill='%23F5B841'/%3E%3Crect x='28.75' y='27' width='6.5' height='17' rx='1.6' fill='%23F5B841'/%3E%3Crect x='37.5' y='20' width='6.5' height='24' rx='1.6' fill='%23FFE1A1'/%3E%3C/svg%3E">
+<script>
+// The page's language and theme before the first paint (Figma "RAQM — Global Redesign 2026"):
+// language = ?lang=en|ar (the site's links pass it), else the last choice here, else the browser's language;
+// theme = the last choice here, else the system's.
+(function(){
+  var q = new URLSearchParams(location.search).get("lang"), s = null, t = null
+  try { s = localStorage.getItem("raqm-lang"); t = localStorage.getItem("raqm-theme") } catch(e){}
+  var lang = q === "en" || q === "ar" ? q : s === "en" || s === "ar" ? s : /^ar/i.test(navigator.language || "") ? "ar" : "en"
+  if(q === lang) try { localStorage.setItem("raqm-lang", lang) } catch(e){}
+  var h = document.documentElement
+  h.lang = lang; h.dir = lang === "ar" ? "rtl" : "ltr"
+  h.dataset.theme = t === "light" || t === "dark" ? t : matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark"
+})()
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&family=Geist:wght@400;600;700;900&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <style>
   :root{
-    --void:#07080D; --surface:#0F1118; --surface2:#161A25; --line:#232838;
+    --void:#07080D; --surface:#0F1118; --surface2:#161A25; --line:#232838; --th:rgba(22,26,37,.6);
     --ink:#F2F3F7; --muted:#8B91A7; --faint:#5D6378;
     --corona:#F5B841; --corona-soft:#FFE1A1; --profit:#22D3A0; --loss:#FF5470;
+    --font:Cairo,system-ui,sans-serif;
   }
+  [data-theme="light"]{
+    --void:#F6F6F3; --surface:#FFFFFF; --surface2:#F0F1F5; --line:#E2E4EB; --th:#F0F1F5;
+    --ink:#0B0D14; --muted:#525870; --faint:#808699;
+    --corona:#B97C06; --corona-soft:#F5B841; --profit:#0A9A70; --loss:#DC2F4E;
+  }
+  html[lang="en"]{ --font:Geist,system-ui,sans-serif }
   *{box-sizing:border-box}
-  body{margin:0;background:var(--void);color:var(--ink);font-family:Cairo,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+  body{margin:0;background:var(--void);color:var(--ink);font-family:var(--font);-webkit-font-smoothing:antialiased;transition:background .2s,color .2s}
   .mono{font-family:"JetBrains Mono",ui-monospace,monospace;font-variant-numeric:tabular-nums}
   .wrap{max-width:1120px;margin:0 auto;padding:20px 16px 48px}
   header{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
-  .brand{display:flex;align-items:center;gap:12px;direction:ltr}
-  .brand b{display:block;font-weight:700;letter-spacing:.28em;font-size:17px}
+  .brand{display:flex;align-items:center;gap:12px;direction:ltr;color:inherit;text-decoration:none}
+  .brand b{display:block;font-family:Geist,system-ui,sans-serif;font-weight:700;letter-spacing:.28em;font-size:17px}
   .brand small{display:block;color:var(--loss);font-size:9px;letter-spacing:.24em;margin-top:5px}
+  .lg-a{stroke:var(--corona)} .lg-f{fill:var(--corona)} .lg-s{fill:var(--corona-soft)}
+  .tools{display:flex;align-items:center;gap:8px}
+  .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:32px;min-width:32px;padding:0 10px;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--muted);font:600 12px var(--font);cursor:pointer}
+  .btn:hover{color:var(--ink);border-color:var(--faint)}
+  .btn:focus-visible{outline:2px solid var(--corona);outline-offset:2px}
+  .btn svg{width:15px;height:15px}
+  #langBtn{font-family:Cairo,Geist,system-ui,sans-serif}
+  [data-theme="light"] .moon,[data-theme="dark"] .sun{display:none}
   .live{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:6px 12px;background:var(--surface)}
   .dot{width:8px;height:8px;border-radius:50%;background:var(--profit);animation:pulse 2s infinite}
   .live.stale .dot{background:var(--loss);animation:none}
@@ -33,7 +62,7 @@
   .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
   .chip{font-size:12px;border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:4px 10px;color:var(--muted)}
   .chip b{color:var(--ink);font-weight:700}
-  .real{border-color:rgba(255,84,112,.45);color:var(--loss);background:rgba(255,84,112,.08)}
+  .real{border-color:color-mix(in srgb,var(--loss) 45%,transparent);color:var(--loss);background:color-mix(in srgb,var(--loss) 8%,transparent)}
   .kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:22px}
   .card{background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:16px}
   .kpi .label{font-size:12px;color:var(--muted)}
@@ -46,9 +75,10 @@
   .count{font-size:12px;color:var(--faint)}
   .table{overflow-x:auto;border:1px solid var(--line);border-radius:18px;background:var(--surface)}
   table{width:100%;border-collapse:collapse;font-size:13px;min-width:680px}
-  th{font-size:11px;font-weight:600;color:var(--muted);text-align:right;padding:11px 14px;background:rgba(22,26,37,.6);white-space:nowrap}
+  th{font-size:11px;font-weight:600;color:var(--muted);text-align:start;padding:11px 14px;background:var(--th);white-space:nowrap}
   td{padding:11px 14px;border-top:1px solid var(--line);white-space:nowrap}
   td.num{direction:ltr;text-align:right}
+  [dir="ltr"] td.num,[dir="ltr"] .kpi .value{text-align:left}
   .coin{font-weight:700}
   .empty{padding:26px;text-align:center;color:var(--faint);font-size:13px}
   .tag{font-weight:700;font-size:12px}
@@ -74,7 +104,8 @@
     tr{display:grid;grid-template-columns:1fr 1fr;gap:7px 14px;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:12px;margin-bottom:8px}
     td{display:flex;align-items:baseline;justify-content:space-between;gap:8px;padding:0;border:0;white-space:normal;font-size:12.5px;min-width:0}
     td.num{direction:rtl;text-align:left}
-    td::before{content:attr(data-l);font-family:Cairo,system-ui,sans-serif;font-size:11px;color:var(--muted);white-space:nowrap}
+    [dir="ltr"] td.num{direction:ltr;text-align:right}
+    td::before{content:attr(data-l);font-family:var(--font);font-size:11px;color:var(--muted);white-space:nowrap}
     td.coin,td.side{font-size:15px;padding-bottom:7px;border-bottom:1px solid var(--line)}
     td.coin::before,td.side::before{content:none}
     td.side{justify-content:flex-end}
@@ -90,34 +121,41 @@
   <header>
     <div class="brand">
       <svg width="34" height="34" viewBox="0 0 64 64" fill="none" aria-hidden="true">
-        <circle cx="32" cy="32" r="27" stroke="#F5B841" stroke-width="3"/>
-        <circle cx="32" cy="32" r="21" stroke="#F5B841" stroke-width="1" stroke-opacity=".35"/>
-        <rect x="20" y="34" width="6.5" height="10" rx="1.6" fill="#F5B841"/>
-        <rect x="28.75" y="27" width="6.5" height="17" rx="1.6" fill="#F5B841"/>
-        <rect x="37.5" y="20" width="6.5" height="24" rx="1.6" fill="#FFE1A1"/>
-        <circle cx="51.1" cy="12.9" r="3.4" fill="#FFE1A1"/>
+        <circle class="lg-a" cx="32" cy="32" r="27" stroke-width="3"/>
+        <circle class="lg-a" cx="32" cy="32" r="21" stroke-width="1" stroke-opacity=".35"/>
+        <rect class="lg-f" x="20" y="34" width="6.5" height="10" rx="1.6"/>
+        <rect class="lg-f" x="28.75" y="27" width="6.5" height="17" rx="1.6"/>
+        <rect class="lg-s" x="37.5" y="20" width="6.5" height="24" rx="1.6"/>
+        <circle class="lg-s" cx="51.1" cy="12.9" r="3.4"/>
       </svg>
       <div><b>RAQM</b><small>REAL MONEY</small></div>
     </div>
-    <div class="live" id="live"><span class="dot"></span><span id="updated">بيحمّل…</span></div>
+    <div class="tools">
+      <div class="live" id="live"><span class="dot"></span><span id="updated">بيحمّل…</span></div>
+      <button class="btn" id="langBtn" type="button" data-testid="realbot-lang">English</button>
+      <button class="btn" id="themeBtn" type="button" aria-label="">
+        <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+      </button>
+    </div>
   </header>
 
-  <h1>البوت الحقيقي — مباشر</h1>
-  <p class="sub">صفقات حقيقية على Binance Futures، كل صفقة ليها أمر وقف على المنصة نفسها. الأسعار لحظية من Binance، وبيانات البوت بتتحدث كل دورة (حوالي دقيقة ونص).</p>
-  <div class="chips" id="chips"><span class="chip real">فلوس حقيقية</span></div>
+  <h1 data-t="h1">البوت الحقيقي — مباشر</h1>
+  <p class="sub" data-t="sub">صفقات حقيقية على Binance Futures، كل صفقة ليها أمر وقف على المنصة نفسها. الأسعار لحظية من Binance، وبيانات البوت بتتحدث كل دورة (حوالي دقيقة ونص).</p>
+  <div class="chips" id="chips"><span class="chip real" data-t="realChip">فلوس حقيقية</span></div>
 
   <div class="kpis">
-    <div class="card kpi"><div class="label">ربح الصفقات المفتوحة</div><div class="value mono" id="unrealized">—</div><div class="note">بالسعر اللحظي، قبل الرسوم والـ funding</div></div>
-    <div class="card kpi"><div class="label">الربح المحقق</div><div class="value mono" id="realized">—</div><div class="note" id="wl">—</div></div>
-    <div class="card kpi"><div class="label">صفقات مفتوحة</div><div class="value mono" id="open">—</div><div class="note" id="margin">—</div></div>
-    <div class="card kpi"><div class="label">لو كل الوقفات اتضربت</div><div class="value mono loss" id="atStops">—</div><div class="note">أقصى خسارة للمفتوح دلوقتي</div></div>
+    <div class="card kpi"><div class="label" data-t="kOpen">ربح الصفقات المفتوحة</div><div class="value mono" id="unrealized">—</div><div class="note" data-t="kOpenNote">بالسعر اللحظي، قبل الرسوم والـ funding</div></div>
+    <div class="card kpi"><div class="label" data-t="kReal">الربح المحقق</div><div class="value mono" id="realized">—</div><div class="note" id="wl">—</div></div>
+    <div class="card kpi"><div class="label" data-t="kLegs">صفقات مفتوحة</div><div class="value mono" id="open">—</div><div class="note" id="margin">—</div></div>
+    <div class="card kpi"><div class="label" data-t="kStops">لو كل الوقفات اتضربت</div><div class="value mono loss" id="atStops">—</div><div class="note" data-t="kStopsNote">أقصى خسارة للمفتوح دلوقتي</div></div>
   </div>
 
   <div id="summary"></div>
 
   <div id="bots"></div>
 
-  <footer>
+  <footer data-t="footer">
     الصفحة دي للعرض بس: مفيش عليها أي زرار ولا بتقدر تغيّر حاجة في البوت. التداول فيه مخاطرة، والنتايج اللي فاتت مش ضمان لأي نتيجة جاية.
   </footer>
 </div>
@@ -128,20 +166,82 @@ const px = v => v == null ? "—" : Number(v).toLocaleString("en-US", {maximumSi
 const pct = v => v == null || isNaN(v) ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(2)}%`
 const tone = v => v > 0 ? "profit" : v < 0 ? "loss" : ""
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"})[c])
-const ago = iso => { if(!iso) return "—"; const s = Math.max(0, (Date.now() - new Date(iso)) / 1000); return s < 90 ? `من ${Math.round(s)} ثانية` : s < 5400 ? `من ${Math.round(s / 60)} دقيقة` : `من ${Math.round(s / 3600)} ساعة` }
+const ltr = v => `<span dir="ltr">${v}</span>`   // a number or date inside Arabic text keeps its own order
+
+// The page's words, Arabic and English (the language comes from the script in <head>).
+const T = {
+  ar: {
+    title: "بوت رقم — فلوس حقيقية", desc: "صفقات بوت رقم الحقيقية مباشرة على Binance Futures", other: "English", themeTo: d => d ? "الوضع الفاتح" : "الوضع الغامق",
+    loading: "بيحمّل…", h1: "البوت الحقيقي — مباشر",
+    sub: "صفقات حقيقية على Binance Futures، كل صفقة ليها أمر وقف على المنصة نفسها. الأسعار لحظية من Binance، وبيانات البوت بتتحدث كل دورة (حوالي دقيقة ونص).",
+    realChip: "فلوس حقيقية", kOpen: "ربح الصفقات المفتوحة", kOpenNote: "بالسعر اللحظي، قبل الرسوم والـ funding", kReal: "الربح المحقق", kLegs: "صفقات مفتوحة",
+    kStops: "لو كل الوقفات اتضربت", kStopsNote: "أقصى خسارة للمفتوح دلوقتي",
+    footer: "الصفحة دي للعرض بس: مفيش عليها أي زرار ولا بتقدر تغيّر حاجة في البوت. التداول فيه مخاطرة، والنتايج اللي فاتت مش ضمان لأي نتيجة جاية.",
+    ago: s => s < 90 ? `من ${Math.round(s)} ثانية` : s < 5400 ? `من ${Math.round(s / 60)} دقيقة` : `من ${Math.round(s / 3600)} ساعة`,
+    dateLocale: "ar-EG", cairo: t => `(${ltr(t)} بتوقيت مصر)`,
+    names: {trend_daily: "ترند يومي", vol_breakout: "اختراق التقلب", rsi2_pullback: "RSI2 الارتداد", trend_breakout: "اختراق الترند",
+            listing_short: "شورت العملات الجديدة", momentum_ls: "مومنتم لونج/شورت (أسبوعي)", ratio_trend: "ترند النسبة"},
+    reasons: {},
+    sumTitle: "الملخص من أول ما اشتغل", sumCount: (d, n) => `من ${ltr(d)} · ${n} صفقة مقفولة`,
+    vNet: "الصافي المحقق", vNetNote: "بعد الرسوم والـ funding", vWin: "نسبة الكسب", vPf: "Profit factor", vAvg: "متوسط الكسب / الخسارة",
+    bt: v => `الباكتست ${ltr(v)}`, btMargin: v => `الباكتست ${ltr(v)} من الهامش`,
+    warn: (n, s) => `لسه ${n} صفقة من ${s} على الأقل: الأرقام دي لسه مش كفاية نحكم بيها على الاستراتيجية — الباكتست نفسه فيه أسابيع خسارة كتير.`,
+    mHead: ["الشهر", "صفقات مقفولة", "أيام قفل", "نسبة الكسب", "الصافي $", "متوسط الصفقة (من الهامش)"], mL: ["صفقات مقفولة", "أيام قفل", "نسبة الكسب", "الصافي $", "متوسط الصفقة"],
+    noClosedYet: x => `لسه مفيش صفقات اتقفلت — أول تبديل ${x}`, nextMonday: "الاتنين الجاي",
+    none: "مفيش بوت حقيقي شغال", liveAgo: a => `مباشر · البوت ${a}`, staleAgo: a => `البيانات قديمة · ${a}`,
+    pHead: ["العملة", "الجهة", "الدخول", "السعر الحالي", "الوقف على Binance", "الهامش", "الربح $", "على الهامش", "لو الوقف اتضرب", "من"],
+    pL: {entry: "الدخول", price: "السعر الحالي", sl: "الوقف", margin: "الهامش", pnl: "الربح $", onMargin: "على الهامش", atSl: "لو الوقف اتضرب", since: "من", exit: "الخروج", reason: "السبب", time: "الوقت"},
+    hHead: ["العملة", "الجهة", "الدخول", "الخروج", "الربح $", "على الهامش", "السبب", "الوقت"],
+    botLine: (n, lev, run) => `${n} مفتوحة · رافعة x${lev} · ${run ? "البوت شغال" : "البوت مش بيكتب حالته"}`, next: "التبديل الجاي: ",
+    noOpen: "مفيش صفقات مفتوحة دلوقتي", closed: "الصفقات المقفولة", lastN: n => `آخر ${n}`, noClosed: "لسه مفيش صفقات اتقفلت",
+    noBot: "مفيش بوت بفلوس حقيقية شغال دلوقتي.", wl: (w, l) => `${w} كسبانة · ${l} خسرانة`, marginUsed: m => `هامش مستخدم ${m}`, error: "البيانات مش متاحة دلوقتي",
+  },
+  en: {
+    title: "RAQM — real money", desc: "RAQM's real trades, live on Binance Futures", other: "العربية", themeTo: d => d ? "Switch to light" : "Switch to dark",
+    loading: "Loading…", h1: "The real bot — live",
+    sub: "Real trades on Binance Futures; every trade has its stop order on the exchange itself. Prices are live from Binance, and the bot's data refreshes every cycle (about a minute and a half).",
+    realChip: "Real money", kOpen: "Open P&L", kOpenNote: "at the live price, before fees and funding", kReal: "Realized", kLegs: "Open legs",
+    kStops: "If every stop hit", kStopsNote: "the most the open legs can lose now",
+    footer: "This page is for viewing only: it has no buttons and can't change anything in the bot. Trading carries risk, and past results don't guarantee any future result.",
+    ago: s => s < 90 ? `${Math.round(s)}s ago` : s < 5400 ? `${Math.round(s / 60)} min ago` : `${Math.round(s / 3600)} h ago`,
+    dateLocale: "en-GB", cairo: t => `(${ltr(t)} Cairo)`,
+    names: {trend_daily: "Daily Trend", vol_breakout: "Volatility Breakout", rsi2_pullback: "RSI2 Pullback", trend_breakout: "Trend Breakout",
+            listing_short: "New Listing Short", momentum_ls: "Momentum L/S (weekly)", ratio_trend: "Ratio Trend"},
+    // the bot writes its close reasons in Arabic (bot.py)
+    reasons: {"تبديل أسبوعي": "Weekly rebalance", "الترند وقف": "Trend stopped", "الترند اتقلب": "Trend flipped", "اشارة عكسية": "Opposite signal",
+              "اشارة عكسية قوية": "Strong opposite signal", "قفل يدوي من Binance": "Closed by hand on Binance", "اتقفلت يدوي من Binance": "Closed by hand on Binance",
+              "قفل يدوي من الموقع": "Closed by hand from the site", "الوقف اترفض — قفل فوري": "Stop rejected — closed at once", "خروج افتتاح اليوم": "Exit at the day's open",
+              "وقف خسارة": "Stop loss", SL: "Stop loss", TP: "Target"},
+    sumTitle: "Since it started", sumCount: (d, n) => `since ${ltr(d)} · ${n} closed trades`,
+    vNet: "Net realized", vNetNote: "after fees and funding", vWin: "Win rate", vPf: "Profit factor", vAvg: "Avg win / loss",
+    bt: v => `backtest ${ltr(v)}`, btMargin: v => `backtest ${ltr(v)} of margin`,
+    warn: (n, s) => `Only ${n} of at least ${s} trades so far: too few to judge the strategy by — the backtest itself has many losing weeks.`,
+    mHead: ["Month", "Closed trades", "Closing days", "Win rate", "Net $", "Avg trade (of margin)"], mL: ["Closed trades", "Closing days", "Win rate", "Net $", "Avg trade"],
+    noClosedYet: x => `No trades closed yet — first rebalance ${x}`, nextMonday: "next Monday",
+    none: "No real-money bot running", liveAgo: a => `Live · bot ${a}`, staleAgo: a => `Data is stale · ${a}`,
+    pHead: ["Coin", "Side", "Entry", "Price now", "Stop on Binance", "Margin", "P&L $", "On margin", "If stop hits", "Since"],
+    pL: {entry: "Entry", price: "Price now", sl: "Stop", margin: "Margin", pnl: "P&L $", onMargin: "On margin", atSl: "If stop hits", since: "Since", exit: "Exit", reason: "Reason", time: "Time"},
+    hHead: ["Coin", "Side", "Entry", "Exit", "P&L $", "On margin", "Reason", "Time"],
+    botLine: (n, lev, run) => `${n} open · x${lev} leverage · ${run ? "bot running" : "the bot isn't writing its state"}`, next: "Next rebalance: ",
+    noOpen: "No open trades right now", closed: "Closed trades", lastN: n => `last ${n}`, noClosed: "No trades closed yet",
+    noBot: "No real-money bot is running right now.", wl: (w, l) => `${w} won · ${l} lost`, marginUsed: m => `margin in use ${m}`, error: "The data isn't available right now",
+  },
+}
+let L = document.documentElement.lang === "en" ? "en" : "ar", t = T[L]
+
+const ago = iso => iso ? t.ago(Math.max(0, (Date.now() - new Date(iso)) / 1000)) : "—"
 const day = iso => iso ? new Date(iso).toLocaleString("en-GB", {day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "UTC"}) + " UTC" : "—"
-// "الاثنين 9 نوفمبر · 00:00 UTC (02:00 بتوقيت مصر)"
+// "الاثنين 9 نوفمبر · 00:00 UTC (02:00 بتوقيت مصر)" / "Monday 9 November · 00:00 UTC (02:00 Cairo)"
 const nextDay = iso => { const d = new Date(iso)
-  const date = d.toLocaleDateString("ar-EG", {weekday: "long", day: "numeric", month: "long", timeZone: "UTC", numberingSystem: "latn"})
+  const date = d.toLocaleDateString(t.dateLocale, {weekday: "long", day: "numeric", month: "long", timeZone: "UTC", numberingSystem: "latn"})
   const utc = d.toLocaleTimeString("en-GB", {hour: "2-digit", minute: "2-digit", timeZone: "UTC"})
   const cairo = d.toLocaleTimeString("en-GB", {hour: "2-digit", minute: "2-digit", timeZone: "Africa/Cairo"})
-  return `${date} · <span dir="ltr">${utc} UTC</span> (<span dir="ltr">${cairo}</span> بتوقيت مصر)` }
+  return `${date} · <span dir="ltr">${utc} UTC</span> ${t.cairo(cairo)}` }
 const sideTag = s =>s === "long" ? `<span class="tag profit">LONG</span>` : `<span class="tag loss">SHORT</span>`
-const NAMES = {trend_daily: "ترند يومي", vol_breakout: "اختراق التقلب", rsi2_pullback: "RSI2 الارتداد", trend_breakout: "اختراق الترند",
-               listing_short: "شورت العملات الجديدة", momentum_ls: "مومنتم لونج/شورت (أسبوعي)", ratio_trend: "ترند النسبة"}
 const id = sym => String(sym).split(":")[0].replace("/", "")
 // a number cell; data-l is its column's name, shown beside it on a phone (where the table header is hidden)
 const num = (label, cls, val) => `<td class="num mono ${cls}" data-l="${label}"><span>${val}</span></td>`
+const heads = hs => `<thead><tr>${hs.map(h => `<th>${h}</th>`).join("")}</tr></thead>`
 
 let D = null, live = {}, prev = {}, dirty = false, ws = null, subs = new Set()
 
@@ -149,8 +249,7 @@ let D = null, live = {}, prev = {}, dirty = false, ws = null, subs = new Set()
 // (lib/demo-baseline.json "momentum_ls" "all"; backend/tests/test_realbot_summary.py keeps these equal to it).
 const BACKTEST = {momentum_ls: {win_rate: 48.7, avg_win_pct: 36.3, avg_loss_pct: -29.0, profit_factor: 1.19}}
 const SAMPLE = 30          // closed trades before a comparison means anything (the Demo measurement's rule)
-const ltr = v => `<span dir="ltr">${v}</span>`   // a number or date inside Arabic text keeps its own order
-const monthOf = iso => new Date(iso).toLocaleDateString("ar-EG", {month: "long", year: "numeric", timeZone: "UTC", numberingSystem: "latn"})
+const monthOf = iso => new Date(iso).toLocaleDateString(t.dateLocale, {month: "long", year: "numeric", timeZone: "UTC", numberingSystem: "latn"})
 
 /** Every closed trade, by month, and the whole run next to the backtest (development-plan 7.1). */
 function summary(bots){
@@ -166,24 +265,24 @@ function summary(bots){
       weeks: new Set(rows.map(r => r.time.slice(0, 10))).size} }
   const months = {}
   closed.forEach(r => { const k = r.time.slice(0, 7); (months[k] = months[k] || []).push(r) })
-  const all = stat(closed)
+  const all = stat(closed), ml = t.mL
   const mrows = Object.keys(months).sort().reverse().map(k => { const m = stat(months[k])
-    return `<tr><td class="coin">${monthOf(months[k][0].time)}</td>${num("صفقات مقفولة", "", m.n)}${num("أيام قفل", "", m.weeks)}
-      ${num("نسبة الكسب", "", m.win == null ? "—" : m.win.toFixed(0) + "%")}${num("الصافي $", tone(m.net), usd(m.net))}${num("متوسط الصفقة", tone(m.avg), pct(m.avg))}</tr>` }).join("")
+    return `<tr><td class="coin">${monthOf(months[k][0].time)}</td>${num(ml[0], "", m.n)}${num(ml[1], "", m.weeks)}
+      ${num(ml[2], "", m.win == null ? "—" : m.win.toFixed(0) + "%")}${num(ml[3], tone(m.net), usd(m.net))}${num(ml[4], tone(m.avg), pct(m.avg))}</tr>` }).join("")
   const bt = BACKTEST[bots[0]?.strategy] || {}
   const vsCard = (label, val, cls, btText) => `<div class="card kpi"><div class="label">${label}</div><div class="value mono ${cls}">${val}</div><div class="bt">${btText}</div></div>`
   const small = all.n < SAMPLE
   return `<section>
-    <div class="head"><h2>الملخص من أول ما اشتغل</h2><span class="count">من ${ltr(day(opened[0]))} · ${all.n} صفقة مقفولة</span></div>
+    <div class="head"><h2>${t.sumTitle}</h2><span class="count">${t.sumCount(day(opened[0]), all.n)}</span></div>
     <div class="vs">
-      ${vsCard("الصافي المحقق", usd(all.net), tone(all.net), "بعد الرسوم والـ funding")}
-      ${vsCard("نسبة الكسب", all.win == null ? "—" : all.win.toFixed(1) + "%", "", `الباكتست ${ltr((bt.win_rate ?? "—") + "%")}`)}
-      ${vsCard("Profit factor", all.pf == null ? "—" : all.pf.toFixed(2), all.pf == null ? "" : all.pf >= 1 ? "profit" : "loss", `الباكتست ${ltr(bt.profit_factor ?? "—")}`)}
-      ${vsCard("متوسط الكسب / الخسارة", `${pct(all.avgWin)} / ${pct(all.avgLoss)}`, "", `الباكتست ${ltr(`+${bt.avg_win_pct ?? "—"}% / ${bt.avg_loss_pct ?? "—"}%`)} من الهامش`)}
+      ${vsCard(t.vNet, usd(all.net), tone(all.net), t.vNetNote)}
+      ${vsCard(t.vWin, all.win == null ? "—" : all.win.toFixed(1) + "%", "", t.bt((bt.win_rate ?? "—") + "%"))}
+      ${vsCard(t.vPf, all.pf == null ? "—" : all.pf.toFixed(2), all.pf == null ? "" : all.pf >= 1 ? "profit" : "loss", t.bt(bt.profit_factor ?? "—"))}
+      ${vsCard(t.vAvg, `${pct(all.avgWin)} / ${pct(all.avgLoss)}`, "", t.btMargin(`+${bt.avg_win_pct ?? "—"}% / ${bt.avg_loss_pct ?? "—"}%`))}
     </div>
-    ${small ? `<p class="warn">لسه ${all.n} صفقة من ${SAMPLE} على الأقل: الأرقام دي لسه مش كفاية نحكم بيها على الاستراتيجية — الباكتست نفسه فيه أسابيع خسارة كتير.</p>` : ""}
-    <div class="table" style="margin-top:12px"><table><thead><tr><th>الشهر</th><th>صفقات مقفولة</th><th>أيام قفل</th><th>نسبة الكسب</th><th>الصافي $</th><th>متوسط الصفقة (من الهامش)</th></tr></thead>
-    <tbody>${mrows || `<tr><td colspan="6" class="empty">لسه مفيش صفقات اتقفلت — أول تبديل ${bots[0]?.next_rebalance ? nextDay(bots[0].next_rebalance) : "الاتنين الجاي"}</td></tr>`}</tbody></table></div>
+    ${small ? `<p class="warn">${t.warn(all.n, SAMPLE)}</p>` : ""}
+    <div class="table" style="margin-top:12px"><table>${heads(t.mHead)}
+    <tbody>${mrows || `<tr><td colspan="6" class="empty">${t.noClosedYet(bots[0]?.next_rebalance ? nextDay(bots[0].next_rebalance) : t.nextMonday)}</td></tr>`}</tbody></table></div>
   </section>`
 }
 
@@ -195,8 +294,9 @@ function render(){
   if(!D) return
   const fresh = (Date.now() - new Date(D.updated)) / 1000 < 90 && D.bots.some(b => b.running)
   $("live").classList.toggle("stale", !fresh)
-  $("updated").textContent = !D.bots.length ? "مفيش بوت حقيقي شغال" : fresh ? `مباشر · البوت ${ago(D.bots[0].updated)}` : `البيانات قديمة · ${ago(D.updated)}`
+  $("updated").textContent = !D.bots.length ? t.none : fresh ? t.liveAgo(ago(D.bots[0].updated)) : t.staleAgo(ago(D.updated))
   let unreal = 0, realized = 0, wins = 0, losses = 0, open = 0, margin = 0, atStops = 0
+  const pl = t.pL
   const html = D.bots.map(b => {
     const lev = b.leverage || 2
     const rows = b.positions.map(p => {
@@ -204,39 +304,67 @@ function render(){
       const moved = prev[id(p.symbol)] != null && price !== prev[id(p.symbol)] ? (price > prev[id(p.symbol)] ? "up" : "down") : ""
       prev[id(p.symbol)] = price
       unreal += pnl || 0; open += 1; margin += m; atStops += p.loss_at_sl || 0
-      return `<tr><td class="coin">${esc(String(p.symbol).split(":")[0])}</td><td class="side">${sideTag(p.side)}</td>${num("الدخول", "", px(p.entry))}
-        ${num("السعر الحالي", moved, px(price))}${num("الوقف", "", px(p.sl))}${num("الهامش", "", usd(m, false))}
-        ${num("الربح $", tone(pnl), usd(pnl))}${num("على الهامش", tone(pnl), pct(m ? pnl / m * 100 : null))}
-        ${num("لو الوقف اتضرب", "loss", usd(p.loss_at_sl))}${num("من", "wide", day(p.opened))}</tr>`
+      return `<tr><td class="coin">${esc(String(p.symbol).split(":")[0])}</td><td class="side">${sideTag(p.side)}</td>${num(pl.entry, "", px(p.entry))}
+        ${num(pl.price, moved, px(price))}${num(pl.sl, "", px(p.sl))}${num(pl.margin, "", usd(m, false))}
+        ${num(pl.pnl, tone(pnl), usd(pnl))}${num(pl.onMargin, tone(pnl), pct(m ? pnl / m * 100 : null))}
+        ${num(pl.atSl, "loss", usd(p.loss_at_sl))}${num(pl.since, "wide", day(p.opened))}</tr>`
     }).join("")
     const hist = [...b.history].reverse()
     hist.forEach(h => { realized += h.pnl || 0; if(h.pnl > 0) wins++; else if(h.pnl < 0) losses++ })
-    const hrows = hist.map(h => `<tr><td class="coin">${esc(String(h.symbol).split(":")[0])}</td><td class="side">${sideTag(h.side)}</td>${num("الدخول", "", px(h.entry))}
-        ${num("الخروج", "", px(h.exit))}${num("الربح $", tone(h.pnl), usd(h.pnl))}${num("على الهامش", tone(h.pnl), pct(h.pnl_pct))}
-        <td class="wide" data-l="السبب">${esc(h.reason || "")}</td>${num("الوقت", "wide", day(h.time))}</tr>`).join("")
+    const hrows = hist.map(h => `<tr><td class="coin">${esc(String(h.symbol).split(":")[0])}</td><td class="side">${sideTag(h.side)}</td>${num(pl.entry, "", px(h.entry))}
+        ${num(pl.exit, "", px(h.exit))}${num(pl.pnl, tone(h.pnl), usd(h.pnl))}${num(pl.onMargin, tone(h.pnl), pct(h.pnl_pct))}
+        <td class="wide" data-l="${pl.reason}">${esc(t.reasons[h.reason] || h.reason || "")}</td>${num(pl.time, "wide", day(h.time))}</tr>`).join("")
     return `<section>
-      <div class="head"><h2>${esc(NAMES[b.strategy] || b.strategy)}</h2><span class="count">${b.positions.length} مفتوحة · رافعة x${lev} · ${b.running ? "البوت شغال" : "البوت مش بيكتب حالته"}</span></div>
-      ${b.next_rebalance ? `<div class="chips" style="margin:-4px 0 10px"><span class="chip">التبديل الجاي: <b>${nextDay(b.next_rebalance)}</b></span></div>` : ""}
-      <div class="table"><table><thead><tr><th>العملة</th><th>الجهة</th><th>الدخول</th><th>السعر الحالي</th><th>الوقف على Binance</th><th>الهامش</th><th>الربح $</th><th>على الهامش</th><th>لو الوقف اتضرب</th><th>من</th></tr></thead>
-      <tbody>${rows || `<tr><td colspan="10" class="empty">مفيش صفقات مفتوحة دلوقتي</td></tr>`}</tbody></table></div>
+      <div class="head"><h2>${esc(t.names[b.strategy] || b.strategy)}</h2><span class="count">${t.botLine(b.positions.length, lev, b.running)}</span></div>
+      ${b.next_rebalance ? `<div class="chips" style="margin:-4px 0 10px"><span class="chip">${t.next}<b>${nextDay(b.next_rebalance)}</b></span></div>` : ""}
+      <div class="table"><table>${heads(t.pHead)}
+      <tbody>${rows || `<tr><td colspan="10" class="empty">${t.noOpen}</td></tr>`}</tbody></table></div>
     </section>
     <section>
-      <div class="head"><h2>الصفقات المقفولة</h2><span class="count">${b.history.length ? `آخر ${b.history.length}` : ""}</span></div>
-      <div class="table"><table><thead><tr><th>العملة</th><th>الجهة</th><th>الدخول</th><th>الخروج</th><th>الربح $</th><th>على الهامش</th><th>السبب</th><th>الوقت</th></tr></thead>
-      <tbody>${hrows || `<tr><td colspan="8" class="empty">لسه مفيش صفقات اتقفلت</td></tr>`}</tbody></table></div>
+      <div class="head"><h2>${t.closed}</h2><span class="count">${b.history.length ? t.lastN(b.history.length) : ""}</span></div>
+      <div class="table"><table>${heads(t.hHead)}
+      <tbody>${hrows || `<tr><td colspan="8" class="empty">${t.noClosed}</td></tr>`}</tbody></table></div>
     </section>`
   }).join("")
-  $("bots").innerHTML = html || `<section><div class="card empty">مفيش بوت بفلوس حقيقية شغال دلوقتي.</div></section>`
+  $("bots").innerHTML = html || `<section><div class="card empty">${t.noBot}</div></section>`
   $("summary").innerHTML = summary(D.bots)
   $("unrealized").textContent = usd(unreal); $("unrealized").className = `value mono ${tone(unreal)}`
   $("realized").textContent = usd(realized); $("realized").className = `value mono ${tone(realized)}`
-  $("wl").textContent = `${wins} كسبانة · ${losses} خسرانة`
-  $("open").textContent = String(open); $("margin").textContent = `هامش مستخدم ${usd(margin, false)}`
+  $("wl").textContent = t.wl(wins, losses)
+  $("open").textContent = String(open); $("margin").textContent = t.marginUsed(usd(margin, false))
   $("atStops").textContent = usd(atStops)
 }
+
+// The fixed words, the switches' labels, and the tab's title, in the page's language.
+let loadFailed = false
+function applyWords(){
+  document.title = t.title
+  document.querySelector('meta[name="description"]').content = t.desc
+  document.querySelectorAll("[data-t]").forEach(el => { el.textContent = t[el.dataset.t] })
+  $("langBtn").textContent = t.other
+  $("langBtn").lang = L === "ar" ? "en" : "ar"
+  $("themeBtn").setAttribute("aria-label", t.themeTo(document.documentElement.dataset.theme === "dark"))
+  if(loadFailed) $("updated").textContent = t.error
+  else if(!D) $("updated").textContent = t.loading
+}
+$("langBtn").onclick = () => {
+  L = L === "ar" ? "en" : "ar"; t = T[L]
+  const h = document.documentElement; h.lang = L; h.dir = L === "ar" ? "rtl" : "ltr"
+  try { localStorage.setItem("raqm-lang", L) } catch(e){}
+  const u = new URL(location.href); if(u.searchParams.has("lang")){ u.searchParams.set("lang", L); history.replaceState(null, "", u) }
+  applyWords(); render()
+}
+$("themeBtn").onclick = () => {
+  const h = document.documentElement, next = h.dataset.theme === "dark" ? "light" : "dark"
+  h.dataset.theme = next
+  try { localStorage.setItem("raqm-theme", next) } catch(e){}
+  applyWords()
+}
+applyWords()
+
 async function load(){
-  try{ const r = await fetch(`live.json?t=${Date.now()}`, {cache: "no-store"}); if(!r.ok) throw 0; D = await r.json(); render(); subscribe() }
-  catch(e){ $("live").classList.add("stale"); $("updated").textContent = "البيانات مش متاحة دلوقتي" }
+  try{ const r = await fetch(`live.json?t=${Date.now()}`, {cache: "no-store"}); if(!r.ok) throw 0; D = await r.json(); loadFailed = false; render(); subscribe() }
+  catch(e){ loadFailed = true; $("live").classList.add("stale"); $("updated").textContent = t.error }
 }
 function subscribe(){
   if(!ws || ws.readyState !== 1 || !D) return

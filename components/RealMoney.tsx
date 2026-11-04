@@ -6,12 +6,13 @@ import { Card, CardHeader, Dot, Pill } from "@/components/ui"
 import { STRATEGIES, strategyName } from "@/lib/strategies"
 import { agoText, useLocale, useT } from "@/lib/i18n/locale"
 import type { Locale } from "@/lib/i18n/landing"
+import { realPage } from "@/lib/real-page"
 
 type Pos = { symbol: string; side: "long" | "short"; entry: number; price?: number; qty: number; contract_size?: number; sl?: number; pnl?: number; loss_at_sl?: number }
 type Trade = { pnl?: number }
 type Bot = { strategy: string; updated?: string; running: boolean; leverage?: number; positions: Pos[]; history: Trade[]; next_rebalance?: string | null }
 
-export const REAL_PAGE = "https://realbot.da3m.io"
+export { REAL_PAGE } from "@/lib/real-page"
 const fmt = (v: number, d = 2) => v.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d })
 const signed = (v: number) => `${v > 0 ? "+" : v < 0 ? "−" : ""}${fmt(Math.abs(v))}`
 const px = (v?: number) => v == null ? "—" : Number(v).toLocaleString("en-US", { maximumSignificantDigits: 6 })
@@ -137,7 +138,7 @@ export function RealMoney(){
             <div className="text-[12px] font-semibold text-corona">{t.next}</div>
             <div className="text-[14px] font-semibold">{when(next, locale)}</div>
           </div> : <span/>}
-          <a href={REAL_PAGE} target="_blank" rel="noopener noreferrer" className="text-[13px] font-semibold text-corona">{t.page}</a>
+          <a href={realPage(locale)} target="_blank" rel="noopener noreferrer" className="text-[13px] font-semibold text-corona">{t.page}</a>
         </div>
       </>}
     </Card>

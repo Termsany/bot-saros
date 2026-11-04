@@ -144,3 +144,28 @@ test("realbot.da3m.io shows the positions, as cards on a phone", async ({ page, 
     await expect(header).toBeVisible()
   }
 })
+
+test("realbot.da3m.io in English from the site's link, light theme, back to Arabic", async ({ page }) => {
+  await page.goto("http://realbot.test/?lang=en")
+  const html = page.locator("html")
+  await expect(html).toHaveAttribute("lang", "en")
+  await expect(html).toHaveAttribute("dir", "ltr")
+  await expect(page.getByRole("heading", { name: "The real bot — live" })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "Since it started" })).toBeVisible()
+  await expect(page.getByText("Next rebalance:")).toBeVisible()
+  await expect(page.getByText("backtest 1.19")).toBeVisible()
+  await expect(page.locator('td[data-l="Net $"]').first()).toContainText("+$9.96")
+  await expect(page.getByText("Weekly rebalance").first()).toBeVisible()      // the bot's Arabic close reason, in English
+  await expect(page).toHaveTitle("RAQM — real money")
+  await expectNoSideScroll(page)
+  const before = await html.getAttribute("data-theme")
+  await page.getByRole("button", { name: /Switch to (light|dark)/ }).click()
+  await expect(html).toHaveAttribute("data-theme", before === "light" ? "dark" : "light")
+  await page.reload()                                                       // both choices are remembered
+  await expect(html).toHaveAttribute("data-theme", before === "light" ? "dark" : "light")
+  await page.getByTestId("realbot-lang").click()
+  await expect(html).toHaveAttribute("dir", "rtl")
+  await expect(page.getByRole("heading", { name: "الملخص من أول ما اشتغل" })).toBeVisible()
+  await page.goto("http://realbot.test/")
+  await expect(html).toHaveAttribute("lang", "ar")
+})

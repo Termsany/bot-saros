@@ -4,7 +4,7 @@
 import { ArrowUpRight, Check, Clock, LineChart, ShieldCheck } from "lucide-react"
 import { Logo } from "@/components/Logo"
 import { LandingNavAuth } from "@/components/AccountMenu"
-import { REAL_PAGE } from "@/components/RealMoney"
+import { realPage } from "@/lib/real-page"
 import { BOT_PAGE, STATS_META, STRATEGIES, pfTone, sharpeTone } from "@/lib/strategies"
 import { BRAND } from "@/lib/brand"
 import { DIR, LANDING, OTHER, type Locale } from "@/lib/i18n/landing"
@@ -77,13 +77,13 @@ export function Landing({ locale, prices }: { locale: Locale; prices?: Record<st
             <p className="mt-6 max-w-[560px] text-[17px] leading-8 text-muted sm:text-[18px]">{t.hero.sub}</p>
             <div className="mt-8 flex flex-wrap gap-3">
               <a href="/dashboard" className="inline-flex items-center gap-2 rounded-xl bg-corona px-6 py-3.5 text-[15px] font-semibold text-on-corona shadow-[0_10px_30px_-10px_rgb(var(--c-corona)/.7)] transition hover:-translate-y-0.5 hover:bg-corona-soft">{t.hero.ctaStart}</a>
-              <a href={REAL_PAGE} target="_blank" rel="noopener" className="inline-flex items-center gap-2 rounded-xl border border-line bg-surface2 px-6 py-3.5 text-[15px] font-semibold transition hover:-translate-y-0.5 hover:border-line2 hover:bg-surface">{t.hero.ctaLive} <ArrowUpRight size={16} className="rtl:-scale-x-100"/></a>
+              <a href={realPage(locale)} target="_blank" rel="noopener" className="inline-flex items-center gap-2 rounded-xl border border-line bg-surface2 px-6 py-3.5 text-[15px] font-semibold transition hover:-translate-y-0.5 hover:border-line2 hover:bg-surface">{t.hero.ctaLive} <ArrowUpRight size={16} className="rtl:-scale-x-100"/></a>
             </div>
             <div className="mt-7 flex flex-wrap gap-x-6 gap-y-2 text-[13px] text-muted">
               {t.hero.trust.map(x => <span key={x} className="flex items-center gap-1.5"><Check size={15} className="text-profit"/>{x}</span>)}
             </div>
           </div>
-          <div className="animate-fade-up [animation-delay:.12s]"><LiveRealCard locale={locale} href={REAL_PAGE}/></div>
+          <div className="animate-fade-up [animation-delay:.12s]"><LiveRealCard locale={locale} href={realPage(locale)}/></div>
         </div>
         <div className="relative mx-auto grid max-w-[1180px] grid-cols-2 gap-3 px-5 pb-6 md:grid-cols-4">
           {t.strip.map(([l, v, n]) => (
@@ -144,7 +144,7 @@ export function Landing({ locale, prices }: { locale: Locale; prices?: Record<st
           <div className="rounded-[20px] border border-line bg-surface p-6">
             <span className="inline-flex items-center gap-1.5 rounded-full border border-corona/40 bg-corona/10 px-2.5 py-0.5 text-[11px] font-semibold text-corona"><i className="h-1.5 w-1.5 rounded-full bg-corona"/>{t.proof.sideBadge}</span>
             <p className="mt-4 text-[15px] leading-7 text-muted">{t.proof.sideText}</p>
-            <a href={REAL_PAGE} target="_blank" rel="noopener" className="mt-5 inline-flex items-center gap-2 rounded-xl border border-line bg-surface2 px-4 py-2.5 text-[14px] font-semibold transition hover:border-line2 hover:bg-surface">{t.proof.sideCta} <ArrowUpRight size={15} className="rtl:-scale-x-100"/></a>
+            <a href={realPage(locale)} target="_blank" rel="noopener" className="mt-5 inline-flex items-center gap-2 rounded-xl border border-line bg-surface2 px-4 py-2.5 text-[14px] font-semibold transition hover:border-line2 hover:bg-surface">{t.proof.sideCta} <ArrowUpRight size={15} className="rtl:-scale-x-100"/></a>
           </div>
         </div>
       </Section>
@@ -174,7 +174,7 @@ export function Landing({ locale, prices }: { locale: Locale; prices?: Record<st
             <p className="mt-2 text-[16px] text-muted">{t.cta.sub}</p>
           </div>
           <div className="flex flex-wrap gap-3">
-            <a href={REAL_PAGE} target="_blank" rel="noopener" className="rounded-xl border border-line bg-surface2 px-6 py-3 text-[15px] font-semibold transition hover:border-line2 hover:bg-surface">{t.cta.live}</a>
+            <a href={realPage(locale)} target="_blank" rel="noopener" className="rounded-xl border border-line bg-surface2 px-6 py-3 text-[15px] font-semibold transition hover:border-line2 hover:bg-surface">{t.cta.live}</a>
             <a href="/dashboard" className="rounded-xl bg-corona px-6 py-3 text-[15px] font-semibold text-on-corona transition hover:bg-corona-soft">{t.cta.start}</a>
           </div>
         </div>
@@ -186,7 +186,7 @@ export function Landing({ locale, prices }: { locale: Locale; prices?: Record<st
             <Logo size="sm"/>
             <div className="flex flex-wrap gap-5 text-[14px] text-muted">
               <a href="/backtest" className="hover:text-ink">{t.footer.backtest}</a>
-              <a href={REAL_PAGE} target="_blank" rel="noopener" className="hover:text-ink">{t.footer.live}</a>
+              <a href={realPage(locale)} target="_blank" rel="noopener" className="hover:text-ink">{t.footer.live}</a>
               <a href="/terms" className="hover:text-ink">{t.footer.terms}</a>
               <a href={other.href} className="hover:text-ink">{other.label}</a>
             </div>
