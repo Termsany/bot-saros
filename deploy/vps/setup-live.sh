@@ -18,6 +18,15 @@ git -C "$SRC" cat-file -e "$SHA^{commit}" || { echo "commit $SHA not found on Gi
 git -C "$SRC" merge-base --is-ancestor "$SHA" origin/main || { echo "commit $SHA is not on main" >&2; exit 2; }
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 git -C "$SRC" archive "$SHA" | tar -x -C "$T"
+# Run the setup of that very commit. $SRC's own files stay at whatever was checked out (fetch doesn't move them): an
+# older setup-live.sh copied the new code but never ran the steps added since (2026-11-04: it was #75's for weeks).
+if ! cmp -s "$0" "$T/deploy/vps/setup-live.sh"; then
+    if [ "${RAQM_SETUP_OF:-}" = "$SHA" ]; then echo "refusing: the setup of $SHA is not itself" >&2; exit 2; fi
+    S=$(mktemp); cp "$T/deploy/vps/setup-live.sh" "$S"; rm -rf "$T"
+    echo "running setup-live.sh of $SHA (this one is another version)" >&2
+    RAQM_SETUP_OF=$SHA exec sh "$S" "$SHA"
+fi
+if [ "${RAQM_SETUP_OF:-}" = "$SHA" ]; then rm -f "$0"; fi     # the temporary copy made just above
 id raqmlive >/dev/null 2>&1 || useradd --system --home-dir "$L" --no-create-home --shell /usr/sbin/nologin raqmlive
 # The live bot and the API share the risk ledger and the IPC folder through their own group, raqmrisk, which holds
 # those two users only. Not raqmapi's group: that one owns the API's code and venv (group-writable), so membership
