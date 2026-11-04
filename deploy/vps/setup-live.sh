@@ -47,6 +47,10 @@ install -m 644 -o root -g root "$T/scripts/backup.py" "$L/scripts/backup.py"    
 install -m 644 -o root -g root "$T/scripts/provision_users.py" "$L/scripts/provision_users.py"   # Phase 2 users' bots (root)
 install -m 644 -o root -g root "$T/scripts/live_preflight.py" "$L/scripts/live_preflight.py"     # checks before real money (root, read only)
 install -m 644 -o root -g root "$T/scripts/realbot_export.py" "$L/scripts/realbot_export.py"     # realbot.da3m.io's live.json (raqmlive)
+# the owner's helpers (run by hand with sudo): a new Demo key (HMAC or a server-made Ed25519 key), the evidence reviewers
+install -d -o root -g root -m 755 /usr/local/lib/raqm
+install -m 644 -o root -g root "$T/deploy/vps/tools/set_demo_keys.sh" /usr/local/lib/raqm/set_demo_keys.sh
+install -m 644 -o root -g root "$T/deploy/vps/tools/set_reviewers.py" /usr/local/lib/raqm/set_reviewers.py
 echo "$SHA" > "$L/DEPLOYED_COMMIT"
 # packages: only what the bot imports, pinned, from wheels (deploy/vps/live-requirements.txt)
 [ -x "$L/venv/bin/python" ] || python3 -m venv "$L/venv"
@@ -150,6 +154,8 @@ systemctl enable --now raqm-watchdog-users.timer >/dev/null 2>&1 || echo "warnin
 systemctl enable --now raqm-backup-users.timer >/dev/null 2>&1 || echo "warning: raqm-backup-users.timer not enabled" >&2
 # new group lists reach a process only when it starts: the API (try-restart: only if running). The live bots are not
 # restarted here — one stopped in the middle of an order goes to review; restart them as a deliberate step:
-#   systemctl restart 'raqm-demo@*' / 'raqm-live@*'
+#   for s in trend_daily vol_breakout rsi2_pullback trend_breakout listing_short ratio_trend; do systemctl restart "raqm-demo@$s"; done
+# by name, never 'raqm-demo@*': raqm-demo@<s> Conflicts= raqm-live@<s>, so starting the Demo twin of a real-money bot
+# stops the real one (raqm-demo@momentum_ls is masked since 2026-11-03 for that reason). The real bot: by name, alone.
 systemctl try-restart raqm-api 2>/dev/null || echo "warning: raqm-api restart failed" >&2
 echo "raqm-live ready: $(ls "$L" | tr '\n' ' ')"
