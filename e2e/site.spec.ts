@@ -3,16 +3,44 @@ import { test, expect, expectNoSideScroll } from "./fixtures"
 // What the owner found by hand in 2026-11-03/04 — the plans' promises, the terms, the real-money card, the realbot
 // page on a phone — checked on every PR, on a desktop and a phone screen.
 
-test("the plans say what they unlock, and link the terms", async ({ page }) => {
+test("the plans say what they unlock, and link the terms — English on /", async ({ page }) => {
   await page.goto("/")
+  await expect(page.locator("html")).toHaveAttribute("lang", "en")
+  await expect(page.locator("html")).toHaveAttribute("dir", "ltr")
   const plans = page.locator("#pricing")
-  await expect(plans.getByText("لسه مابتشغّلش بوتات على حسابك في Binance")).toBeVisible()
+  await expect(plans.getByText("They don't run bots on your Binance account yet")).toBeVisible()
   for (const name of ["Free", "Starter", "Pro", "Elite"]) await expect(plans.getByText(name, { exact: true }).first()).toBeVisible()
-  await expect(plans.getByText("بوتين")).toHaveCount(0)                       // the old wording promised bots on the account
   await expectNoSideScroll(page)
-  await plans.getByRole("link", { name: "الشروط والمخاطر" }).click()
+  await plans.getByRole("link", { name: "Terms & risks (Arabic)" }).click()
   await expect(page).toHaveURL(/\/terms$/)
   await expect(page.getByRole("heading", { name: "الشروط والمخاطر" })).toBeVisible()
+})
+
+test("the Arabic landing is right to left and says the same", async ({ page }) => {
+  await page.goto("/ar")
+  await expect(page.locator("html")).toHaveAttribute("lang", "ar")
+  await expect(page.locator("html")).toHaveAttribute("dir", "rtl")
+  const plans = page.locator("#pricing")
+  await expect(plans.getByText("لسه مابتشغّلش بوتات على حسابك في Binance")).toBeVisible()
+  await expect(plans.getByText("بوتين")).toHaveCount(0)                       // the old wording promised bots on the account
+  await expectNoSideScroll(page)
+  await page.getByTestId("lang-switch").click()                              // EN
+  await expect(page).toHaveURL(/\/$/)
+  await expect(page.locator("html")).toHaveAttribute("lang", "en")
+})
+
+test("the hero's live card shows the real basket, and the theme switch flips light and dark", async ({ page }) => {
+  await page.goto("/")
+  const card = page.getByTestId("live-card")
+  await expect(card.getByText("AGT", { exact: true })).toBeVisible()          // from /api/realbot (e2e/fixtures.ts REAL)
+  await expect(card.getByText("Next rebalance", { exact: false })).toBeVisible()
+  await expect(page.getByTestId("real-vs-backtest").getByText("after 30 trades (1/30)").first()).toBeVisible()
+  const html = page.locator("html")
+  const before = await html.getAttribute("data-theme")
+  await page.getByRole("button", { name: /Switch to (light|dark)/ }).click()
+  await expect(html).toHaveAttribute("data-theme", before === "light" ? "dark" : "light")
+  await page.reload()                                                         // remembered
+  await expect(html).toHaveAttribute("data-theme", before === "light" ? "dark" : "light")
 })
 
 test("the terms state the cancellation and refund policy", async ({ page }) => {
