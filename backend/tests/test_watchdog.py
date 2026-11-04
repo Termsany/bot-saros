@@ -75,7 +75,7 @@ class WatchdogTests(unittest.TestCase):
     def server(self, **kw):
         GB, MB = 1024 ** 3, 1024 ** 2
         args = dict(disk=lambda: (35 * GB, 99 * GB), mem=lambda: (3900 * MB, 7900 * MB), ntp=lambda: True,
-                    offset=lambda: 40.0, cert=lambda host, now: 80.0, domains=("a.example", "b.example"))
+                    offset=lambda: 40.0, cert=lambda host, now: 80.0, domains=("a.example", "b.example"), vault=lambda: "ok")
         args.update(kw); return wd.server_problems(NOW, **args)
 
     def test_a_healthy_server_sends_nothing(self):
@@ -87,14 +87,16 @@ class WatchdogTests(unittest.TestCase):
             if host == "b.example": raise ConnectionRefusedError()
             return 9.0
         seen = self.server(disk=lambda: (4 * GB, 99 * GB), mem=lambda: (500 * MB, 7900 * MB), ntp=lambda: False,
-                           offset=lambda: -2500.0, cert=cert)
-        self.assertEqual(set(seen), {"server:disk", "server:mem", "server:ntp", "server:clock", "cert:a.example", "site:b.example"})
+                           offset=lambda: -2500.0, cert=cert, vault=lambda: "unreadable")
+        self.assertEqual(set(seen), {"server:disk", "server:mem", "server:ntp", "server:clock", "cert:a.example", "site:b.example",
+                                     "server:vault"})
         self.assertEqual(seen["cert:a.example"][1], 1)                       # renewal failing: at once
         self.assertEqual(seen["site:b.example"][1], 3)                       # a site down: after 15 minutes
 
     def test_a_server_check_that_cannot_run_is_skipped_not_alerted(self):
         boom = lambda *a: (_ for _ in ()).throw(OSError("no tool"))
-        self.assertEqual(self.server(disk=boom, mem=boom, ntp=boom, offset=lambda: None), {})
+        self.assertEqual(self.server(disk=boom, mem=boom, ntp=boom, offset=lambda: None, vault=lambda: None), {})
+        self.assertEqual(self.server(vault=lambda: "empty"), {})              # no user has saved a key yet
 
     def test_checks_adds_the_server_to_the_bots(self):
         with mock.patch.object(wd, "problems", lambda now: {"down:demo:x": ("t", 2)}), \

@@ -220,7 +220,9 @@ def _scrub(text: str) -> str:
 # ── Health
 @app.get("/api/health")
 async def health():
-    return {"ok": True, "name": "Raqm", "version": "2.0.0"}
+    from app.user_keys_vault import vault_health
+    # vault: whether users' Demo keys can be decrypted ("ok" / "empty" / "unreadable"); the watchdog alerts on it
+    return {"ok": True, "name": "Raqm", "version": "2.0.0", "vault": vault_health()}
 
 # Public, for an uptime check outside the server (owner, 2026-11-01): the watchdog on the VPS (scripts/watchdog.py)
 # writes a heartbeat every 5 minutes; 503 when it is missing or older than 15 — the timer stopped or the bots' side of

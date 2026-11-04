@@ -215,7 +215,18 @@ def _cert_days(host, now):
     return (end - now).total_seconds() / 86400
 
 
-def server_problems(now, disk=_disk, mem=_mem, ntp=_ntp_synced, offset=_binance_offset_ms, cert=_cert_days, domains=DOMAINS):
+def _api_vault():
+    """The API's word on users' Demo key vault ("ok" / "empty" / "unreadable"), or None when the API doesn't answer.
+    Asked over localhost: the watchdog runs as raqmlive and must not read the API's key or vault itself."""
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:8100/api/health", timeout=5) as r:
+            return json.loads(r.read()).get("vault")
+    except Exception:
+        return None
+
+
+def server_problems(now, disk=_disk, mem=_mem, ntp=_ntp_synced, offset=_binance_offset_ms, cert=_cert_days, domains=DOMAINS,
+                    vault=_api_vault):
     """{key: (text, checks in a row before alerting)} for the server. A check that can't run is skipped, not alerted
     (it would page every 5 minutes for a missing tool) — except a site that doesn't answer on HTTPS at all."""
     out = {}
@@ -236,6 +247,8 @@ def server_problems(now, disk=_disk, mem=_mem, ntp=_ntp_synced, offset=_binance_
     off = offset()
     if off is not None and abs(off) > CLOCK_MAX_OFFSET_MS:
         out["server:clock"] = (f"ساعة السيرفر بعيدة عن Binance بـ {off / 1000:+.1f} ثانية", 2)
+    if vault() == "unreadable":
+        out["server:vault"] = ("مفاتيح Demo بتاعة اليوزرز مش بتتفك (VAULT_MASTER_KEY مش هو اللي اتشفرت بيه) — محدش يقدر يحفظ أو يشغّل مفتاح", 2)
     for host in domains:
         try:
             days = cert(host, now)
