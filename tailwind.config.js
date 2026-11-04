@@ -1,29 +1,39 @@
 /** @type {import('tailwindcss').Config} */
-// Raqm identity — same tokens as the Figma file "Raqm / Color".
-// Brand accent is corona (gold); profit/loss are only for gains, losses, LONG/SHORT.
+// Raqm identity — the tokens of the Figma file "RAQM — Global Redesign 2026" (Color collection, modes Dark + Light).
+// Each colour is a CSS variable holding "R G B" (app/globals.css): dark by default, light under [data-theme="light"],
+// so `bg-corona/10`-style opacity still works. Brand accent is corona (gold); profit/loss only for gains, losses,
+// LONG/SHORT.
+const v = name => `rgb(var(--c-${name}) / <alpha-value>)`
+
 module.exports = {
   content: ["./app/**/*.{js,ts,jsx,tsx}", "./components/**/*.{js,ts,jsx,tsx}"],
   theme: {
     extend: {
       colors: {
-        void: "#07080D",       // page background
-        surface: "#0F1118",    // cards
-        surface2: "#161A25",   // inner elements, inputs, hover
-        line: "#232838",       // borders, dividers
-        ink: "#F2F3F7",        // primary text
-        muted: "#8B91A7",      // secondary text
-        faint: "#5D6378",      // tertiary text, captions
-        corona: { DEFAULT: "#F5B841", soft: "#FFE1A1", deep: "#D99A1E" },  // brand
-        umbra: "#7B61FF",      // AI / secondary accent
-        profit: "#22D3A0",
-        loss: "#FF5470",
-        signal: "#4CC9F0",
+        void: v("void"),         // page background
+        surface: v("surface"),   // cards
+        surface2: v("surface2"), // inner elements, inputs, hover
+        line: v("line"),         // borders, dividers
+        line2: v("line2"),       // stronger border
+        ink: v("ink"),           // primary text
+        muted: v("muted"),       // secondary text
+        faint: v("faint"),       // tertiary text, captions
+        corona: { DEFAULT: v("corona"), soft: v("corona-soft"), deep: v("corona-deep") },  // brand
+        "on-corona": v("on-corona"),
+        umbra: v("umbra"),       // AI / secondary accent
+        profit: v("profit"),
+        loss: v("loss"),
+        signal: v("signal"),
       },
       fontFamily: {
-        sans: ["var(--font-cairo)", "system-ui", "sans-serif"],
-        display: ["var(--font-display)", "var(--font-cairo)", "sans-serif"],
+        sans: ["var(--font-sans)", "system-ui", "sans-serif"],
+        display: ["var(--font-display)", "var(--font-sans)", "sans-serif"],
         mono: ["var(--font-mono)", "ui-monospace", "monospace"],
       },
+      keyframes: {
+        "fade-up": { "0%": { opacity: "0", transform: "translateY(14px)" }, "100%": { opacity: "1", transform: "none" } },
+      },
+      animation: { "fade-up": "fade-up .7s cubic-bezier(.2,.7,.2,1) both" },
     },
   },
   plugins: [],
