@@ -126,7 +126,7 @@ class BackendAuthRejectionAuditTests(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
 
     def test_admin_endpoint_rejects_authenticated_non_admin(self):
-        response = self.client.get("/api/keys/status", headers={"Authorization": "Bearer user-token"})
+        response = self.client.get("/api/admin/activation", headers={"Authorization": "Bearer user-token"})
         self.assertEqual(response.status_code, 403)
 
 

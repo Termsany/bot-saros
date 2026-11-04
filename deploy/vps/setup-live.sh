@@ -18,6 +18,15 @@ git -C "$SRC" cat-file -e "$SHA^{commit}" || { echo "commit $SHA not found on Gi
 git -C "$SRC" merge-base --is-ancestor "$SHA" origin/main || { echo "commit $SHA is not on main" >&2; exit 2; }
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 git -C "$SRC" archive "$SHA" | tar -x -C "$T"
+# Run the setup of that very commit. $SRC's own files stay at whatever was checked out (fetch doesn't move them): an
+# older setup-live.sh copied the new code but never ran the steps added since (2026-11-04: it was #75's for weeks).
+if ! cmp -s "$0" "$T/deploy/vps/setup-live.sh"; then
+    if [ "${RAQM_SETUP_OF:-}" = "$SHA" ]; then echo "refusing: the setup of $SHA is not itself" >&2; exit 2; fi
+    S=$(mktemp); cp "$T/deploy/vps/setup-live.sh" "$S"; rm -rf "$T"
+    echo "running setup-live.sh of $SHA (this one is another version)" >&2
+    RAQM_SETUP_OF=$SHA exec sh "$S" "$SHA"
+fi
+if [ "${RAQM_SETUP_OF:-}" = "$SHA" ]; then rm -f "$0"; fi     # the temporary copy made just above
 id raqmlive >/dev/null 2>&1 || useradd --system --home-dir "$L" --no-create-home --shell /usr/sbin/nologin raqmlive
 # The live bot and the API share the risk ledger and the IPC folder through their own group, raqmrisk, which holds
 # those two users only. Not raqmapi's group: that one owns the API's code and venv (group-writable), so membership
@@ -50,6 +59,15 @@ install -m 644 -o root -g root "$T/scripts/backup.py" "$L/scripts/backup.py"    
 install -m 644 -o root -g root "$T/scripts/provision_users.py" "$L/scripts/provision_users.py"   # Phase 2 users' bots (root)
 install -m 644 -o root -g root "$T/scripts/live_preflight.py" "$L/scripts/live_preflight.py"     # checks before real money (root, read only)
 install -m 644 -o root -g root "$T/scripts/realbot_export.py" "$L/scripts/realbot_export.py"     # realbot.da3m.io's live.json (raqmlive)
+install -m 644 -o root -g root "$T/scripts/rebalance_check.py" "$L/scripts/rebalance_check.py"   # the real basket vs Binance after a rebalance (read only)
+install -m 644 -o root -g root "$T/scripts/restore_check.py" "$L/scripts/restore_check.py"     # checks a backup restores (docs/restore.md)
+# the owner's helpers (run by hand with sudo): a new Demo key (HMAC or a server-made Ed25519 key), the evidence reviewers
+install -d -o root -g root -m 755 /usr/local/lib/raqm
+install -m 644 -o root -g root "$T/deploy/vps/tools/set_demo_keys.sh" /usr/local/lib/raqm/set_demo_keys.sh
+install -m 644 -o root -g root "$T/deploy/vps/tools/set_reviewers.py" /usr/local/lib/raqm/set_reviewers.py
+# what a real rebalance cost (read only), run after the Monday check: kept here, not in $L, so it can be updated
+# without touching the real bot's folder (whose code the readiness evidence is bound to)
+install -m 644 -o root -g root "$T/scripts/rebalance_costs.py" /usr/local/lib/raqm/rebalance_costs.py
 echo "$SHA" > "$L/DEPLOYED_COMMIT"
 # packages: only what the bot imports, pinned, from wheels (deploy/vps/live-requirements.txt)
 [ -x "$L/venv/bin/python" ] || python3 -m venv "$L/venv"
@@ -133,6 +151,10 @@ install -d -o raqmlive -g www-data -m 755 /var/www/realbot.da3m.io
 install -m 644 -o root -g root "$T/deploy/vps/realbot/index.html" /var/www/realbot.da3m.io/index.html
 install -m 644 -o root -g root "$T/deploy/vps/raqm-realbot-export.service" /etc/systemd/system/raqm-realbot-export.service
 install -m 644 -o root -g root "$T/deploy/vps/raqm-realbot-export.timer" /etc/systemd/system/raqm-realbot-export.timer
+install -m 644 -o root -g root "$T/deploy/vps/raqm-rebalance-check.service" /etc/systemd/system/raqm-rebalance-check.service
+install -m 644 -o root -g root "$T/deploy/vps/raqm-rebalance-check.timer" /etc/systemd/system/raqm-rebalance-check.timer
+install -m 644 -o root -g root "$T/deploy/vps/raqm-demo-weekly.service" /etc/systemd/system/raqm-demo-weekly.service
+install -m 644 -o root -g root "$T/deploy/vps/raqm-demo-weekly.timer" /etc/systemd/system/raqm-demo-weekly.timer
 # Phase 2 (docs/phase2-design.md): the users' bot template and the provisioner. The timer is NOT enabled here —
 # switching users' bots on is a deliberate step: systemctl enable --now raqm-users-provision.timer
 install -m 644 -o root -g root "$T/deploy/vps/raqm-user@.service" /etc/systemd/system/raqm-user@.service
@@ -150,10 +172,14 @@ systemctl daemon-reload
 systemctl enable --now raqm-watchdog.timer >/dev/null 2>&1 || echo "warning: raqm-watchdog.timer not enabled" >&2
 systemctl enable --now raqm-backup.timer >/dev/null 2>&1 || echo "warning: raqm-backup.timer not enabled" >&2
 systemctl enable --now raqm-realbot-export.timer >/dev/null 2>&1 || echo "warning: raqm-realbot-export.timer not enabled" >&2
+systemctl enable --now raqm-rebalance-check.timer >/dev/null 2>&1 || echo "warning: raqm-rebalance-check.timer not enabled" >&2
+systemctl enable --now raqm-demo-weekly.timer >/dev/null 2>&1 || echo "warning: raqm-demo-weekly.timer not enabled" >&2
 systemctl enable --now raqm-watchdog-users.timer >/dev/null 2>&1 || echo "warning: raqm-watchdog-users.timer not enabled" >&2
 systemctl enable --now raqm-backup-users.timer >/dev/null 2>&1 || echo "warning: raqm-backup-users.timer not enabled" >&2
 # new group lists reach a process only when it starts: the API (try-restart: only if running). The live bots are not
 # restarted here — one stopped in the middle of an order goes to review; restart them as a deliberate step:
-#   systemctl restart 'raqm-demo@*' / 'raqm-live@*'
+#   for s in trend_daily vol_breakout rsi2_pullback trend_breakout listing_short ratio_trend; do systemctl restart "raqm-demo@$s"; done
+# by name, never 'raqm-demo@*': raqm-demo@<s> Conflicts= raqm-live@<s>, so starting the Demo twin of a real-money bot
+# stops the real one (raqm-demo@momentum_ls is masked since 2026-11-03 for that reason). The real bot: by name, alone.
 systemctl try-restart raqm-api 2>/dev/null || echo "warning: raqm-api restart failed" >&2
 echo "raqm-live ready: $(ls "$L" | tr '\n' ' ')"

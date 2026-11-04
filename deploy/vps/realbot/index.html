@@ -55,8 +55,34 @@
   td.up{animation:up 1s} td.down{animation:down 1s}
   @keyframes up{from{background:rgba(34,211,160,.22)}to{background:transparent}}
   @keyframes down{from{background:rgba(255,84,112,.22)}to{background:transparent}}
+  .vs{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+  .vs .value{font-size:20px}
+  .vs .bt{font-size:11px;color:var(--faint);margin-top:4px}
+  .warn{font-size:12px;color:var(--corona);margin:8px 0 0;line-height:1.8}
   footer{margin-top:34px;color:var(--faint);font-size:12px;line-height:1.9;border-top:1px solid var(--line);padding-top:16px}
-  @media (max-width:760px){ .kpis{grid-template-columns:repeat(2,minmax(0,1fr))} h1{font-size:22px} .kpi .value{font-size:20px} }
+  td.num span{direction:ltr;unicode-bidi:isolate}
+  @media (max-width:760px){ .kpis,.vs{grid-template-columns:repeat(2,minmax(0,1fr))} h1{font-size:22px} .kpi .value{font-size:20px} }
+  /* phones: every row becomes a card, each value next to its column's name */
+  @media (max-width:640px){
+    .wrap{padding:14px 12px 36px}
+    h1{font-size:20px;margin-top:18px} .sub{font-size:13px}
+    .kpis{gap:8px;margin-top:16px} .card{padding:12px;border-radius:14px}
+    .kpi .value{font-size:18px} .kpi .note{font-size:10px}
+    .chip{border-radius:12px;line-height:1.6}
+    .table{overflow:visible;border:0;background:none;border-radius:0}
+    table{min-width:0} thead{display:none} tbody{display:block}
+    tr{display:grid;grid-template-columns:1fr 1fr;gap:7px 14px;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:12px;margin-bottom:8px}
+    td{display:flex;align-items:baseline;justify-content:space-between;gap:8px;padding:0;border:0;white-space:normal;font-size:12.5px;min-width:0}
+    td.num{direction:rtl;text-align:left}
+    td::before{content:attr(data-l);font-family:Cairo,system-ui,sans-serif;font-size:11px;color:var(--muted);white-space:nowrap}
+    td.coin,td.side{font-size:15px;padding-bottom:7px;border-bottom:1px solid var(--line)}
+    td.coin::before,td.side::before{content:none}
+    td.side{justify-content:flex-end}
+    td.wide{grid-column:1/-1}
+    td.empty{grid-column:1/-1;display:block;padding:14px}
+    td.empty::before{content:none}
+    tr:has(td.empty){display:block}
+  }
 </style>
 </head>
 <body>
@@ -87,6 +113,8 @@
     <div class="card kpi"><div class="label">لو كل الوقفات اتضربت</div><div class="value mono loss" id="atStops">—</div><div class="note">أقصى خسارة للمفتوح دلوقتي</div></div>
   </div>
 
+  <div id="summary"></div>
+
   <div id="bots"></div>
 
   <footer>
@@ -107,13 +135,57 @@ const nextDay = iso => { const d = new Date(iso)
   const date = d.toLocaleDateString("ar-EG", {weekday: "long", day: "numeric", month: "long", timeZone: "UTC", numberingSystem: "latn"})
   const utc = d.toLocaleTimeString("en-GB", {hour: "2-digit", minute: "2-digit", timeZone: "UTC"})
   const cairo = d.toLocaleTimeString("en-GB", {hour: "2-digit", minute: "2-digit", timeZone: "Africa/Cairo"})
-  return `${date} · ${utc} UTC (${cairo} بتوقيت مصر)` }
+  return `${date} · <span dir="ltr">${utc} UTC</span> (<span dir="ltr">${cairo}</span> بتوقيت مصر)` }
 const sideTag = s =>s === "long" ? `<span class="tag profit">LONG</span>` : `<span class="tag loss">SHORT</span>`
 const NAMES = {trend_daily: "ترند يومي", vol_breakout: "اختراق التقلب", rsi2_pullback: "RSI2 الارتداد", trend_breakout: "اختراق الترند",
                listing_short: "شورت العملات الجديدة", momentum_ls: "مومنتم لونج/شورت (أسبوعي)", ratio_trend: "ترند النسبة"}
 const id = sym => String(sym).split(":")[0].replace("/", "")
+// a number cell; data-l is its column's name, shown beside it on a phone (where the table header is hidden)
+const num = (label, cls, val) => `<td class="num mono ${cls}" data-l="${label}"><span>${val}</span></td>`
 
 let D = null, live = {}, prev = {}, dirty = false, ws = null, subs = new Set()
+
+// The backtest of the same basket, every Binance USDT-M perpetual 2019-09 → 2026-10, fees + real funding
+// (lib/demo-baseline.json "momentum_ls" "all"; backend/tests/test_realbot_summary.py keeps these equal to it).
+const BACKTEST = {momentum_ls: {win_rate: 48.7, avg_win_pct: 36.3, avg_loss_pct: -29.0, profit_factor: 1.19}}
+const SAMPLE = 30          // closed trades before a comparison means anything (the Demo measurement's rule)
+const ltr = v => `<span dir="ltr">${v}</span>`   // a number or date inside Arabic text keeps its own order
+const monthOf = iso => new Date(iso).toLocaleDateString("ar-EG", {month: "long", year: "numeric", timeZone: "UTC", numberingSystem: "latn"})
+
+/** Every closed trade, by month, and the whole run next to the backtest (development-plan 7.1). */
+function summary(bots){
+  const closed = bots.flatMap(b => b.history.filter(h => h.time && h.pnl != null).map(h => ({...h, strategy: b.strategy})))
+  const opened = bots.flatMap(b => [...b.positions, ...b.history].map(x => x.opened).filter(Boolean)).sort()
+  if(!opened.length) return ""
+  const stat = rows => { const w = rows.filter(r => r.pnl > 0), l = rows.filter(r => r.pnl < 0), pc = rows.map(r => r.pnl_pct).filter(v => v != null)
+    const gw = w.reduce((a, r) => a + r.pnl, 0), gl = -l.reduce((a, r) => a + r.pnl, 0)
+    return {n: rows.length, net: rows.reduce((a, r) => a + r.pnl, 0), win: rows.length ? w.length / rows.length * 100 : null,
+      pf: gl > 0 ? gw / gl : null, avg: pc.length ? pc.reduce((a, v) => a + v, 0) / pc.length : null,
+      avgWin: w.filter(r => r.pnl_pct != null).length ? w.reduce((a, r) => a + (r.pnl_pct ?? 0), 0) / w.filter(r => r.pnl_pct != null).length : null,
+      avgLoss: l.filter(r => r.pnl_pct != null).length ? l.reduce((a, r) => a + (r.pnl_pct ?? 0), 0) / l.filter(r => r.pnl_pct != null).length : null,
+      weeks: new Set(rows.map(r => r.time.slice(0, 10))).size} }
+  const months = {}
+  closed.forEach(r => { const k = r.time.slice(0, 7); (months[k] = months[k] || []).push(r) })
+  const all = stat(closed)
+  const mrows = Object.keys(months).sort().reverse().map(k => { const m = stat(months[k])
+    return `<tr><td class="coin">${monthOf(months[k][0].time)}</td>${num("صفقات مقفولة", "", m.n)}${num("أيام قفل", "", m.weeks)}
+      ${num("نسبة الكسب", "", m.win == null ? "—" : m.win.toFixed(0) + "%")}${num("الصافي $", tone(m.net), usd(m.net))}${num("متوسط الصفقة", tone(m.avg), pct(m.avg))}</tr>` }).join("")
+  const bt = BACKTEST[bots[0]?.strategy] || {}
+  const vsCard = (label, val, cls, btText) => `<div class="card kpi"><div class="label">${label}</div><div class="value mono ${cls}">${val}</div><div class="bt">${btText}</div></div>`
+  const small = all.n < SAMPLE
+  return `<section>
+    <div class="head"><h2>الملخص من أول ما اشتغل</h2><span class="count">من ${ltr(day(opened[0]))} · ${all.n} صفقة مقفولة</span></div>
+    <div class="vs">
+      ${vsCard("الصافي المحقق", usd(all.net), tone(all.net), "بعد الرسوم والـ funding")}
+      ${vsCard("نسبة الكسب", all.win == null ? "—" : all.win.toFixed(1) + "%", "", `الباكتست ${ltr((bt.win_rate ?? "—") + "%")}`)}
+      ${vsCard("Profit factor", all.pf == null ? "—" : all.pf.toFixed(2), all.pf == null ? "" : all.pf >= 1 ? "profit" : "loss", `الباكتست ${ltr(bt.profit_factor ?? "—")}`)}
+      ${vsCard("متوسط الكسب / الخسارة", `${pct(all.avgWin)} / ${pct(all.avgLoss)}`, "", `الباكتست ${ltr(`+${bt.avg_win_pct ?? "—"}% / ${bt.avg_loss_pct ?? "—"}%`)} من الهامش`)}
+    </div>
+    ${small ? `<p class="warn">لسه ${all.n} صفقة من ${SAMPLE} على الأقل: الأرقام دي لسه مش كفاية نحكم بيها على الاستراتيجية — الباكتست نفسه فيه أسابيع خسارة كتير.</p>` : ""}
+    <div class="table" style="margin-top:12px"><table><thead><tr><th>الشهر</th><th>صفقات مقفولة</th><th>أيام قفل</th><th>نسبة الكسب</th><th>الصافي $</th><th>متوسط الصفقة (من الهامش)</th></tr></thead>
+    <tbody>${mrows || `<tr><td colspan="6" class="empty">لسه مفيش صفقات اتقفلت — أول تبديل ${bots[0]?.next_rebalance ? nextDay(bots[0].next_rebalance) : "الاتنين الجاي"}</td></tr>`}</tbody></table></div>
+  </section>`
+}
 
 function posPnl(p){
   const price = live[id(p.symbol)] ?? p.price, sg = p.side === "long" ? 1 : -1
@@ -132,16 +204,16 @@ function render(){
       const moved = prev[id(p.symbol)] != null && price !== prev[id(p.symbol)] ? (price > prev[id(p.symbol)] ? "up" : "down") : ""
       prev[id(p.symbol)] = price
       unreal += pnl || 0; open += 1; margin += m; atStops += p.loss_at_sl || 0
-      return `<tr><td class="coin">${esc(String(p.symbol).split(":")[0])}</td><td>${sideTag(p.side)}</td><td class="num mono">${px(p.entry)}</td>
-        <td class="num mono ${moved}">${px(price)}</td><td class="num mono">${px(p.sl)}</td><td class="num mono">${usd(m, false)}</td>
-        <td class="num mono ${tone(pnl)}">${usd(pnl)}</td><td class="num mono ${tone(pnl)}">${pct(m ? pnl / m * 100 : null)}</td>
-        <td class="num mono loss">${usd(p.loss_at_sl)}</td><td class="mono">${day(p.opened)}</td></tr>`
+      return `<tr><td class="coin">${esc(String(p.symbol).split(":")[0])}</td><td class="side">${sideTag(p.side)}</td>${num("الدخول", "", px(p.entry))}
+        ${num("السعر الحالي", moved, px(price))}${num("الوقف", "", px(p.sl))}${num("الهامش", "", usd(m, false))}
+        ${num("الربح $", tone(pnl), usd(pnl))}${num("على الهامش", tone(pnl), pct(m ? pnl / m * 100 : null))}
+        ${num("لو الوقف اتضرب", "loss", usd(p.loss_at_sl))}${num("من", "wide", day(p.opened))}</tr>`
     }).join("")
     const hist = [...b.history].reverse()
     hist.forEach(h => { realized += h.pnl || 0; if(h.pnl > 0) wins++; else if(h.pnl < 0) losses++ })
-    const hrows = hist.map(h => `<tr><td class="coin">${esc(String(h.symbol).split(":")[0])}</td><td>${sideTag(h.side)}</td><td class="num mono">${px(h.entry)}</td>
-        <td class="num mono">${px(h.exit)}</td><td class="num mono ${tone(h.pnl)}">${usd(h.pnl)}</td><td class="num mono ${tone(h.pnl)}">${pct(h.pnl_pct)}</td>
-        <td>${esc(h.reason || "")}</td><td class="mono">${day(h.time)}</td></tr>`).join("")
+    const hrows = hist.map(h => `<tr><td class="coin">${esc(String(h.symbol).split(":")[0])}</td><td class="side">${sideTag(h.side)}</td>${num("الدخول", "", px(h.entry))}
+        ${num("الخروج", "", px(h.exit))}${num("الربح $", tone(h.pnl), usd(h.pnl))}${num("على الهامش", tone(h.pnl), pct(h.pnl_pct))}
+        <td class="wide" data-l="السبب">${esc(h.reason || "")}</td>${num("الوقت", "wide", day(h.time))}</tr>`).join("")
     return `<section>
       <div class="head"><h2>${esc(NAMES[b.strategy] || b.strategy)}</h2><span class="count">${b.positions.length} مفتوحة · رافعة x${lev} · ${b.running ? "البوت شغال" : "البوت مش بيكتب حالته"}</span></div>
       ${b.next_rebalance ? `<div class="chips" style="margin:-4px 0 10px"><span class="chip">التبديل الجاي: <b>${nextDay(b.next_rebalance)}</b></span></div>` : ""}
@@ -155,6 +227,7 @@ function render(){
     </section>`
   }).join("")
   $("bots").innerHTML = html || `<section><div class="card empty">مفيش بوت بفلوس حقيقية شغال دلوقتي.</div></section>`
+  $("summary").innerHTML = summary(D.bots)
   $("unrealized").textContent = usd(unreal); $("unrealized").className = `value mono ${tone(unreal)}`
   $("realized").textContent = usd(realized); $("realized").className = `value mono ${tone(realized)}`
   $("wl").textContent = `${wins} كسبانة · ${losses} خسرانة`

@@ -48,6 +48,26 @@ jobs:
       - name: npm audit (high and critical)
         run: npm audit --audit-level=high
 
+  # the site in a real browser, desktop and phone, never on the internet (e2e/fixtures.ts): development-plan 3.3
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # the fake Supabase project and API the browser tests answer themselves (playwright.config.ts E2E_ENV)
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: https://e2e-project.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: e2e-anon-key-not-a-secret
+      NEXT_PUBLIC_API_URL: http://localhost:8799
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run build
+      - run: npm run test:e2e
+
   secret-scan:
     runs-on: ubuntu-latest
     steps:

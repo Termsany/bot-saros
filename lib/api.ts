@@ -65,6 +65,8 @@ async function postJson(path: string, body: any){
   if(!r.ok) throw new Error(d.detail || "الطلب ما اتبعتش")
   return d
 }
+/** Admin: approve (or remove) an account for its own Demo bots — the provisioner on the server still checks the rest. */
+export const apiAdminApproveUser = (uid: string, on: boolean) => postJson(`/api/admin/user-bots/${encodeURIComponent(uid)}/approve`, { on })
 /** Close one trade in the caller's own paper portfolio (at the bot's current price, on the server). */
 export const apiPortfolioClose = (label: string, opened: string) => postJson("/api/user/portfolio/close", { label, opened })
 /** Admin: ask a paper bot to close one of its positions; the result comes from apiPaperCloseResult. */

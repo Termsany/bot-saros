@@ -33,15 +33,8 @@ DEFAULT_TIMEOUT_SECONDS = 5.0
 DEFAULT_STALE_SECONDS = 300.0  # 5 minutes with no update => considered stale
 
 # strategy_id -> public status file name, for the 7 REAL systemd bots.
-STRATEGY_FILES: dict[str, str] = {
-    "trend_daily": "status.json",
-    "listing_short": "listing.json",
-    "momentum_ls": "momentum.json",
-    "ratio_trend": "ratio.json",
-    "vol_breakout": "breakout.json",
-    "rsi2_pullback": "rsi2.json",
-    "trend_breakout": "tbreak.json",
-}
+from app import strategy_catalog
+STRATEGY_FILES: dict[str, str] = {s: f"{strategy_catalog.LIVE_FILE[s]}.json" for s in strategy_catalog.IDS}   # lib/strategies.json
 
 # Strategy ids present in admin_control.STRATEGIES that have NO running
 # production service and NO public status file.

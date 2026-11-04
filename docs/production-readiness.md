@@ -1,11 +1,34 @@
 # Bot Saros production-readiness matrix
 
-Status is **NO-GO**. Paper mode remains the only permitted operating mode for real money.
+Status: **`momentum_ls` is LIVE at small size on real money since 2026-11-03** (owner's decision, plan:
+[live-small-size-plan.md](live-small-size-plan.md)). Every other strategy is **NO-GO** for real money: Demo or paper only.
 
-_Last updated 2026-11-01: the VPS runs `215596c` (PR #63). Since the previous version: the full review (#31–#33), the
-admin's own account running all seven strategies on Demo (#34–#45, #50), the measurement baseline (#46), problem
-alerts (#47–#49, #54), live-status fixes (#62) and the outside-the-server uptime check (#63)._
-Previous versions: 2026-10-29 after PR #29 (`da39663`); 2026-10-29 after PRs #21–#23; 2026-10-26 (28a8249).
+_Last updated 2026-11-03: the real bot `raqm-live@momentum_ls` runs `b766857` on a $500 Binance sub-account; the API and
+`/opt/raqm-live` are on `b0cabb2` (PR #88), realbot.da3m.io's page on `196068f` (PR #90), the site on Vercel follows main. Since the previous version: PRs #77–#91 (below)._
+Previous versions: 2026-11-01 (`215596c`, PR #63); 2026-10-29 after PR #29 (`da39663`); 2026-10-29 after PRs #21–#23;
+2026-10-26 (28a8249).
+
+## Real money (since 2026-11-03)
+
+- **What runs:** `raqm-live@momentum_ls` only, on a sub-account used by the bot alone, key futures-only, withdrawals off,
+  restricted to the server's IP. 10 legs × $26 margin × x2, every leg's stop on Binance (checked against the exchange
+  at 16:53 UTC). At its stops the whole basket risks about $208; root's ceilings in `allow-live.env` (4.5 / 45 / 25 / 20 /
+  45 % of the $500 capital) bound the gate whatever the dashboard says.
+- **Built for it (PRs #77–#88):** stops kept on the exchange until confirmed gone (#77); root-owned hard ceilings the
+  dashboard can't raise, required at live start (#78); demo_e2e refuses an account with open positions (#79);
+  `scripts/live_preflight.py`, the read-only go-live check incl. the key's restrictions on Binance (#80, #82, #84, #85);
+  the risk limits form on the dashboard (#83); the gate, sizing and kill switch on min(capital, equity) so the bot keeps
+  to the capital set even when the account holds more (#84); realbot.da3m.io, the public read-only page (#86); the
+  weekly rebalance anchored on Monday 00:00 UTC (#87); the dashboard tells the real bot from the Demo one (#88).
+- **Seen by the owner:** realbot.da3m.io (phone layout #90) and the real-money card on top of /dashboard (#91).
+- **Open:**
+  - the first real rebalance, **Monday 2026-11-09 00:00 UTC**: old legs closed with fills, fees and funding, none of
+    their stops left on the exchange, 10 new legs with stops, no recovery (checklist in the plan, §1 and §4);
+  - size stays at $26 per leg for at least 3 rebalances, then compared with the baseline (plan §5);
+  - `readiness_evidence.json` still names placeholder reviewers — the owner's to correct;
+  - the old main-account API key should be revoked on Binance (the owner's to do);
+  - PR #89 (one file per strategy under `bots/`) waits until after the 2026-11-09 rebalance: Demo first, then the
+    real bot.
 
 ## Where the roadmap stands
 
@@ -184,6 +207,19 @@ and 50 by the aggregate risk; each of the 7 strategies gets 8 slots.
 - Rule from the baseline: a strategy far from its baseline after its sample is switched off, not re-tuned.
 - 2026-11-01: 9 positions open (`trend_daily` 5, `ratio_trend` 2 pairs); no trade closed by a strategy yet — the 19
   closed so far were closed by hand on 2026-10-30, before the measurement started, and are not counted.
+
+- **2026-11-03: the measurement is paused.** At 12:07 UTC the dashboard's Demo selection was set to `momentum_ls`
+  only (`demo_selection` #17 in `/opt/raqm-risk-demo/live_activation.sqlite3`; before it, #16 of 2026-11-02 had five:
+  momentum_ls, ratio_trend, rsi2_pullback, trend_daily, vol_breakout). Since then the six other Demo bots take no new
+  entries — exits still run — and `raqm-demo@momentum_ls` is stopped (its unit conflicts with the real one), its last
+  10 Demo legs left open without a bot. The selection is the owner's to restore on the dashboard (التداول الحقيقي →
+  Demo).
+
+- **2026-11-03 22:52:35 UTC: six Demo positions closed by hand, not counted.** Every open Demo position (trend_daily
+  1000PEPE, HYPE, NEAR, ZEC; ratio_trend's BTC/ETH pair) was closed in the same second from the Binance iOS app
+  (client ids `ios_…`), while the Demo API key was being replaced; the bots, without a working key until 00:02, booked
+  them at 00:04 as "قفل يدوي من Binance" and removed their stops (none left, checked). These closes are excluded from
+  the measurement like the ones of 2026-10-30. Since 2026-11-04 00:02 the Demo bots run on a server-made Ed25519 key.
 
 ## Deployment (2026-11-01)
 

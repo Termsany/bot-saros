@@ -1,5 +1,5 @@
 "use client"
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { apiLiveStatus, apiLiveStrategies, apiSetCapital, apiSetLimits, apiSetLiveStrategies } from "@/lib/api"
 import { LivePositions } from "@/components/LivePositions"
 import { DemoMeasurement } from "@/components/DemoMeasurement"
@@ -208,8 +208,11 @@ export function LiveStrategiesView({ env, onEnv, cfg, status, chosen, onToggle, 
       </div>
 
       <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_372px]">
-        <Card>
-          <CardHeader title="الاستراتيجيات على حسابك"
+        <Card className={env === "live" ? "border-loss/45" : "border-signal/45"}>
+          <div className={`mb-3 rounded-lg px-3 py-2 text-[13px] font-semibold ${env === "live" ? "bg-loss/10 text-loss" : "bg-signal/10 text-signal"}`}>
+            {env === "live" ? `بتغيّر الحساب الحقيقي${account.trim() ? ` "${account.trim()}"` : ""} — فلوس حقيقية` : "بتغيّر حساب الـ Demo — فلوس وهمية، وده بيأثر على قياس الـ Demo"}
+          </div>
+          <CardHeader title={env === "live" ? "الاستراتيجيات على الحساب الحقيقي" : "الاستراتيجيات على الـ Demo"}
             sub={share != null ? `كل استراتيجية شغالة ليها لحد ${share} صفقات (${total} مكان ÷ ${onCount})` : "تشتغل = تقدر تدخل صفقات. مقفولة = مش هتدخل جديد، والمفتوح بيخرج على قاعدته ووقفه."}
             action={<>
               {msg && <span className="text-[12px] text-muted">{msg}</span>}
@@ -258,6 +261,20 @@ export function LiveStrategiesView({ env, onEnv, cfg, status, chosen, onToggle, 
   )
 }
 
+/** What a save changes, account first: what starts, what stops entering (2026-11-03: a Demo save meant for the real
+ *  account turned six strategies off, and the old text listed only the ones left on). */
+export function switchConfirmText(env: "demo"|"live", account: string, saved: { id: string, on: boolean }[], chosen: Set<string>){
+  const name = (s: string) => LABELS[s] || s
+  const turnOn = saved.filter(r => !r.on && chosen.has(r.id)).map(r => name(r.id))
+  const turnOff = saved.filter(r => r.on && !chosen.has(r.id)).map(r => name(r.id))
+  const where = env === "demo" ? "حساب الـ Demo (فلوس وهمية)" : `الحساب الحقيقي "${account.trim()}" (فلوس حقيقية)`
+  return [`هتغيّر ${where}:`,
+    turnOn.length ? `\nهتشتغل:\n${turnOn.join("\n")}` : "",
+    turnOff.length ? `\nهتبطّل تدخل صفقات جديدة (المفتوح بيخرج عادي):\n${turnOff.join("\n")}` : "",
+    env === "demo" && turnOff.length ? "\nالاستراتيجيات اللي هتتقفل هيقف قياسها على الـ Demo." : "",
+    `\nبعد الحفظ شغالين: ${chosen.size ? [...chosen].map(name).join("، ") : "ولا واحدة"}`].filter(Boolean).join("\n")
+}
+
 /** The admin's own live account: yes/no per strategy (the activation record the bots check before every entry),
  *  and each strategy's bot with its positions. A strategy turned off stops entering; its open positions still exit. */
 export function LiveStrategies(){
@@ -269,12 +286,18 @@ export function LiveStrategies(){
   const [account, setAccount] = useState("")
   const [msg, setMsg] = useState("")
   const [saving, setSaving] = useState(false)
+  // the tab shown now, and whether its switches have unsaved changes: an answer for the other tab (a slow request
+  // from before a tab change) is dropped, and the 15 s refresh never overwrites switches the owner is changing
+  const envNow = useRef(env)
+  const dirty = useRef(false)
 
   const load = useCallback(async () => {
-    const [c, s] = await Promise.all([apiLiveStrategies(env), apiLiveStatus()])
+    const want = env
+    const [c, s] = await Promise.all([apiLiveStrategies(want), apiLiveStatus()])
+    if(envNow.current !== want) return
     setCfg(c); setStatus(s)
     if(c){
-      setChosen(new Set(c.strategies.filter((r: any) => r.on).map((r: any) => r.id)))
+      if(!dirty.current) setChosen(new Set(c.strategies.filter((r: any) => r.on).map((r: any) => r.id)))
       setAccount(a => a || c.account || "")
     }
   }, [env])
@@ -282,16 +305,14 @@ export function LiveStrategies(){
 
   async function save(){
     const list = [...chosen]
-    const where = env === "demo" ? "على حساب الـ Demo (فلوس وهمية)" : `بفلوس حقيقية على حساب "${account}"`
-    const text = list.length ? `تشغيل ${where}:\n${list.map(s => LABELS[s] || s).join("\n")}\n\nأي استراتيجية مش في القايمة هتبطّل تدخل صفقات جديدة.` : `إيقاف كل الاستراتيجيات عن الدخول ${where}؟`
-    if(!confirm(text)) return
+    if(!confirm(switchConfirmText(env, account, cfg?.strategies || [], chosen))) return
     setSaving(true); setMsg("")
-    try{ await apiSetLiveStrategies(env, account.trim(), list); setMsg("✅ اتحفظ"); load() }
+    try{ await apiSetLiveStrategies(env, account.trim(), list); dirty.current = false; setMsg("✅ اتحفظ"); load() }
     catch(e: any){ setMsg(`⚠️ ${e.message}`) }
     finally{ setSaving(false) }
   }
 
-  return <LiveStrategiesView env={env} onEnv={e => { setEnv(e); setCfg(undefined); setMsg("") }} cfg={cfg} status={status} chosen={chosen}
-    onToggle={(id, on) => setChosen(s => { const n = new Set(s); on ? n.add(id) : n.delete(id); return n })}
+  return <LiveStrategiesView env={env} onEnv={e => { envNow.current = e; dirty.current = false; setEnv(e); setCfg(undefined); setMsg("") }} cfg={cfg} status={status} chosen={chosen}
+    onToggle={(id, on) => { dirty.current = true; setChosen(s => { const n = new Set(s); on ? n.add(id) : n.delete(id); return n }) }}
     account={account} onAccount={setAccount} onSave={save} saving={saving} msg={msg} reload={load} />
 }

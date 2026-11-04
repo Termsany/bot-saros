@@ -11,9 +11,10 @@ before the start are left out. Every figure is in % of the trade's margin, the b
 """
 from datetime import datetime, timezone
 
+from app import strategy_catalog
+
 START = datetime(2026, 10, 31, tzinfo=timezone.utc)
-SAMPLE = {"trend_daily": 30, "ratio_trend": 30, "vol_breakout": 30, "trend_breakout": 30,
-          "rsi2_pullback": 15, "listing_short": 15, "momentum_ls": None}
+SAMPLE = dict(strategy_catalog.DEMO_SAMPLE)          # lib/strategies.json "demoSample"
 DD_LIMIT = 1.5        # × the baseline's worst drawdown
 WIN_GAP = 15.0        # points of win rate: past it, a look (not a verdict)
 LOSS_LIMIT = 1.5      # × the baseline's average loss: past it, a look

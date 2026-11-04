@@ -27,6 +27,8 @@ PATHS = {
 BASKET = {"momentum_ls": 10, "ratio_trend": 2}
 STOP_DISTANCE = riskmgr.PLAN_STOP_LOSS
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
+SRC = Path("/root/raqm-src")                       # setup-live.sh's root-owned clone: what each commit contained
+REQUIREMENTS = "deploy/vps/live-requirements.txt"  # the bot's pinned packages (the venv setup-live.sh builds)
 
 
 def parse_env(path):
@@ -67,6 +69,34 @@ def file_ok(path, owner, mode=0o600):
     return True, f"{p} ({owner}, {mode:o})"
 
 
+def trading_files(live):
+    """The code a real-money bot runs, as setup-live.sh installs it: the top-level modules, the backend modules,
+    bots/ (one file per strategy, when present). scripts/ are tools that place no order and are not in it."""
+    live = Path(live)
+    files = [p for p in sorted(live.glob("*.py")) + sorted((live / "backend" / "app").glob("*.py")) + sorted((live / "bots").glob("*.py"))
+             if p.is_file() and not p.is_symlink()]
+    return [p.relative_to(live).as_posix() for p in files]
+
+
+def trading_code_diff(src, reviewed, live, deployed):
+    """[] when every trading file under `live` is byte for byte the reviewed commit's and the pinned packages are the
+    same; else the paths that differ (or are new since the review); a str when git can't tell."""
+    import subprocess
+    def show(rev, path):
+        r = subprocess.run(["git", "-C", str(src), "show", f"{rev}:{path}"], capture_output=True)
+        return r.stdout if r.returncode == 0 else None
+    try:
+        for rev in (reviewed, deployed):
+            if subprocess.run(["git", "-C", str(src), "cat-file", "-e", f"{rev}^{{commit}}"], capture_output=True).returncode:
+                return f"commit {rev[:12]} not in {src}"
+        out = [rel for rel in trading_files(live) if show(reviewed, rel) != (Path(live) / rel).read_bytes()]
+        if show(reviewed, REQUIREMENTS) != show(deployed, REQUIREMENTS):
+            out.append(REQUIREMENTS)
+        return out
+    except (OSError, ValueError) as e:
+        return f"{type(e).__name__}: {e}"
+
+
 def check_files(paths, strategy):
     live = paths["live"]; rows = []
     sha = (live / "DEPLOYED_COMMIT").read_text(encoding="utf-8").strip() if (live / "DEPLOYED_COMMIT").is_file() else ""
@@ -104,8 +134,17 @@ def check_files(paths, strategy):
     api = parse_env(paths["api_env"])
     rows.append(("ALLOW_LIVE_TRADING=true for the API", api.get("ALLOW_LIVE_TRADING", "").lower() == "true", "in /opt/raqm-api/.env (the dashboard's yes/no needs it)"))
     expected = api.get("READINESS_EXPECTED_COMMIT_SHA", "").lower()
-    rows.append(("readiness bound to the deployed commit", bool(SHA40.match(expected)) and expected == sha,
-                 f"READINESS_EXPECTED_COMMIT_SHA={expected or '(unset)'} vs deployed {sha or '(none)'}"))
+    if not (SHA40.match(expected) and SHA40.match(sha)):
+        rows.append(("readiness bound to the deployed code", False, f"READINESS_EXPECTED_COMMIT_SHA={expected or '(unset)'} vs deployed {sha or '(none)'}"))
+    elif expected == sha:
+        rows.append(("readiness bound to the deployed code", True, f"reviewed commit = deployed {sha[:12]}"))
+    else:
+        # a deploy of scripts, docs or the site moves DEPLOYED_COMMIT without touching what trades: compare the code itself
+        diff = trading_code_diff(paths.get("src", SRC), expected, live, sha)
+        rows.append(("readiness bound to the deployed code", diff == [],
+                     f"trading code of reviewed {expected[:12]} = deployed {sha[:12]} (only other files differ)" if diff == [] else
+                     f"can't compare reviewed {expected[:12]} with deployed {sha[:12]}: {diff}" if isinstance(diff, str) else
+                     f"trading code changed since reviewed {expected[:12]}: {', '.join(diff)} — review it, then bind the evidence to {sha[:12]}"))
     try:
         evidence = json.loads(paths["evidence"].read_text(encoding="utf-8"))
     except (OSError, ValueError):

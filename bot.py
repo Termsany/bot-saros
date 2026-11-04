@@ -191,6 +191,18 @@ def _binance_keys():
         return "", ""
     return vals.get("BINANCE_API_KEY", ""), vals.get("BINANCE_SECRET", "")
 
+# An Ed25519 private key as one env line: base64 of its PKCS#8 DER (always this 16-character start, 64 characters).
+# Binance's "self-generated" keys: the private key is made on the server and never shown to anyone, the site only
+# gets the public key (2026-11-03: the Demo site stopped showing HMAC secrets).
+ED25519_DER_B64_PREFIX = "MC4CAQAwBQYDK2Vw"
+
+def _secret_for_ccxt(secret):
+    """The secret as ccxt wants it: HMAC as is; an Ed25519 key as PEM without a trailing newline — ccxt signs with
+    EdDSA only when the PEM is at most 120 characters (longer means RSA), and this one is exactly 120."""
+    if secret.startswith(ED25519_DER_B64_PREFIX) and len(secret) == 64:
+        return f"-----BEGIN PRIVATE KEY-----\n{secret}\n-----END PRIVATE KEY-----"
+    return secret
+
 def get_exchange(auth=False):
     mtype = "future" if CONFIG.get("market","future")=="future" else "spot"
     # ccxt: defaultType future = USDT-M perpetual
@@ -198,7 +210,7 @@ def get_exchange(auth=False):
     if auth:
         ak, sc = _binance_keys()
         if not ak or not sc: return None, "ضع مفاتيح Binance في .env"
-        kwargs["apiKey"]=ak; kwargs["secret"]=sc
+        kwargs["apiKey"]=ak; kwargs["secret"]=_secret_for_ccxt(sc)
         ex = ccxt.binanceusdm(kwargs) if mtype == "future" else ccxt.binance(kwargs)
         # BINANCE_ENV=demo: Binance Demo Trading (fake money, real exchange behaviour) — keys made in demo mode on binance.com
         env = binance_env()

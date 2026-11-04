@@ -1,0 +1,23 @@
+# The weekly Demo check against the backtest baseline (scripts/demo_weekly.py, roadmap B5): read only, the result to
+# the watchdog's Telegram chat. Run by raqm-demo-weekly.timer, or by hand: systemctl start raqm-demo-weekly
+[Unit]
+Description=Raqm: weekly Demo measurement against the backtest baseline (read only)
+After=network-online.target
+
+[Service]
+Type=oneshot
+# the API's copy of the code (demo_measure.py, lib/demo-baseline.json) and its user, which reads the bots' closed.json
+User=raqmapi
+Group=raqmapi
+WorkingDirectory=/opt/raqm-api/app
+# systemd reads this as root before switching user: raqmapi gets the Telegram token, not the file
+EnvironmentFile=/opt/raqm-live/.env.telegram
+UnsetEnvironment=PYTHONPATH PYTHONHOME PYTHONSTARTUP PYTHONUSERBASE PYTHONINSPECT
+# exit 1 = a strategy to switch off (already sent to Telegram): not a unit failure
+SuccessExitStatus=1
+ExecStart=/opt/raqm-api/venv/bin/python -E -s scripts/demo_weekly.py --telegram
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/opt/raqm-api/app /opt/raqm-ipc

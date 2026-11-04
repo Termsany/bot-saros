@@ -13,7 +13,8 @@ it is flat — its positions exit on their own rules — then it is stopped and 
 service of that user is stopped.
 
 Gates: the user in the owner's allow-list (/etc/raqm-users/allow.list, one uid a line, its order = who gets a place
-first), their audited consent (the API's user_live_activation record, enabled, exchange binance), keys in the vault.
+first) or approved by the owner on the site (approved.list in the request folder: the owner's invitation or the admin
+page, plan 4.1), a key that is not one of the owner's own bots' keys, their audited consent (the API's user_live_activation record, enabled, exchange binance), keys in the vault.
 P2.2 is Demo only: any other environment is refused here, whatever the desired state says. Capacity cap: MAX_USERS
 users × MAX_STRATEGIES strategies (≈140 MB per bot process, measured 2026-11-01).
 
@@ -34,6 +35,8 @@ CODE = Path("/opt/raqm-users/code")   # the owner's code at the same commit, rea
 VAULT = Path("/opt/raqm-api/app/backend/user_vault.json")
 API_ENV = Path("/opt/raqm-api/.env")
 CONSENT_DB = Path("/opt/raqm-api/app/user_live_activation.sqlite3")
+APPROVED = DESIRED / "approved.list"   # the owner's approvals from the site (backend/app/user_approvals.py)
+OWNER_ENV_FILES = (Path("/opt/raqm-live/.env.live"), Path("/opt/raqm-live/.env.real"))
 
 sys.path.insert(0, str(ROOT / "backend"))
 # the rules shared with the API (the same checks on both sides): Demo only, the cap, the strategies, the bounds
@@ -80,11 +83,35 @@ def read_desired(folder=DESIRED):
     return good, bad
 
 
-def read_allow(path=ALLOW):
+def _uids(path):
     try:
         return [l.strip() for l in _read_small(path).splitlines() if UID_RE.match(l.strip())]
     except OSError:
         return []
+
+
+def read_allow(path=ALLOW, approved=None):
+    """Root's allow-list first, then the owner's approvals from the site (APPROVED, written by the API on the owner's
+    invitation or the admin page's button — plan 4.1), each in its own order, no repeats."""
+    out = []
+    for uid in _uids(path) + _uids(APPROVED if approved is None else approved):
+        if uid not in out: out.append(uid)
+    return out
+
+
+def owner_keys(files=OWNER_ENV_FILES):
+    """The API keys the owner's own bots use (Demo and real). A user's bot on one of them would trade the owner's
+    account next to the owner's bots — their trades would mix with the measurement and the real money."""
+    out = set()
+    for f in files:
+        try:
+            for l in _read_small(f).splitlines():
+                if l.startswith("BINANCE_API_KEY="):
+                    v = l.split("=", 1)[1].strip().strip('"').strip("'")
+                    if v: out.add(v)
+        except OSError:
+            pass
+    return out
 
 
 def read_consent(path=CONSENT_DB):
@@ -141,10 +168,12 @@ def is_flat(state_file):
     return not (st.get("positions") or st.get("pending_orders") or st.get("recovery_required"))
 
 
-def plan(desired, allow, consent, keys, running, flat):
+def plan(desired, allow, consent, keys, running, flat, owner_key=()):
     """The actions to take, from what is wanted and what runs. Pure: everything it needs is passed in.
-    running: {uid: {strategy}} services enabled now; flat(uid, strategy) -> bool."""
+    running: {uid: {strategy}} services enabled now; flat(uid, strategy) -> bool; owner_key: users whose saved key
+    is one of the owner's own (they get no bot and their page says so)."""
     actions, wanted = [], {}
+    keys = {u: k for u, k in keys.items() if u not in owner_key}
     # who gets the places: users already running keep theirs (a newcomer never pushes out someone with open trades),
     # then the allow-list's order
     order = [u for u in allow if u in running] + [u for u in allow if u not in running]
@@ -170,7 +199,8 @@ def plan(desired, allow, consent, keys, running, flat):
             actions.append(("wipe_keys", uid))
     for uid, d in desired.items():                           # each user's page says where they stand
         state = ("off" if not (d["enabled"] and d["strategies"]) else "waiting_approval" if uid not in allow
-                 else "no_consent" if not consent_ok(consent, uid, d["env"]) else "no_keys" if uid not in keys
+                 else "no_consent" if not consent_ok(consent, uid, d["env"]) else "owner_key" if uid in owner_key
+                 else "no_keys" if uid not in keys
                  else "running" if uid in wanted else "no_place")
         actions.append(("answer", uid, {"state": state, "strategies": d["strategies"] if uid in wanted else []}))
     return actions
@@ -368,9 +398,11 @@ def main(argv=None):
         print(f"refused {name}: {why}")
     allow, consent = read_allow(), read_consent()
     keys = read_keys([u for u in allow if u in desired])
+    mine = owner_keys()
+    owner_key = {u for u, (k, _) in keys.items() if k in mine}
     sys_ = System()
     running = sys_.running()
-    actions = plan(desired, allow, consent, keys, running, lambda u, s: is_flat(DATA_ROOT / u / "state" / f"{s}.json"))
+    actions = plan(desired, allow, consent, keys, running, lambda u, s: is_flat(DATA_ROOT / u / "state" / f"{s}.json"), owner_key)
     actions += [("answer", name[:-5], {"state": "refused", "why": why, "strategies": []})
                 for name, why in bad.items() if UID_RE.match(name[:-5])]
     if dry:

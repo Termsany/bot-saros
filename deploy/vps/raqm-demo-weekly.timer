@@ -1,0 +1,9 @@
+[Unit]
+Description=Raqm: the Demo measurement every Sunday evening, apart from Monday's real rebalance
+
+[Timer]
+OnCalendar=Sun *-*-* 18:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target
