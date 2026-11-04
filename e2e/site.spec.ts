@@ -54,7 +54,7 @@ test("the terms state the cancellation and refund policy", async ({ page }) => {
 test("the dashboard shows the real-money bot first, the paper bots apart", async ({ page }) => {
   await page.goto("/dashboard")
   await expect(page.getByText("LIVE · فلوس حقيقية")).toBeVisible()
-  await expect(page.getByText("AGT", { exact: true }).first()).toBeVisible()
+  await expect(page.getByText("AGT/USDT", { exact: true }).first()).toBeVisible()
   await expect(page.getByText("التبديل الجاي (البوت الحقيقي)")).toBeVisible()
   await expect(page.getByText("+9.96").first()).toBeVisible()                  // realized, from the closed trade
   await expect(page.getByRole("heading", { name: "بوتات التجربة" })).toBeVisible()
@@ -63,6 +63,36 @@ test("the dashboard shows the real-money bot first, the paper bots apart", async
   const paperY = (await page.getByRole("heading", { name: "بوتات التجربة" }).boundingBox())!.y
   expect(realY).toBeLessThan(paperY)
   await expectNoSideScroll(page)
+})
+
+test("the dashboard in English after the English landing, with the light theme", async ({ page }) => {
+  await page.goto("/")                                                        // the English landing remembers the language
+  expect((await page.context().cookies()).find(c => c.name === "raqm-lang")?.value).toBe("en")
+  const direct = await page.request.get("/dashboard", { headers: { cookie: "raqm-lang=en" } })
+  expect((await direct.text()).match(/<html[^>]*>/)?.[0]).toContain('lang="en"')        // the server, without the browser
+  await page.goto("/dashboard")
+  await expect(page.locator("html")).toHaveAttribute("lang", "en")
+  await expect(page.locator("html")).toHaveAttribute("dir", "ltr")
+  await expect(page.getByText("LIVE · real money").first()).toBeVisible()
+  await expect(page.getByText("Next rebalance (real bot)")).toBeVisible()
+  await expect(page.getByRole("heading", { name: "Paper bots" })).toBeVisible()
+  await expect(page.locator('a[href="/settings/live"]').first()).toContainText("My Binance Demo bots")
+  await expectNoSideScroll(page)
+  const html = page.locator("html")
+  const before = await html.getAttribute("data-theme")
+  await page.getByRole("button", { name: /Switch to (light|dark)/ }).filter({ visible: true }).first().click()   // the phone header or the desktop bar
+  await expect(html).toHaveAttribute("data-theme", before === "light" ? "dark" : "light")
+  await page.getByTestId("app-lang-switch").filter({ visible: true }).first().click()   // back to Arabic, remembered
+  await expect(html).toHaveAttribute("lang", "ar")
+  await expect(page.getByRole("heading", { name: "بوتات التجربة" })).toBeVisible()
+})
+
+test("a page not built for the light theme stays dark", async ({ page }) => {
+  await page.goto("/")
+  await page.evaluate(() => localStorage.setItem("raqm-theme", "light"))
+  await page.goto("/terms")
+  await expect(page.locator("html")).not.toHaveAttribute("data-theme", "light")
+  await expect(page.locator("html")).toHaveAttribute("lang", "ar")
 })
 
 test("one place for keys: the old keys page is out of the menus", async ({ page }) => {
