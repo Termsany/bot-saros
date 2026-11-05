@@ -15,8 +15,13 @@ service of that user is stopped.
 Gates: the user in the owner's allow-list (/etc/raqm-users/allow.list, one uid a line, its order = who gets a place
 first) or approved by the owner on the site (approved.list in the request folder: the owner's invitation or the admin
 page, plan 4.1), a key that is not one of the owner's own bots' keys, their audited consent (the API's user_live_activation record, enabled, exchange binance), keys in the vault.
-P2.2 is Demo only: any other environment is refused here, whatever the desired state says. Capacity cap: MAX_USERS
-users × MAX_STRATEGIES strategies (≈140 MB per bot process, measured 2026-11-01).
+Real money (owner, 2026-11-05 — docs/users-real-money-plan.md): an invited user, momentum_ls only, starts only while
+root's switch LIVE_SWITCH exists, their real-money consent is for exactly the capital and margin they now ask for, and
+their key passes the preflight's checks on Binance itself (withdrawals off, this server's IP only, futures on, one-way,
+a balance, no position the bot didn't open). Their service then gets the server's live switch, their account name and
+root's ceilings from the plan they accepted, and their ledger an activation record bound to the deployed commit's
+readiness evidence. Without any of it nothing real starts. Capacity cap: MAX_USERS users × MAX_STRATEGIES strategies
+(≈140 MB per bot process, measured 2026-11-01).
 
   /opt/raqm-live/venv/bin/python -E -s /opt/raqm-live/scripts/provision_users.py [--dry-run]
 """
@@ -37,9 +42,12 @@ API_ENV = Path("/opt/raqm-api/.env")
 CONSENT_DB = Path("/opt/raqm-api/app/user_live_activation.sqlite3")
 APPROVED = DESIRED / "approved.list"   # the owner's approvals from the site (backend/app/user_approvals.py)
 OWNER_ENV_FILES = (Path("/opt/raqm-live/.env.live"), Path("/opt/raqm-live/.env.real"))
+LIVE_SWITCH = CRED_ROOT / "live.enabled"        # root's: real money for users on; absent = every user Demo only
+READINESS = Path("/opt/raqm-api/app/readiness_evidence.json")   # the owner's signed-off evidence (docs/live-small-size-plan.md §4)
+USER_DAILY_LOSS_PCT, USER_DRAWDOWN_PCT = 20.0, 45.0              # each user's kill switch, the owner's own values
 
 sys.path.insert(0, str(ROOT / "backend"))
-# the rules shared with the API (the same checks on both sides): Demo only, the cap, the strategies, the bounds
+# the rules shared with the API (the same checks on both sides): environments, the cap, the strategies, the bounds
 from app.user_bots import ENVS_ALLOWED, MAX_USERS, MAX_STRATEGIES, STRATEGIES, UID_RE, BOUNDS, validate, strategy_policy  # noqa: E402,F401
 
 EXTRA_ARGS = {"trend_daily": "--universe 10"}      # as the owner's /opt/raqm-live/strategies/*.env
@@ -115,23 +123,59 @@ def owner_keys(files=OWNER_ENV_FILES):
 
 
 def read_consent(path=CONSENT_DB):
-    """{uid: environment consented to} for an enabled consent on binance (the existing audited record; records from
-    before the environment was recorded are real-money ones). No record yet = nobody. A record that can't be read now
-    (locked while the API writes) raises: the run is skipped, never read as "nobody consents" — that winds everyone down."""
+    """{uid: {"env", "capital", "margin"}} for an enabled consent on binance (the existing audited record; records from
+    before the environment was recorded are real-money ones; capital and margin are those of a real-money consent).
+    No record yet = nobody. A record that can't be read now (locked while the API writes) raises: the run is skipped,
+    never read as "nobody consents" — that winds everyone down."""
     if not path.exists():
         return {}
     con = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True, timeout=10)
     try:
         cols = {r[1] for r in con.execute("PRAGMA table_info(user_live_activation)")}
         env = "environment" if "environment" in cols else "'live'"
-        return {r[0]: r[1] for r in con.execute(f"SELECT user_id, {env} FROM user_live_activation WHERE enabled=1 AND exchange='binance'")}
+        cap = "capital_usdt" if "capital_usdt" in cols else "NULL"
+        mar = "margin_usdt" if "margin_usdt" in cols else "NULL"
+        return {r[0]: {"env": r[1], "capital": r[2], "margin": r[3]} for r in
+                con.execute(f"SELECT user_id, {env}, {cap}, {mar} FROM user_live_activation WHERE enabled=1 AND exchange='binance'")}
     finally:
         con.close()
 
 
-def consent_ok(consent, uid, env):
-    """A Demo bot needs a consent for Demo or real money; a real-money bot (not allowed yet) a real-money one only."""
-    return consent.get(uid) in (("demo", "live") if env == "demo" else ("live",))
+def consent_ok(consent, uid, env, d=None):
+    """A Demo bot needs a consent for Demo or real money. A real-money bot needs a real-money consent for exactly the
+    capital and margin it now asks for (the risk the user saw and accepted); a change of either asks again."""
+    c = consent.get(uid)
+    c = {"env": c} if isinstance(c, str) else (c or {})
+    if env == "demo":
+        return c.get("env") in ("demo", "live")
+    if c.get("env") != "live" or d is None:
+        return False
+    try:
+        return (abs(float(c["capital"]) - float(d["capital_usdt"])) < 0.005
+                and abs(float(c["margin"]) - float(d["capital_margin_override_usdt"])) < 0.005)
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+def live_switch_on(path=LIVE_SWITCH):
+    """Root's file, a regular one owned by root: anything else (missing, a link, someone else's) is off."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    return stat.S_ISREG(st.st_mode) and st.st_uid == 0
+
+
+def key_checks(keys):
+    """(ok, why) for a user's real-money key, on Binance itself — the owner's preflight rows (scripts/live_preflight.py):
+    withdrawals off, this server's IP only, futures on, one-way, a balance, no position the bot didn't open."""
+    import live_preflight
+    try:
+        rows = live_preflight.check_binance({"BINANCE_API_KEY": keys[0], "BINANCE_SECRET": keys[1]}, "momentum_ls", None, None, "")
+    except Exception as e:
+        return False, f"key check failed: {type(e).__name__}"
+    bad = [name for name, ok, _ in rows if not ok]
+    return (not bad and bool(rows)), (", ".join(bad) if bad else None)
 
 
 def read_keys(uids, vault=VAULT, api_env=API_ENV):
@@ -168,18 +212,24 @@ def is_flat(state_file):
     return not (st.get("positions") or st.get("pending_orders") or st.get("recovery_required"))
 
 
-def plan(desired, allow, consent, keys, running, flat, owner_key=()):
+def plan(desired, allow, consent, keys, running, flat, owner_key=(), live_on=False, key_ok=None):
     """The actions to take, from what is wanted and what runs. Pure: everything it needs is passed in.
     running: {uid: {strategy}} services enabled now; flat(uid, strategy) -> bool; owner_key: users whose saved key
-    is one of the owner's own (they get no bot and their page says so)."""
+    is one of the owner's own (they get no bot and their page says so). Real money also needs live_on (root's switch)
+    and key_ok[uid] = (True, None) from key_checks."""
     actions, wanted = [], {}
     keys = {u: k for u, k in keys.items() if u not in owner_key}
+    key_ok = key_ok or {}
+
+    def live_ready(uid, d):
+        return d["env"] != "live" or (live_on and (key_ok.get(uid) or (False, None))[0])
     # who gets the places: users already running keep theirs (a newcomer never pushes out someone with open trades),
     # then the allow-list's order
     order = [u for u in allow if u in running] + [u for u in allow if u not in running]
     for uid in order:
         d = desired.get(uid)
-        if d and d["enabled"] and d["strategies"] and consent_ok(consent, uid, d["env"]) and uid in keys and len(wanted) < MAX_USERS:
+        if (d and d["enabled"] and d["strategies"] and consent_ok(consent, uid, d["env"], d) and uid in keys
+                and live_ready(uid, d) and len(wanted) < MAX_USERS):
             wanted[uid] = d
     for uid, d in wanted.items():
         actions.append(("user", uid))
@@ -198,11 +248,17 @@ def plan(desired, allow, consent, keys, running, flat, owner_key=()):
         if uid not in wanted and all(flat(uid, s) for s in now):
             actions.append(("wipe_keys", uid))
     for uid, d in desired.items():                           # each user's page says where they stand
+        live = d["env"] == "live"
         state = ("off" if not (d["enabled"] and d["strategies"]) else "waiting_approval" if uid not in allow
-                 else "no_consent" if not consent_ok(consent, uid, d["env"]) else "owner_key" if uid in owner_key
+                 else "no_consent" if not consent_ok(consent, uid, d["env"], d) else "owner_key" if uid in owner_key
                  else "no_keys" if uid not in keys
+                 else "live_off" if live and not live_on
+                 else "key_refused" if live and not (key_ok.get(uid) or (False, None))[0]
                  else "running" if uid in wanted else "no_place")
-        actions.append(("answer", uid, {"state": state, "strategies": d["strategies"] if uid in wanted else []}))
+        answer = {"state": state, "strategies": d["strategies"] if uid in wanted else []}
+        if state == "key_refused":
+            answer["why"] = (key_ok.get(uid) or (False, "not checked yet"))[1] or "not checked yet"
+        actions.append(("answer", uid, answer))
     return actions
 
 
@@ -212,11 +268,20 @@ def dropin(uid, s, d):
     ipc = ipc_instance(uid, s)
     # --amount is the bot's fallback only: with the capital plan in the ledger the margin comes from the plan
     args = f"--leverage {d['leverage']} --amount {d['capital_margin_override_usdt']:.2f} {EXTRA_ARGS.get(s, '')} --poll 60".split()
+    live = []
+    if d["env"] == "live":
+        # the server's switch for this service, the account its activation record names, and root's ceilings — the
+        # plan the user accepted (per trade = one stop, aggregate = the basket at its stops), never above it
+        caps = {"RISK_PER_TRADE_PCT": d["risk_per_trade_pct"], "AGGREGATE_RISK_PCT": d["max_aggregate_risk_pct"],
+                "CORRELATED_RISK_PCT": d["max_aggregate_risk_pct"], "DAILY_LOSS_PCT": USER_DAILY_LOSS_PCT,
+                "DRAWDOWN_PCT": USER_DRAWDOWN_PCT}
+        live = ["Environment=ALLOW_LIVE_TRADING=true", f"Environment=BINANCE_LIVE_ACCOUNT={uid}"] + \
+               [f"Environment=RAQM_CAP_{k}={float(v):g}" for k, v in caps.items()]
     return "\n".join([
         "# written by scripts/provision_users.py — do not edit by hand",
         "[Service]",
         f"User={os_user(uid)}", f"Group={os_user(uid)}",
-        f"Environment=BINANCE_ENV={d['env']}",
+        f"Environment=BINANCE_ENV={d['env']}", *live,
         f"Environment=RAQM_RISK_DIR={data / 'risk'}",
         f"Environment=RAQM_IPC_DIR={ipc}",
         f"LoadCredential=binance:{CRED_ROOT / uid / 'binance'}",
@@ -301,12 +366,25 @@ class System:
         code = ("import sys; sys.path.insert(0, 'backend'); from pathlib import Path; from app import risk_manager as r, live_activation as a;"
                 f"p = Path({str(risk)!r}); r.update_limits(p / 'risk_state.json', {json.dumps(_limits(d))});"
                 f"a.set_demo_strategies(p / 'live_activation.sqlite3', strategies={d['strategies']!r}, set_by='provisioner')")
+        if d["env"] == "live":
+            # the real-money activation record the bot checks before every entry (bot._live_activation_gate): this user's
+            # account, momentum only, readiness derived from the owner's evidence for the deployed commit — a missing or
+            # stale evidence makes activate() raise, so set_limits fails and nothing starts (fail closed)
+            evidence, commit = self.readiness
+            code += ("; import os, json; os.environ['ALLOW_LIVE_TRADING'] = 'true';"
+                     f"a.activate(p / 'live_activation.sqlite3', environment='live', account={uid!r},"
+                     f" approved_by='provisioner: the owner invitation', strategies={d['strategies']!r},"
+                     f" risk_allocation={json.dumps({s: 1.0 / len(d['strategies']) for s in d['strategies']})},"
+                     f" readiness_evidence=json.loads({json.dumps(evidence)!r}), expected_reviewed_commit_sha={commit!r})")
         self.as_user(uid, code)
+
+    readiness = (None, None)        # (the owner's evidence as JSON text, the deployed commit): main() reads them as root
 
     def no_entries(self, uid):
         risk = DATA_ROOT / uid / "risk"
         code = (f"import sys; sys.path.insert(0, 'backend'); from pathlib import Path; from app import live_activation as a;"
-                f"a.set_demo_strategies(Path({str(risk)!r}) / 'live_activation.sqlite3', strategies=[], set_by='provisioner')")
+                f"a.set_demo_strategies(Path({str(risk)!r}) / 'live_activation.sqlite3', strategies=[], set_by='provisioner');"
+                f"a.revoke(Path({str(risk)!r}) / 'live_activation.sqlite3', reason='provisioner: switched off')")
         self.as_user(uid, code)
 
     def as_user(self, uid, code):
@@ -402,7 +480,21 @@ def main(argv=None):
     owner_key = {u for u, (k, _) in keys.items() if k in mine}
     sys_ = System()
     running = sys_.running()
-    actions = plan(desired, allow, consent, keys, running, lambda u, s: is_flat(DATA_ROOT / u / "state" / f"{s}.json"), owner_key)
+    live_on = live_switch_on()
+    key_ok = {}
+    if live_on:
+        try:
+            sys_.readiness = (json.loads(_read_small(READINESS, 1 << 20)), _read_small(CODE / "DEPLOYED_COMMIT", 128).strip())
+        except Exception as e:
+            print(f"real money: readiness evidence or deployed commit unreadable ({type(e).__name__}) — no real-money bot starts")
+        for uid, d in desired.items():
+            if d["env"] != "live" or uid not in keys or uid in owner_key or not consent_ok(consent, uid, "live", d):
+                continue
+            d["_commit"] = sys_.readiness[1]          # a new deployment writes the activation record again
+            # a running bot was checked when it started; a new one is checked on Binance now, before anything is written
+            key_ok[uid] = (True, None) if uid in running else key_checks(keys[uid])
+    actions = plan(desired, allow, consent, keys, running, lambda u, s: is_flat(DATA_ROOT / u / "state" / f"{s}.json"), owner_key,
+                   live_on=live_on, key_ok=key_ok)
     actions += [("answer", name[:-5], {"state": "refused", "why": why, "strategies": []})
                 for name, why in bad.items() if UID_RE.match(name[:-5])]
     if dry:

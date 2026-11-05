@@ -12,7 +12,13 @@ from pathlib import Path
 DESIRED = Path(os.getenv("RAQM_USERS_DESIRED", "/opt/raqm-users/desired"))
 IPC_ROOT = Path(os.getenv("RAQM_USERS_IPC", "/opt/raqm-users/ipc"))
 
-ENVS_ALLOWED = ("demo",)      # real money for users is refused (P2.2); the provisioner checks it again as root
+# Real money for invited users (owner, 2026-11-05 — docs/users-real-money-plan.md): momentum_ls only, each user's own
+# capital and margin, the risk level computed here and accepted by the user. The provisioner starts nothing real
+# unless root's switch /etc/raqm-users/live.enabled exists and the user's key passes the preflight's checks.
+ENVS_ALLOWED = ("demo", "live")
+LIVE_STRATEGIES = ("momentum_ls",)
+LIVE_LEVERAGE, LIVE_STOP = 2, 0.40          # the strategy's, not the user's (risk_manager.PLAN_LEVERAGE / PLAN_STOP_LOSS)
+LIVE_MIN_MARGIN = 2.5                       # Binance's smallest order is $5: at x2 a margin below $2.5 buys nothing
 MAX_USERS, MAX_STRATEGIES = 4, 10
 STRATEGIES = ("trend_daily", "vol_breakout", "rsi2_pullback", "trend_breakout", "listing_short", "momentum_ls", "ratio_trend")
 STRATEGY_SLOTS = {s: 1 for s in STRATEGIES}
@@ -53,6 +59,47 @@ def strategy_policy(strategies, *, available_slots=10):
     return {"accepted": True, "recommended": DEFAULT_RECOMMENDED_STRATEGIES, "slots": slots, "reason": "ok"}
 
 
+def _num(v):
+    return None if isinstance(v, bool) or not isinstance(v, (int, float)) or v != v or v in (float("inf"), float("-inf")) else float(v)
+
+
+def live_risk(capital, margin, strategies=LIVE_STRATEGIES):
+    """What a real-money plan costs at its stops, for the user to see and accept: one stop, every leg at its stop at
+    once (the worst week), as $ and % of the capital, and the level on the admin page's scale. None if not a plan."""
+    capital, margin = _num(capital), _num(margin)
+    if not capital or capital <= 0 or not margin or margin <= 0:
+        return None
+    legs = sum(STRATEGY_SLOTS.get(s, 1) for s in strategies) or 1
+    one = margin * LIVE_LEVERAGE * LIVE_STOP
+    per = one / capital * 100
+    level = "low" if per < 1 else "medium" if per < 2 else "high" if per < 5 else "very_high"
+    return {"one_stop_usdt": round(one, 2), "per_trade_pct": round(per, 2), "legs": legs,
+            "worst_usdt": round(one * legs, 2), "aggregate_pct": round(per * legs, 2), "level": level}
+
+
+def _ceil2(x):
+    import math
+    return math.ceil(x * 100 - 1e-9) / 100
+
+
+def _validate_live(env, enabled, strategies, doc):
+    """A real-money desired state: momentum only, the user's capital and margin; the limits are computed here from
+    them (never taken from the request), so the gate allows exactly the plan the user accepted."""
+    if any(s not in LIVE_STRATEGIES for s in strategies):
+        raise ValueError("real money: momentum_ls only")
+    capital, margin = _num(doc.get("capital_usdt")), _num(doc.get("capital_margin_override_usdt"))
+    if capital is None or not 0 < capital <= BOUNDS["capital_usdt"][1]:
+        raise ValueError("capital_usdt out of bounds")
+    if margin is None or not LIVE_MIN_MARGIN <= margin <= capital:
+        raise ValueError("capital_margin_override_usdt out of bounds")
+    r = live_risk(capital, margin, strategies or LIVE_STRATEGIES)
+    if r["aggregate_pct"] > 100:
+        raise ValueError("every stop at once would lose more than the capital: lower the margin")
+    return {"env": env, "enabled": enabled, "strategies": list(strategies), "leverage": LIVE_LEVERAGE,
+            "risk_per_trade_pct": _ceil2(r["per_trade_pct"]), "max_aggregate_risk_pct": _ceil2(r["aggregate_pct"]),
+            "capital_usdt": capital, "capital_margin_override_usdt": margin, "level": r["level"]}
+
+
 def validate(uid, doc):
     """The desired state, checked as if hostile. ValueError on anything off; the clean copy otherwise."""
     if not isinstance(uid, str) or not UID_RE.match(uid) or not isinstance(doc, dict) or doc.get("user_id") != uid:
@@ -66,6 +113,8 @@ def validate(uid, doc):
         raise ValueError("strategies")
     if len(strategies) > MAX_STRATEGIES:
         raise ValueError(f"more than {MAX_STRATEGIES} strategies")
+    if env == "live":
+        return _validate_live(env, doc.get("enabled") is True, strategies, doc)
     clean = {"env": env, "enabled": doc.get("enabled") is True, "strategies": list(strategies)}
     for k, (lo, hi) in BOUNDS.items():
         v = doc.get(k, 0 if k.startswith("capital") else None)

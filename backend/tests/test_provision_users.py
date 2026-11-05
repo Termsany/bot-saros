@@ -17,9 +17,17 @@ def doc(uid, **kw):
 
 
 class ValidateTests(unittest.TestCase):
-    def test_real_money_is_refused_whatever_the_desired_state_says(self):
-        for env in ("live", "testnet", None, "DEMO"):
+    def test_real_money_is_momentum_only_on_the_users_own_capital(self):
+        # owner, 2026-11-05 (docs/users-real-money-plan.md): momentum only; the limits come from capital and margin
+        for env in ("testnet", None, "DEMO"):
             with self.assertRaises(ValueError): pu.validate(U1, doc(U1, env=env))
+        with self.assertRaises(ValueError): pu.validate(U1, doc(U1, env="live"))                    # trend_daily: no
+        d = pu.validate(U1, doc(U1, env="live", strategies=["momentum_ls"], capital_usdt=1000, capital_margin_override_usdt=20,
+                                risk_per_trade_pct=0.01, max_aggregate_risk_pct=0.01, leverage=5))   # the request's limits ignored
+        self.assertEqual((d["leverage"], d["risk_per_trade_pct"], d["max_aggregate_risk_pct"], d["level"]), (2, 1.6, 16.0, "medium"))
+        for capital, margin in ((1000, 2), (100, 20), (0, 5), (1000, 2000)):     # below Binance's minimum, past the capital
+            with self.assertRaises(ValueError, msg=(capital, margin)):
+                pu.validate(U1, doc(U1, env="live", strategies=["momentum_ls"], capital_usdt=capital, capital_margin_override_usdt=margin))
 
     def test_everything_is_checked(self):
         bad = [doc(U1, user_id=U2), doc(U1, strategies=["ict"]), doc(U1, strategies=["trend_daily", "trend_daily"]),
@@ -175,10 +183,13 @@ class ReadTests(unittest.TestCase):
             con = sqlite3.connect(d / "c.sqlite3")
             con.execute("CREATE TABLE user_live_activation (user_id TEXT, exchange TEXT, enabled INTEGER)")
             con.executemany("INSERT INTO user_live_activation VALUES (?,?,?)", [(U1, "binance", 1), (U2, "binance", 0)]); con.commit(); con.close()
-            self.assertEqual(pu.read_consent(d / "c.sqlite3"), {U1: "live"})        # before the environment was kept
+            self.assertEqual(pu.read_consent(d / "c.sqlite3"), {U1: {"env": "live", "capital": None, "margin": None}})   # before the environment was kept
             from backend.app import user_live_activation as ula
             ula.enable_user_live(d / "n.sqlite3", user_id=U2, exchange="binance", confirm=ula.CONSENT_TEXT, actor="t", environment="demo")
-            self.assertEqual(pu.read_consent(d / "n.sqlite3"), {U2: "demo"})
+            self.assertEqual(pu.read_consent(d / "n.sqlite3"), {U2: {"env": "demo", "capital": None, "margin": None}})
+            ula.enable_user_live(d / "n.sqlite3", user_id=U1, exchange="binance", confirm=ula.CONSENT_TEXT, actor="t", environment="live",
+                                 capital_usdt=1000, margin_usdt=20)
+            self.assertEqual(pu.read_consent(d / "n.sqlite3")[U1], {"env": "live", "capital": 1000.0, "margin": 20.0})
             (d / ".env").write_text(f"OTHER=1\nVAULT_MASTER_KEY={key.decode()}\n", encoding="utf-8")
             vault = {U1: {"binance": {"apiKey": "a", "secret": "b"}}, U2: {"binance": {"apiKey": "a"}}}
             (d / "v.json").write_bytes(Fernet(key).encrypt(json.dumps(vault).encode()))
@@ -270,3 +281,77 @@ class ReviewFindingsTests(unittest.TestCase):
         t = (V / "raqm-user@.service").read_text(encoding="utf-8")
         for want in ("ProtectProc=invisible", "CapabilityBoundingSet=\n", "-/opt/raqm-live", "-/opt/raqm-api", "-/opt/raqm-risk "):
             self.assertIn(want, t)
+
+
+class RealMoneyTests(unittest.TestCase):
+    """Real money for invited users (owner, 2026-11-05 — docs/users-real-money-plan.md): every gate fails closed."""
+    LIVE = dict(env="live", strategies=["momentum_ls"], capital_usdt=1000, capital_margin_override_usdt=20)
+    CONSENT = {U1: {"env": "live", "capital": 1000.0, "margin": 20.0}}
+
+    def plan(self, consent=None, live_on=True, key_ok=None, running=None, desired=None, flat=lambda u, s: True):
+        d = {U1: pu.validate(U1, doc(U1, **self.LIVE))} if desired is None else desired
+        return pu.plan(d, [U1], self.CONSENT if consent is None else consent, {U1: ("k", "s")}, running or {}, flat,
+                       live_on=live_on, key_ok={U1: (True, None)} if key_ok is None else key_ok)
+
+    def state(self, acts):
+        return next(a[2] for a in acts if a[0] == "answer" and a[1] == U1)
+
+    def test_every_gate_passed_starts_momentum(self):
+        acts = self.plan()
+        self.assertIn(("ensure", U1, "momentum_ls"), [a[:3] for a in acts]); self.assertEqual(self.state(acts)["state"], "running")
+
+    def test_each_gate_alone_keeps_the_real_bot_off_and_the_page_says_which(self):
+        for kw, why in (({"live_on": False}, "live_off"), ({"key_ok": {}}, "key_refused"),
+                        ({"key_ok": {U1: (False, "key: withdrawals OFF")}}, "key_refused"),
+                        ({"consent": {U1: {"env": "demo", "capital": None, "margin": None}}}, "no_consent"),   # a Demo consent
+                        ({"consent": {U1: {"env": "live", "capital": 1000.0, "margin": 10.0}}}, "no_consent"),  # another margin
+                        ({"consent": {U1: "live"}}, "no_consent")):                                           # numbers never accepted
+            acts = self.plan(**kw)
+            self.assertNotIn("ensure", [a[0] for a in acts], kw); self.assertEqual(self.state(acts)["state"], why, kw)
+        self.assertEqual(self.state(self.plan(key_ok={U1: (False, "key: withdrawals OFF")}))["why"], "key: withdrawals OFF")
+
+    def test_turning_the_switch_off_winds_running_users_down(self):
+        acts = self.plan(live_on=False, running={U1: {"momentum_ls"}}, flat=lambda u, s: False)
+        self.assertEqual([a[:2] for a in acts if a[0] != "answer"], [("no_entries", U1)])
+
+    def test_a_demo_user_needs_no_switch_and_no_key_check(self):
+        acts = pu.plan({U1: pu.validate(U1, doc(U1))}, [U1], {U1: "demo"}, {U1: ("k", "s")}, {}, lambda u, s: True)
+        self.assertIn(("ensure", U1, "trend_daily"), [a[:3] for a in acts])
+
+    def test_the_service_gets_the_switch_the_account_and_ceilings_from_the_accepted_plan(self):
+        t = pu.dropin(U1, "momentum_ls", pu.validate(U1, doc(U1, **self.LIVE)))
+        for want in ("Environment=BINANCE_ENV=live", "Environment=ALLOW_LIVE_TRADING=true", f"Environment=BINANCE_LIVE_ACCOUNT={U1}",
+                     "Environment=RAQM_CAP_RISK_PER_TRADE_PCT=1.6", "Environment=RAQM_CAP_AGGREGATE_RISK_PCT=16",
+                     "Environment=RAQM_CAP_DAILY_LOSS_PCT=20", "Environment=RAQM_CAP_DRAWDOWN_PCT=45", "--expect-env live"):
+            self.assertIn(want, t)
+        demo = pu.dropin(U1, "trend_daily", pu.validate(U1, doc(U1)))
+        self.assertNotIn("ALLOW_LIVE_TRADING", demo); self.assertNotIn("RAQM_CAP_", demo)
+
+    def test_the_switch_is_roots_regular_file_only(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
+            self.assertFalse(pu.live_switch_on(Path(d) / "live.enabled"))
+            (Path(d) / "live.enabled").write_text("", encoding="utf-8")
+            self.assertEqual(pu.live_switch_on(Path(d) / "live.enabled"), os.lstat(Path(d) / "live.enabled").st_uid == 0)
+
+    def test_a_key_failing_any_preflight_row_is_refused_and_says_which(self):
+        rows = [("key: withdrawals OFF", False, "x"), ("key: restricted to this server's IP", True, "y")]
+        with mock.patch("live_preflight.check_binance", return_value=rows):
+            self.assertEqual(pu.key_checks(("k", "s")), (False, "key: withdrawals OFF"))
+        with mock.patch("live_preflight.check_binance", return_value=[("a", True, ""), ("b", True, "")]):
+            self.assertEqual(pu.key_checks(("k", "s")), (True, None))
+        with mock.patch("live_preflight.check_binance", side_effect=RuntimeError("network")):
+            self.assertEqual(pu.key_checks(("k", "s")), (False, "key check failed: RuntimeError"))
+
+    def test_the_activation_record_is_written_with_the_evidence_and_switched_off_is_revoked(self):
+        class Recording(pu.System):
+            def __init__(self): self.code = []
+            def root_dir(self, path): pass
+            def own_dir(self, path, user, group, mode): pass
+            def as_user(self, uid, code): self.code.append(code)
+        s = Recording(); s.readiness = ({"schema": 2}, "a" * 40)
+        s.set_limits(U1, pu.validate(U1, doc(U1, **self.LIVE)))
+        self.assertIn("a.activate(", s.code[0]); self.assertIn("environment='live'", s.code[0])
+        self.assertIn(f"account={U1!r}", s.code[0]); self.assertIn("expected_reviewed_commit_sha='" + "a" * 40, s.code[0])
+        s.set_limits(U1, pu.validate(U1, doc(U1)))
+        self.assertNotIn("activate(", s.code[1])                                      # Demo: no real-money record
+        s.no_entries(U1); self.assertIn("a.revoke(", s.code[2])
