@@ -318,6 +318,25 @@ exact-time funding) and `research/hourly_study.py`. Daily membership from the pr
 
 None improved the three core bots. On hourly candles the extra trades' costs eat any small edge.
 
+### 19. Filters on the new-listing short — not adopted (November 2026)
+
+`research/listing_improve_study.py`: the rule that runs (30 days after listing, hold 90, stop 40%, at most 10 open,
+577 listings since 2021) with four filters fixed before any result, every combination (36): BTC regime (none / below
+its 200-day average / 30-day return below 0), the coin's move since listing (none / below its listing open / not up
+50%+), skip on negative 7-day funding, and a cover at −60%. Chosen on Sharpe before 2024, 60 trades at least.
+
+| | trades | PnL | max DD | Sharpe < 2024 | Sharpe 2024 → | PnL 2024 → |
+|---|---|---|---|---|---|---|
+| **the rule that runs** | 251 | **+775** | 358 | 0.64 | **1.30** | **+529** |
+| in-sample pick: skip coins up 50%+ since listing | 239 | +608 | 353 | 0.71 | 0.88 | +344 |
+| BTC 30-day return below 0 | 152 | +498 | 238 | 0.56 | 0.92 | +344 |
+
+- **0 of 36 variants beat the rule out-of-sample.** The rule stays as it is.
+- The losses are the stops: 110 trades hit the 40% stop (−1,716); the 139 held 90 days made +2,451.
+- Shorting new coins while BTC is below its 200-day average lost (92 trades, −51): in a falling market the new
+  coins have often already fallen, and they bounce. Every BTC-below-200d variant lost before 2024.
+- The BTC-30-day filter cut the drawdown (358 → 238) but also half the profit; it was not the in-sample pick.
+
 ## The site now shows only the four paper bots
 
 `research/bots_stats.py` writes `lib/bot-stats.json` (the numbers the site shows); the dashboard's live section and
