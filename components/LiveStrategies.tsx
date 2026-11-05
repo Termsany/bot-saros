@@ -1,6 +1,6 @@
 "use client"
 import { useCallback, useEffect, useRef, useState } from "react"
-import { apiLiveStatus, apiLiveStrategies, apiSetCapital, apiSetLimits, apiSetLiveStrategies } from "@/lib/api"
+import { CapitalQuestion, apiLiveStatus, apiLiveStrategies, apiSetCapital, apiSetLimits, apiSetLiveStrategies } from "@/lib/api"
 import { LivePositions } from "@/components/LivePositions"
 import { NAME_AR } from "@/lib/strategies"
 import { DemoMeasurement } from "@/components/DemoMeasurement"
@@ -59,8 +59,15 @@ function CapitalPanel({ env, cfg, reload }: { env: "demo"|"live", cfg: any, relo
   async function save(){
     const n = Number(value) || 0, m = Number(manual) || 0
     const risk = p ? `\nلو الوقف اتضرب في صفقة: −${usd(p.loss)} (${p.lossPct.toFixed(1)}% من راس المال) — ${LEVEL[p.level][0]}` : ""
-    if(!confirm(n ? `راس المال ${usd(n)} على ${env === "demo" ? "الـ Demo" : "الحساب الحقيقي"}:\nمارجن ${usd(p!.margin)} لكل صفقة${m ? " (يدوي)" : ""}، وبحد أقصى ${p!.maxOpen} صفقة مفتوحة.${risk}` : "إلغاء خطة راس المال؟")) return
-    try{ await apiSetCapital(env, n, m); setMsg("✅ اتحفظ"); reload() } catch(e: any){ setMsg(`⚠️ ${e.message}`) }
+    // the account first, loud: on 2026-11-03 the real account's plan was saved on the Demo tab by mistake
+    const where = env === "live" ? "⚠️ الحساب الحقيقي — فلوس حقيقية" : "🧪 حساب الـ Demo — فلوس وهمية"
+    if(!confirm(n ? `${where}\n\nراس المال ${usd(n)}:\nمارجن ${usd(p!.margin)} لكل صفقة${m ? " (يدوي)" : ""}، وبحد أقصى ${p!.maxOpen} صفقة مفتوحة.${risk}` : `${where}\n\nإلغاء خطة راس المال؟`)) return
+    try{ await apiSetCapital(env, n, m); setMsg("✅ اتحفظ"); reload() }
+    catch(e: any){
+      if(!(e instanceof CapitalQuestion)){ setMsg(`⚠️ ${e.message}`); return }
+      if(!confirm(`${where}\n\n${e.message}\n\nاحفظ برضه؟`)){ setMsg("ما اتحفظش"); return }
+      try{ await apiSetCapital(env, n, m, true); setMsg("✅ اتحفظ"); reload() } catch(e2: any){ setMsg(`⚠️ ${e2.message}`) }
+    }
   }
   const lv = p ? LEVEL[p.level] : null
   return (

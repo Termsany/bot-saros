@@ -41,7 +41,9 @@ const json = (body: unknown) => ({ status: 200, contentType: "application/json",
 const REALBOT_HTML = readFileSync(path.join(__dirname, "..", "deploy", "vps", "realbot", "index.html"), "utf-8")
 const PAPER_HTML = readFileSync(path.join(__dirname, "..", "deploy", "vps", "page", "index.html"), "utf-8")
 
-/** A fake API for a test: (method, path, body) → a JSON answer, or undefined for a 404. Every call is recorded. */
+/** A fake API for a test: (method, path, body) → a JSON answer, or undefined for a 404, or an ApiStatus for another
+ *  status (e.g. a 409 the page must ask about). Every call is recorded. */
+export class ApiStatus { constructor(public status: number, public body: unknown) {} }
 export type ApiCall = { method: string, path: string, query: string, body: any }
 export type ApiHandler = (call: ApiCall) => unknown | Promise<unknown>
 const SITE_PORT = "3100"     // playwright.config.ts: the site; any other localhost port is the (fake) API
@@ -61,6 +63,7 @@ async function offline(page: Page, api?: { handler: ApiHandler, calls: ApiCall[]
       const call = { method: req.method(), path: url.pathname, query: url.search, body: req.postDataJSON?.() ?? null }
       api.calls.push(call)
       const answer = await api.handler(call)
+      if (answer instanceof ApiStatus) return route.fulfill({ status: answer.status, headers: CORS, contentType: "application/json", body: JSON.stringify(answer.body) })
       return answer === undefined ? route.fulfill({ status: 404, headers: CORS, contentType: "application/json", body: "{}" })
         : route.fulfill({ status: 200, headers: CORS, contentType: "application/json", body: JSON.stringify(answer) })
     }

@@ -806,6 +806,33 @@ class LiveCloseReq(BaseModel):
     strategy: str = Field(pattern=r"^[a-z0-9_]{1,30}$")
     symbol: str
 
+def capital_check(env: str, patch: dict) -> str | None:
+    """Why a capital save may be meant for the other account, or None. On 2026-11-03 the real account's plan ($500,
+    margin $26) was saved on the Demo tab three minutes before the real one, and the Demo refused every entry for a
+    day; the same slip the other way would size real money on the Demo's capital. Two signs, each confirmable:
+    - the capital and the margin are exactly the other account's;
+    - on the real account, a capital above twice the balance the bot last read."""
+    cap, margin = patch.get("capital_usdt"), patch.get("capital_margin_override_usdt")
+    if not cap:
+        return None
+    other = "demo" if env == "live" else "live"
+    try:
+        o = risk_manager.load_risk_state(_ledger(other))["limits"]
+        if float(o.get("capital_usdt") or 0) == float(cap) and float(o.get("capital_margin_override_usdt") or 0) == float(margin or 0):
+            name = "الـ Demo" if other == "demo" else "الحساب الحقيقي"
+            return f"نفس راس المال والمارجن المحفوظين على {name} بالظبط — متأكد إنك على الحساب الصح؟"
+    except Exception:
+        pass
+    if env == "live":
+        try:
+            eq = risk_manager.load_risk_state(_ledger("live")).get("equity_last")
+            if eq and float(eq) > 0 and float(cap) > 2 * float(eq):
+                return f"راس المال {float(cap):,.0f}$ أكتر من ضعف رصيد الحساب الحقيقي ({float(eq):,.0f}$) — ده رقم الـ Demo؟"
+        except Exception:
+            pass
+    return None
+
+
 class CapitalReq(BaseModel):
     env: str = Field(default="live", pattern=r"^(live|demo)$")
     capital_usdt: Optional[float] = Field(None, ge=0, le=100_000_000)     # 0 / None = no plan
@@ -813,6 +840,7 @@ class CapitalReq(BaseModel):
     capital_margin_pct: Optional[float] = Field(None, gt=0, le=50)
     capital_min_margin_usdt: Optional[float] = Field(None, ge=5, le=1_000_000)
     capital_margin_override_usdt: Optional[float] = Field(None, ge=0, le=10_000_000)   # 0 = back to the rule
+    confirm: bool = False      # the owner saw capital_check's warning and saves anyway
 
 LIMIT_KEYS = ("risk_per_trade_pct", "max_aggregate_risk_pct", "max_correlated_risk_pct", "max_daily_loss_pct", "max_drawdown_pct")
 
@@ -925,10 +953,14 @@ async def live_strategies(env: str = "live", user: dict = Depends(require_admin)
 @app.post("/api/live/capital")
 async def live_capital(req: CapitalReq, user: dict = Depends(require_admin)):
     """The owner's capital for an account: it sets the margin per trade and the most trades open at once, every strategy
-    together (risk_manager.capital_plan). 0 = no plan. The bots and the risk gate read it before every entry."""
-    patch = {k: v for k, v in req.model_dump().items() if k != "env" and v is not None}
+    together (risk_manager.capital_plan). 0 = no plan. The bots and the risk gate read it before every entry.
+    A save that looks like the wrong account is refused with 409 until the owner confirms it (capital_check)."""
+    patch = {k: v for k, v in req.model_dump().items() if k not in ("env", "confirm") and v is not None}
     for k in ("capital_usdt", "capital_margin_override_usdt"):
         if patch.get(k) == 0: patch[k] = None
+    if not req.confirm:
+        warning = capital_check(req.env, patch)
+        if warning: raise HTTPException(409, warning)
     limits = risk_manager.update_limits(_ledger(req.env), patch)
     admin_control.audit(BOT_DIR, str(user.get("email") or user.get("id")), "capital_plan", "ok", {"env": req.env, **patch})
     plan = risk_manager.capital_plan(limits, risk_manager.load_risk_state(_ledger(req.env)).get("equity_last"))
