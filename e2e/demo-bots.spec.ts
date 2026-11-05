@@ -24,6 +24,7 @@ test("the Demo bots page in English after the English choice, Arabic after the s
   await expect(html).toHaveAttribute("lang", "en")
   await expect(html).toHaveAttribute("dir", "ltr")
   await expect(page.getByRole("heading", { name: "My Binance Demo bots" })).toBeVisible()
+  await expect(page).toHaveTitle("My Binance Demo bots — RAQM")
   await expect(page.getByText("1 · Exchange keys")).toBeVisible()
   await expect(page.getByText("Waiting for approval").first()).toBeVisible()            // the provisioner's answer
   await expect(page.getByRole("button", { name: "✓ Momentum L/S" })).toBeVisible()       // strategy names in English
