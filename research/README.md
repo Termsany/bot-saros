@@ -21,6 +21,16 @@ python research/universe_data.py && python research/funding_store.py
 
 Without a copy the same two commands build everything from scratch (about 10 minutes of candles, longer for funding).
 
+**Bybit** (a second exchange, November 2026): `bybit_daily.pkl`, `bybit_funding.pkl`, `bybit_meta.pkl` — every crypto
+USDT perpetual Bybit lists or has closed (835, 318 delisted; stocks, ETFs, commodities and forex left out), daily
+candles and real funding since 2020, in the same folder on the server. Copy, or refresh (resumable, only what is
+missing; ~40 minutes from scratch on the server at `RAQM_BYBIT_PAUSE=0.04`):
+
+```bash
+scp root@bot.da3m.io:/opt/raqm-data/research/bybit_*.pkl research/.cache/
+python research/bybit_data.py
+```
+
 ## Method
 
 - **Data:** last 2,000 closed candles from Bybit for BTC, ETH, SOL and XRP on 1h and 4h — 8 data sets
@@ -336,6 +346,26 @@ its 200-day average / 30-day return below 0), the coin's move since listing (non
 - Shorting new coins while BTC is below its 200-day average lost (92 trades, −51): in a falling market the new
   coins have often already fallen, and they bounce. Every BTC-below-200d variant lost before 2024.
 - The BTC-30-day filter cut the drawdown (358 → 238) but also half the profit; it was not the in-sample pick.
+
+### 20. The new-listing short on Bybit — weaker, and more fragile than Binance alone showed (November 2026)
+
+`research/bybit_listing_study.py`: the exact rule (30 days after the first candle, hold 90, stop 40%, at most 10 open,
+fees, real funding) on Bybit's 803 listings since 2021, 294 of them delisted. Nothing tuned on Bybit.
+
+| | trades | PnL | max DD | Sharpe < 2024 | Sharpe 2024 → |
+|---|---|---|---|---|---|
+| Binance, every listing (the rule that runs) | 251 | +775 | 358 | 0.64 | 1.30 |
+| Bybit, every listing | 275 | +301 | 390 | −0.26 | 0.80 |
+| Bybit, coins also on Binance | 263 | −96 | 429 | −0.17 | −0.07 |
+| Bybit, coins never on Binance (≥ $1M a day) | 114 | +606 | 161 | 0.57 | 1.16 |
+
+- **The same coins, two exchanges:** the coins on both made +630 with Binance's listing dates and −96 with Bybit's.
+  Not a matter of who listed first (Bybit first or the same week: −12). With at most 10 open, which listings get a
+  slot decides much of the result — the edge is real on average but noisier than one exchange's history shows.
+- On Binance, its 39 listings that Bybit never had lost (−194); on Bybit, the coins Binance never had made +606
+  (mostly 2025–2026, 114 trades). Small samples, likely luck of the period.
+- **Not adopted:** no Bybit bot. For the listing short on Binance it means caution before real money — its
+  backtest result depends on which coins fill the 10 slots, so the paper and Demo sample matters more.
 
 ## The site now shows only the four paper bots
 
