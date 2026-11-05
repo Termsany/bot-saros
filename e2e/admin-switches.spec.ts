@@ -1,4 +1,4 @@
-import { adminTest as test, expect, type ApiCall } from "./fixtures"
+import { adminTest as test, expect, ApiStatus, type ApiCall } from "./fixtures"
 
 // The admin's strategy switches on the real-money and Demo accounts (roadmap A6, development-plan 3.3): the page
 // that turns real-money strategies on and off. A signed-in admin against a fake API — nothing reaches the real one.
@@ -104,4 +104,26 @@ test("the real account can't be saved with strategies on and no account name", a
   await expect(page.getByRole("button", { name: "احفظ التغييرات" })).toBeDisabled()
   await page.getByLabel(/اسم الحساب/).fill("main")
   await expect(page.getByRole("button", { name: "احفظ التغييرات" })).toBeEnabled()
+})
+
+test("saving a capital names the account first, and asks again when the server says it looks like the other one", async ({ page, api: a }) => {
+  // 2026-11-03: the real account's $500 / $26 was saved on the Demo tab by mistake
+  const base = api()
+  a.handler = async (c: ApiCall) => {
+    if (c.path === "/api/live/capital") return c.body?.confirm ? { ok: true, plan: null }
+      : new ApiStatus(409, { detail: "نفس راس المال والمارجن المحفوظين على الحساب الحقيقي بالظبط — متأكد إنك على الحساب الصح؟" })
+    return base(c)
+  }
+  await page.goto("/admin?tab=real")
+  await page.getByRole("button", { name: "Demo · فلوس وهمية" }).click()
+  await page.getByLabel("راس المال (USDT)").fill("600")
+  const asked: string[] = []
+  page.on("dialog", d => { asked.push(d.message()); d.accept() })
+  await page.getByRole("button", { name: "احفظ راس المال" }).click()
+  const caps = () => a.calls.filter(c => c.path === "/api/live/capital")
+  await expect.poll(() => caps().length).toBe(2)
+  expect(asked[0]).toContain("حساب الـ Demo — فلوس وهمية")                     // the account, before anything else
+  expect(asked[1]).toContain("على الحساب الحقيقي بالظبط")                      // the server's question
+  expect(caps().map(c => [c.body.env, c.body.confirm])).toEqual([["demo", false], ["demo", true]])
+  await expect(page.getByText("✅ اتحفظ")).toBeVisible()
 })

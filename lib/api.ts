@@ -102,9 +102,12 @@ export async function apiSetLiveStrategies(env: "live"|"demo", account: string, 
   if(!r.ok) throw new Error(typeof d.detail === "string" ? d.detail : "ما اتحفظش")
   return d
 }
-export async function apiSetCapital(env: "live"|"demo", capital_usdt: number, capital_margin_override_usdt: number): Promise<any>{
-  const r=await fetch(`${API}/api/live/capital`, { method:"POST", headers: await authHeaders(JSON_CT), body: JSON.stringify({ env, capital_usdt, capital_margin_override_usdt }) })
+/** A save the server asks about first (409: the plan looks like the other account's) — confirm, then send again. */
+export class CapitalQuestion extends Error {}
+export async function apiSetCapital(env: "live"|"demo", capital_usdt: number, capital_margin_override_usdt: number, confirm = false): Promise<any>{
+  const r=await fetch(`${API}/api/live/capital`, { method:"POST", headers: await authHeaders(JSON_CT), body: JSON.stringify({ env, capital_usdt, capital_margin_override_usdt, confirm }) })
   const d = await r.json().catch(()=>({}))
+  if(r.status === 409 && typeof d.detail === "string") throw new CapitalQuestion(d.detail)
   if(!r.ok) throw new Error(typeof d.detail === "string" ? d.detail : "ما اتحفظش")
   return d
 }
