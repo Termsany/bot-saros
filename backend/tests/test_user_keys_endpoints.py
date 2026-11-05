@@ -131,7 +131,8 @@ class UserKeysEndpointsTests(unittest.TestCase):
     def test_live_enable_refused_while_the_server_switch_is_off(self):
         self.client.post("/api/user/keys/save", headers=self.h("a-token"), json={"exchange": "binance", "apiKey": "AKEY", "secret": "ASECRET"})
         r = self.client.post("/api/user/live/enable", headers=self.h("a-token"),
-                             json={"exchange": "binance", "confirm": user_live_activation.CONSENT_TEXT})
+                             json={"exchange": "binance", "confirm": user_live_activation.CONSENT_TEXT, "environment": "live",
+                                   "capital_usdt": 1000, "margin_usdt": 20})       # real money is asked for by name (2026-11-05)
         self.assertEqual(r.status_code, 403)
 
     def test_key_fields_are_bounded(self):

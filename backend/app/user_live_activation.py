@@ -46,8 +46,13 @@ def _connect(path):
         disabled_at TEXT, disabled_reason TEXT
     )""")
     # which money the consent is for (Phase 2): records from before it was recorded were real-money ones
-    if "environment" not in {r[1] for r in con.execute("PRAGMA table_info(user_live_activation)")}:
+    cols = {r[1] for r in con.execute("PRAGMA table_info(user_live_activation)")}
+    if "environment" not in cols:
         con.execute("ALTER TABLE user_live_activation ADD COLUMN environment TEXT NOT NULL DEFAULT 'live'")
+    # real money (owner, 2026-11-05): the capital and margin the user saw the risk of and accepted; a change asks again
+    for c in ("capital_usdt", "margin_usdt"):
+        if c not in cols:
+            con.execute(f"ALTER TABLE user_live_activation ADD COLUMN {c} REAL")
     return con
 
 
@@ -55,12 +60,17 @@ ENVIRONMENTS = ("demo", "live")
 
 
 def enable_user_live(path, *, user_id, exchange, confirm, actor, ip=None,
-                      leverage=None, risk_per_trade_pct=None, max_aggregate_risk_pct=None, environment="live"):
+                      leverage=None, risk_per_trade_pct=None, max_aggregate_risk_pct=None, environment="demo",
+                      capital_usdt=None, margin_usdt=None):
     """Record an audited per-user consent to trade on `exchange` with their own keys — on Binance Demo (play money)
     or real money (`environment`). A Demo consent never counts for real money.
 
     `confirm` must exactly equal CONSENT_TEXT: this is the explicit confirmation step,
     not a bare boolean checkbox, so the audit trail proves what the user agreed to.
+
+    Real money (owner, 2026-11-05): the consent is for the user's own capital and margin — the risk level they were
+    shown is computed from them here (user_bots.live_risk), and the provisioner starts a real bot only while the
+    desired capital and margin are exactly the accepted ones.
     """
     if not user_id or not exchange:
         raise ValueError("user_id and exchange are required")
@@ -68,30 +78,38 @@ def enable_user_live(path, *, user_id, exchange, confirm, actor, ip=None,
         raise ValueError("environment must be demo or live")
     if confirm != CONSENT_TEXT:
         raise PermissionError("explicit consent text does not match — live trading was not enabled")
-    lev = int(leverage) if leverage is not None else DEFAULT_LEVERAGE
-    rpt = float(risk_per_trade_pct) if risk_per_trade_pct is not None else DEFAULT_RISK_PER_TRADE_PCT
-    agg = float(max_aggregate_risk_pct) if max_aggregate_risk_pct is not None else DEFAULT_MAX_AGGREGATE_RISK_PCT
-    if not (1 <= lev <= MAX_LEVERAGE):
-        raise ValueError(f"leverage must be between 1 and {MAX_LEVERAGE}")
-    if not (0 < rpt <= MAX_RISK_PER_TRADE_PCT):
-        raise ValueError(f"risk_per_trade_pct must be between 0 and {MAX_RISK_PER_TRADE_PCT}")
-    if not (0 < agg <= MAX_AGGREGATE_RISK_PCT_CAP):
-        raise ValueError(f"max_aggregate_risk_pct must be between 0 and {MAX_AGGREGATE_RISK_PCT_CAP}")
-    if rpt > agg:
-        raise ValueError("risk_per_trade_pct cannot exceed max_aggregate_risk_pct")
+    cap = mar = None
+    if environment == "live":
+        from .user_bots import _validate_live
+        clean = _validate_live("live", True, ["momentum_ls"], {"capital_usdt": capital_usdt, "capital_margin_override_usdt": margin_usdt})
+        lev, rpt, agg = clean["leverage"], clean["risk_per_trade_pct"], clean["max_aggregate_risk_pct"]
+        cap, mar = clean["capital_usdt"], clean["capital_margin_override_usdt"]
+    else:
+        lev = int(leverage) if leverage is not None else DEFAULT_LEVERAGE
+        rpt = float(risk_per_trade_pct) if risk_per_trade_pct is not None else DEFAULT_RISK_PER_TRADE_PCT
+        agg = float(max_aggregate_risk_pct) if max_aggregate_risk_pct is not None else DEFAULT_MAX_AGGREGATE_RISK_PCT
+        if not (1 <= lev <= MAX_LEVERAGE):
+            raise ValueError(f"leverage must be between 1 and {MAX_LEVERAGE}")
+        if not (0 < rpt <= MAX_RISK_PER_TRADE_PCT):
+            raise ValueError(f"risk_per_trade_pct must be between 0 and {MAX_RISK_PER_TRADE_PCT}")
+        if not (0 < agg <= MAX_AGGREGATE_RISK_PCT_CAP):
+            raise ValueError(f"max_aggregate_risk_pct must be between 0 and {MAX_AGGREGATE_RISK_PCT_CAP}")
+        if rpt > agg:
+            raise ValueError("risk_per_trade_pct cannot exceed max_aggregate_risk_pct")
     con = _connect(path)
     try:
         con.execute("BEGIN IMMEDIATE")
         con.execute("""INSERT INTO user_live_activation
             (user_id, exchange, enabled, leverage, risk_per_trade_pct, max_aggregate_risk_pct,
-             consent_text, consented_at, actor, ip, disabled_at, disabled_reason, environment)
-            VALUES(?,?,1,?,?,?,?,?,?,?,NULL,NULL,?)
+             consent_text, consented_at, actor, ip, disabled_at, disabled_reason, environment, capital_usdt, margin_usdt)
+            VALUES(?,?,1,?,?,?,?,?,?,?,NULL,NULL,?,?,?)
             ON CONFLICT(user_id) DO UPDATE SET
               exchange=excluded.exchange, enabled=1, leverage=excluded.leverage,
               risk_per_trade_pct=excluded.risk_per_trade_pct, max_aggregate_risk_pct=excluded.max_aggregate_risk_pct,
               consent_text=excluded.consent_text, consented_at=excluded.consented_at,
-              actor=excluded.actor, ip=excluded.ip, disabled_at=NULL, disabled_reason=NULL, environment=excluded.environment
-            """, (user_id, exchange, lev, rpt, agg, confirm, _now(), actor, ip, environment))
+              actor=excluded.actor, ip=excluded.ip, disabled_at=NULL, disabled_reason=NULL, environment=excluded.environment,
+              capital_usdt=excluded.capital_usdt, margin_usdt=excluded.margin_usdt
+            """, (user_id, exchange, lev, rpt, agg, confirm, _now(), actor, ip, environment, cap, mar))
         con.execute("COMMIT")
     except Exception:
         con.execute("ROLLBACK")

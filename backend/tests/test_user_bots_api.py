@@ -67,7 +67,8 @@ class UserBotsApiTests(ApiAuthTests):
             {"updated": datetime.now(timezone.utc).isoformat(), "env": "demo", "positions": [{"symbol": "SOL/USDT"}]}), encoding="utf-8")
         r = self.c.get("/api/user/bots", headers=self.h("u1-token")).json()
         self.assertEqual(r["provision"]["state"], "waiting_approval")
-        self.assertTrue(r["bots"]["trend_daily"]["running"]); self.assertEqual(r["rules"]["envs"], ["demo"])
+        self.assertTrue(r["bots"]["trend_daily"]["running"]); self.assertEqual(r["rules"]["envs"], ["demo", "live"])
+        self.assertEqual(r["rules"]["live"]["strategies"], ["momentum_ls"])          # real money: momentum only
         self.assertEqual(self.c.get("/api/user/bots", headers=self.h("u2-token")).json()["bots"], {})
 
     def test_close_only_an_open_position_of_a_running_bot_of_ones_own(self):
@@ -88,7 +89,8 @@ class UserBotsApiTests(ApiAuthTests):
         save_user_keys(U1, "binance", "k", "s")
         body = {"exchange": "binance", "confirm": CONSENT_TEXT}
         self.assertEqual(self.c.post("/api/user/live/enable", headers=self.h("u1-token"), json={**body, "environment": "live"}).status_code, 403)
-        self.assertEqual(self.c.post("/api/user/live/enable", headers=self.h("u1-token"), json=body).status_code, 403)   # default: real money
+        self.assertEqual(self.c.post("/api/user/live/enable", headers=self.h("u1-token"), json=body).status_code, 200)   # default: Demo (2026-11-05)
+        self.assertEqual(get_user_live_record(self.m.USER_LIVE_ACTIVATION_PATH, user_id=U1)["environment"], "demo")
         self.assertEqual(self.c.post("/api/user/live/enable", headers=self.h("u1-token"), json={**body, "environment": "demo"}).status_code, 200)
         self.assertEqual(get_user_live_record(self.m.USER_LIVE_ACTIVATION_PATH, user_id=U1)["environment"], "demo")
         self.assertEqual(self.c.get("/api/user/live/status", headers=self.h("u1-token")).json()["environment"], "demo")
@@ -150,6 +152,34 @@ class UserBotsApiTests(ApiAuthTests):
         self.assertEqual(self.c.get(f"/api/user/bots/close/trend_daily/{rid}", headers=self.h("u1-token")).json(), {"done": True, "id": rid, "ok": True})
         self.assertEqual(self.c.get(f"/api/user/bots/close/trend_daily/{rid}", headers=self.h("u2-token")).json(), {"done": False, "pending": False})
 
+    # ── real money for invited users (owner, 2026-11-05): the risk the page shows, a consent for exact numbers ──
+    def test_the_risk_of_a_plan_before_accepting_it(self):
+        r = self.c.get("/api/user/bots/risk?capital=1000&margin=20", headers=self.h("u1-token")).json()
+        self.assertEqual((r["one_stop_usdt"], r["per_trade_pct"], r["worst_usdt"], r["aggregate_pct"], r["level"], r["ok"]),
+                         (16.0, 1.6, 160.0, 16.0, "medium", True))
+        bad = self.c.get("/api/user/bots/risk?capital=100&margin=20", headers=self.h("u1-token")).json()
+        self.assertFalse(bad["ok"]); self.assertIn("more than the capital", bad["why"])
+        self.assertEqual(self.c.get("/api/user/bots/risk?capital=0&margin=20", headers=self.h("u1-token")).status_code, 400)
+        self.assertEqual(self.c.get("/api/user/bots/risk?capital=1000&margin=20").status_code, 401)
+
+    def test_a_real_money_consent_stores_the_accepted_capital_and_margin(self):
+        from app.user_keys_vault import save_user_keys
+        from app.user_live_activation import CONSENT_TEXT, get_user_live_record
+        save_user_keys(U1, "binance", "k", "s")
+        body = {"exchange": "binance", "confirm": CONSENT_TEXT, "environment": "live", "capital_usdt": 1000, "margin_usdt": 20}
+        with mock.patch.object(self.m, "live_trading_allowed", return_value=True), \
+             mock.patch("app.routes.users.live_trading_allowed", return_value=True, create=True):
+            self.assertEqual(self.c.post("/api/user/live/enable", headers=self.h("u1-token"), json={**body, "margin_usdt": 1}).status_code, 400)
+            self.assertEqual(self.c.post("/api/user/live/enable", headers=self.h("u1-token"), json=body).status_code, 200)
+        rec = get_user_live_record(self.m.USER_LIVE_ACTIVATION_PATH, user_id=U1)
+        self.assertEqual((rec["environment"], rec["capital_usdt"], rec["margin_usdt"], rec["risk_per_trade_pct"]), ("live", 1000.0, 20.0, 1.6))
+
+    def test_a_real_money_desired_state_is_momentum_only(self):
+        base = {"env": "live", "enabled": True, "leverage": 2, "risk_per_trade_pct": 1, "max_aggregate_risk_pct": 3,
+                "capital_usdt": 1000, "capital_margin_override_usdt": 20}
+        self.assertEqual(self.c.post("/api/user/bots", headers=self.h("u1-token"), json={**base, "strategies": ["trend_daily"]}).status_code, 400)
+        r = self.c.post("/api/user/bots", headers=self.h("u1-token"), json={**base, "strategies": ["momentum_ls"]})
+        self.assertEqual(r.status_code, 200); self.assertEqual(r.json()["desired"]["max_aggregate_risk_pct"], 16.0)
 
 
 if __name__ == "__main__":
