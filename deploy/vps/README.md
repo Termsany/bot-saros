@@ -98,6 +98,27 @@ it holds it until it closes (shared risk ledger), and each bot leaves the others
 The live bots are not restarted by the setup scripts (one stopped mid-order goes to review): restart them as a
 deliberate step, `systemctl restart 'raqm-live@*'`.
 
+### A live strategy on its own sub-account
+
+Two strategies on one Binance account block each other's coins (one position per coin in one-way mode,
+`research/shared_account_study.py`), so a second live strategy gets its own sub-account
+(docs/trend-daily-live-plan.md §2). With the strategy's unit stopped and flat:
+
+1. `sudo /opt/raqm-live/venv/bin/python -I /usr/local/lib/raqm/live_account.py add <name> <strategy>` makes
+   `/etc/raqm-live/accounts/<name>/` and the ledger `/opt/raqm-risk-<name>`, writes the unit's drop-in
+   (`raqm-live@<strategy>.service.d/account.conf`) and `/etc/raqm-live/accounts.json`. It writes no keys.
+2. The owner writes, root, chmod 600: `/etc/raqm-live/accounts/<name>/binance` (`BINANCE_API_KEY=`, `BINANCE_SECRET=`,
+   the sub-account's key: withdrawals off, IP-restricted, futures on) and `/etc/raqm-live/accounts/<name>/allow-live.env`
+   (`ALLOW_LIVE_TRADING=true`, `BINANCE_LIVE_ACCOUNT=<name>`, the five `RAQM_CAP_*_PCT` for that account's capital).
+3. `live_preflight.py --strategy <strategy>` checks that account: its files, its drop-in, that its key isn't
+   `.env.real`'s, its ledger and kill switch, and the account on Binance.
+
+The drop-in resets every environment file and writable path the unit inherits, reads the keys only through
+`LoadCredential` (bot.py never falls back to the environment then), and hides `.env.real`, `allow-live.env` and
+`/opt/raqm-risk` from that bot. The watchdog alerts each account's kill switch on its own, and the daily backup takes
+each account's ledger. Not done yet: the dashboard (capital, limits, activation, kill switch per account) and
+realbot.da3m.io / the rebalance check, which read the main account only.
+
 ### realbot.da3m.io — the real-money bots' public page
 
 Public like bot.da3m.io (owner's choice, 2026-11-03): anyone with the link sees the live bots' positions, sizes and
