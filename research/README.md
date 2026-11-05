@@ -367,6 +367,29 @@ fees, real funding) on Bybit's 803 listings since 2021, 294 of them delisted. No
 - **Not adopted:** no Bybit bot. For the listing short on Binance it means caution before real money — its
   backtest result depends on which coins fill the 10 slots, so the paper and Demo sample matters more.
 
+### 21. The ratio trend: tested, netted per coin, and as live runs it (November 2026)
+
+`research/ratio_netting_study.py` (docs/ratio-trend-live-plan.md §1): the bot's rule (every pair among the weekly top
+7 by volume, ratio vs its 50-day mean) at the real account's $26 margin ×2 per unit, 2020-01 → 2026-10, fees and
+real funding, a daily model (each unit's notional reset daily).
+
+| | PnL | worst DD | Sharpe < 2024 | Sharpe 2024 → | margin used | 2022 | 2026 |
+|---|---|---|---|---|---|---|---|
+| PAIRS: the tested strategy, 21 pairs, no stop | +1,949 | 1,406 (54 units) | 0.70 | 0.19 | ~$588 | −439 | +29 |
+| NETTED: one position per coin (+6 … −6 units) | +2,011 | 1,400 | 0.71 | 0.20 | ~$588 | −429 | +37 |
+| NETTED + 40% stop per coin | **+2,455** | **1,273 (49 units)** | 0.59 | **0.64** | ~$582 | −387 | +772 |
+| LIVE NOW: coin-disjoint pairs only | +219 | 246 | 0.51 | 0.10 | ~$149 | −101 | +8 |
+
+- **Netting works:** the same PnL as the 21 pairs, with 20% less in fees.
+- **The stop matters:** in 2026 pump coins entered the top 7 (SIREN +269% in one day on 2026-04-04 while the
+  basket was short 6 units: −$839 that day without a stop). With the stop, 2026 is +772. Without the stop, 2026 is
+  flat, though one coin (LAB) alone made +856 in it: the year rests on a few coins either way.
+- **The drawdown is the problem:** about 49 units ($1,273 at $26), lasting from 2021-11 to 2023-08. That's roughly 3×
+  momentum's and trend_daily's, for a Sharpe after 2024 (0.64) below both.
+- **What runs live now** (coin-disjoint pairs) is a quarter of the size, and its edge after 2024 is near zero.
+- Weaker than docs/demo-baseline.md (PF 1.37, DD 39.7 margins), which used fixed quantities from entry and a
+  different start date. The ranking is the same.
+
 ## The site now shows only the four paper bots
 
 `research/bots_stats.py` writes `lib/bot-stats.json` (the numbers the site shows); the dashboard's live section and
