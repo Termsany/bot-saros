@@ -73,6 +73,7 @@ test("the dashboard in English after the English landing, with the light theme",
   await page.goto("/dashboard")
   await expect(page.locator("html")).toHaveAttribute("lang", "en")
   await expect(page.locator("html")).toHaveAttribute("dir", "ltr")
+  await expect(page).toHaveTitle("Dashboard — RAQM")                          // the browser tab, in English too
   await expect(page.getByText("LIVE · real money").first()).toBeVisible()
   await expect(page.getByText("Next rebalance (real bot)")).toBeVisible()
   await expect(page.getByRole("heading", { name: "Paper bots" })).toBeVisible()
@@ -95,6 +96,7 @@ test("the Backtest page in English after the English landing, Arabic after the s
   await expect(html).toHaveAttribute("lang", "en")
   await expect(html).toHaveAttribute("dir", "ltr")
   await expect(html).toHaveAttribute("data-theme", "light")                       // a themed page now
+  await expect(page).toHaveTitle("Backtest — RAQM")
   await expect(page.getByRole("heading", { name: "Run settings" })).toBeVisible()
   await expect(page.getByRole("button", { name: "Run the backtest" })).toBeVisible()
   await expect(page.getByText("Market and range")).toBeVisible()
@@ -103,6 +105,7 @@ test("the Backtest page in English after the English landing, Arabic after the s
   await expect(html).toHaveAttribute("lang", "ar")
   await expect(page.getByRole("heading", { name: "إعدادات التشغيل" })).toBeVisible()
   await expect(page.getByRole("button", { name: "شغّل الـ Backtest" })).toBeVisible()
+  await expect(page).toHaveTitle("Backtest — رقم RAQM")
 })
 
 test("a page not built for the light theme stays dark", async ({ page }) => {
