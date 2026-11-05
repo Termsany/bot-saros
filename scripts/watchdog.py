@@ -16,6 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from backend.app import risk_manager as riskmgr
+from backend.app import live_accounts
 
 STRATEGIES = ("trend_daily", "vol_breakout", "rsi2_pullback", "trend_breakout", "listing_short", "momentum_ls", "ratio_trend")
 LEDGERS = {"demo": Path("/opt/raqm-risk-demo"), "live": Path("/opt/raqm-risk")}
@@ -71,23 +72,34 @@ def _read_status(path, limit=1 << 20):
         os.close(fd)
 
 
-def problems(now, unit=unit, ipc=IPC, ledgers=LEDGERS, failed=None):
-    """Every problem seen now: {key: (text, checks in a row before alerting)}."""
+def problems(now, unit=unit, ipc=IPC, ledgers=LEDGERS, failed=None, accounts=None, risk_root=live_accounts.RISK_ROOT):
+    """Every problem seen now: {key: (text, checks in a row before alerting)}. A live strategy on its own Binance
+    account (backend/app/live_accounts.py) has its own ledger, so its own kill switch and alert."""
     out = {}
+    if accounts is None:
+        try:
+            accounts = live_accounts.load()
+        except live_accounts.RegistryError as e:
+            out["accounts"] = (f"ملف الحسابات الحقيقية (accounts.json) مش سليم: {e}", 1); accounts = {}
     for env in ("demo", "live"):
-        watched = False
+        watched = set()
         for s in STRATEGIES:
             enabled, active = unit(env, s)
             if not enabled: continue
-            watched = True
+            watched.add(live_accounts.account_of(s, accounts) if env == "live" else None)
             check_bot(out, now, f"{env}:{s}", f"{s} ({ENV_NAME[env]})", env, active, ipc / s / "live_status.json")
-        if watched:
+        for acct in sorted(watched, key=lambda a: a or ""):
+            key = env if acct is None else f"{env}:{acct}"
+            name = ENV_NAME[env] if acct is None else f"{ENV_NAME[env]} ({acct})"
+            ledger = ledgers[env] if acct is None else live_accounts.paths(acct, risk_root=risk_root)["risk"]
+            if acct is not None and not live_accounts.ledger_exists(ledger):    # not created here, as the watchdog
+                out[f"ledger:{key}"] = (f"ملف المخاطر بتاع {name} لسه مش موجود ({ledger})", 2); continue
             try:
-                ks = riskmgr.load_risk_state(ledgers[env] / "risk_state.json")["kill_switch"]
+                ks = riskmgr.load_risk_state(ledger / "risk_state.json")["kill_switch"]
                 if ks.get("tripped"):
-                    out[f"kill:{env}"] = (f"قفل الطوارئ اشتغل على حساب {ENV_NAME[env]} — مفيش دخول جديد لأي استراتيجية: {ks.get('reason')}", 1)
+                    out[f"kill:{key}"] = (f"قفل الطوارئ اشتغل على حساب {name} — مفيش دخول جديد لأي استراتيجية: {ks.get('reason')}", 1)
             except Exception as e:
-                out[f"ledger:{env}"] = (f"ملف المخاطر بتاع {ENV_NAME[env]} مش بيتقري: {e}", 2)
+                out[f"ledger:{key}"] = (f"ملف المخاطر بتاع {name} مش بيتقري: {e}", 2)
     if (failed or _unit_failed)("raqm-watchdog-users.service"):      # the users' watchdog can't report its own crash
         out["watchdog-users"] = ("مراقب بوتات المستخدمين نفسه واقع (raqm-watchdog-users)", 2)
     return out
