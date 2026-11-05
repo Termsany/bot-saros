@@ -135,6 +135,16 @@ export async function apiUserBots(): Promise<any|null>{
     const r=await fetch(`${API}/api/user/bots`, { headers, cache: "no-store" }); return r.ok ? r.json() : null
   }catch{ return null }
 }
+/** A real-money plan's risk before the user accepts it (GET /api/user/bots/risk): one stop, the worst week, the level. */
+export type LiveRisk = { one_stop_usdt: number, per_trade_pct: number, legs: number, worst_usdt: number, aggregate_pct: number,
+  level: "low" | "medium" | "high" | "very_high", ok: boolean, why: string | null }
+export async function apiUserBotsRisk(capital: number, margin: number): Promise<LiveRisk | null>{
+  try{
+    const headers = await signedInHeaders(); if(!headers) return null
+    const r = await fetch(`${API}/api/user/bots/risk?capital=${encodeURIComponent(capital)}&margin=${encodeURIComponent(margin)}`, { headers, cache: "no-store" })
+    return r.ok ? r.json() : null
+  }catch{ return null }
+}
 export async function apiSetUserBots(body: any): Promise<any>{
   const r=await fetch(`${API}/api/user/bots`, { method:"POST", headers: await authHeaders(JSON_CT), body: JSON.stringify(body) })
   const d = await r.json().catch(()=>({}))
