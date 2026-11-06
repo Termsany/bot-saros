@@ -31,6 +31,65 @@ def load_closed(ipc=IPC, strategies=None):
     return out
 
 
+# The real account and the momentum day experiment (owner, 2026-11-06), in the same units (% of each trade's margin):
+LIVE_START = datetime(2026, 11, 3, 15, 23, tzinfo=timezone.utc)   # momentum_ls real money (docs/live-small-size-plan.md)
+LIVE_SAMPLE = 30                    # its first 3 real rebalances, 10 legs each, before any size change
+EXPERIMENT = "momentum_wed"         # docs/momentum-wed-demo.md: Wednesday open, 6 days held, on Demo
+EXPERIMENT_SAMPLE = 80              # 8 weeks of 10 legs before any conclusion
+
+
+def _read(ipc, folder, env):
+    try:
+        doc = json.loads((ipc / folder / "closed.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return (doc.get("closed") or []) if doc.get("env") == env else None
+
+
+def _line(st):
+    f = lambda v, s="": "—" if v is None else f"{v}{s}"
+    return (f"PF {f(st['profit_factor'])} · كسب {f(st['win_rate'], '%')} · متوسط الكسب {f(st['avg_win_pct'], '%')} / الخسارة "
+            f"{f(st['avg_loss_pct'], '%')} · تراجع {st['max_dd_margins']} مارجن · صافي {st['net_margins']:+} مارجن")
+
+
+def real_and_experiment(ipc, baseline, now):
+    """The lines for the real momentum_ls and for the Wednesday experiment next to it over the same weeks."""
+    from app import demo_measure as dm
+    b = ((baseline or {}).get("strategies") or {}).get("momentum_ls") or {}
+    lines = ["", "💰 الحساب الحقيقي — momentum (من 3 نوفمبر)"]
+    live = _read(ipc, "momentum_ls", "live")
+    live_counted = dm.counted(live, LIVE_START) if live is not None else []
+    if live is None:
+        lines.append("   ملف الصفقات المقفولة مش موجود")
+    else:
+        st = dm.stats(live_counted, now, LIVE_START)
+        status, reasons = dm.verdict(st, b, LIVE_SAMPLE)
+        lines.append(f"{ICON.get(status, '•')} {WORD.get(status, status)} — {st['trades']}/{LIVE_SAMPLE} رجل (أول 3 تبديلات)")
+        if st["trades"]:
+            lines.append(f"   {_line(st)}")
+            dollars = sum(float(r.get("pnl") or 0) for r in live if (dm._when(r.get("time")) or LIVE_START) >= LIVE_START)
+            base = b.get("all") or {}
+            lines.append(f"   بالدولار: {dollars:+.2f}$ · الباكتست: PF {base.get('profit_factor')} · كسب {base.get('win_rate')}%")
+        lines += [f"   ↳ {why}" for why in reasons]
+    exp = _read(ipc, EXPERIMENT, "demo")
+    lines += ["", "🧪 تجربة الأربع (Demo) قصاد الاتنين الحقيقي، نفس الأسابيع"]
+    if not exp:
+        lines.append("   لسه ما بدأتش (docs/momentum-wed-demo.md)")
+        return lines
+    opened = sorted(t for t in (dm._when(r.get("opened")) for r in exp) if t)
+    start = opened[0] if opened else now
+    e = dm.stats(dm.counted(exp, start), now, start)
+    r = dm.stats([x for x in live_counted if x[0] >= start], now, start)
+    lines.append(f"   الأربع: {e['trades']}/{EXPERIMENT_SAMPLE} رجل · {_line(e)}")
+    lines.append(f"   الاتنين: {r['trades']} رجل · {_line(r)}")
+    if e["trades"] >= EXPERIMENT_SAMPLE:
+        lines.append("   ✅ الأربع مش أسوأ من الاتنين في نفس الأسابيع" if e["net_margins"] >= r["net_margins"]
+                     else "   ❌ الأربع أسوأ من الاتنين في نفس الأسابيع: الحقيقي يفضل على الاتنين")
+    else:
+        lines.append(f"   ⏳ لسه بتجمع: القرار بعد {EXPERIMENT_SAMPLE} رجل (8 أسابيع)")
+    return lines
+
+
 def report(m, labels=None):
     """The Telegram text from demo_measure.measure(...)."""
     labels = labels or {}
@@ -64,7 +123,9 @@ def main(argv=None):
     else:
         from app import strategy_catalog
         labels = strategy_catalog.NAME_AR                    # lib/strategies.json, the site's names
-        text, far = report(demo_measure.measure(load_closed(), baseline, datetime.now(timezone.utc)), labels)
+        now = datetime.now(timezone.utc)
+        text, far = report(demo_measure.measure(load_closed(), baseline, now), labels)
+        text += "\n" + "\n".join(real_and_experiment(IPC, baseline, now))
     print(text)
     if "--telegram" in argv:
         sys.path.insert(0, str(ROOT / "scripts")); import watchdog
