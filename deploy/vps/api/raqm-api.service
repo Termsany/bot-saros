@@ -25,7 +25,7 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-ReadWritePaths=/opt/raqm-api /opt/raqm-ipc /opt/raqm-ipc-paper /opt/raqm-risk /opt/raqm-risk-demo
+ReadWritePaths=/opt/raqm-api /opt/raqm-ipc /opt/raqm-ipc-paper /opt/raqm-risk /opt/raqm-risk-demo -/opt/raqm-risk-accounts
 
 [Install]
 WantedBy=multi-user.target

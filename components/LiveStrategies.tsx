@@ -1,6 +1,6 @@
 "use client"
 import { useCallback, useEffect, useRef, useState } from "react"
-import { CapitalQuestion, apiLiveStatus, apiLiveStrategies, apiSetCapital, apiSetLimits, apiSetLiveStrategies } from "@/lib/api"
+import { CapitalQuestion, apiKillSwitch, apiLiveStatus, apiLiveStrategies, apiSetCapital, apiSetLimits, apiSetLiveStrategies } from "@/lib/api"
 import { LivePositions } from "@/components/LivePositions"
 import { NAME_AR } from "@/lib/strategies"
 import { DemoMeasurement } from "@/components/DemoMeasurement"
@@ -40,39 +40,42 @@ function Tile({ label, value, hint }: { label: string, value: string, hint?: str
   )
 }
 
+/** The real account's name in confirms and titles: the main one, or a strategy's own sub-account. */
+export const accountName = (env: "demo"|"live", acct: string) => env === "demo" ? "الـ Demo" : acct ? `الحساب الحقيقي '${acct}'` : "الحساب الحقيقي"
+
 function Note({ tone, children }: { tone: "loss" | "corona", children: React.ReactNode }){
   return <div className={`mt-2 rounded-[10px] border px-3 py-2 text-[12px] ${tone === "loss" ? "border-loss/30 bg-loss/10 text-loss" : "border-corona/30 bg-corona/10 text-corona"}`}>{children}</div>
 }
 
 /** The owner's capital for this account, and optionally their own margin per trade: the margin and the most trades
  *  open at once (all strategies together) follow, with what a stop would cost. Entries beyond the count are refused. */
-function CapitalPanel({ env, cfg, reload }: { env: "demo"|"live", cfg: any, reload: () => void }){
+function CapitalPanel({ env, acct = "", cfg, reload }: { env: "demo"|"live", acct?: string, cfg: any, reload: () => void }){
   const c = cfg.capital || {}
   const [value, setValue] = useState<string>(c.capital_usdt ? String(c.capital_usdt) : "")
   const [manual, setManual] = useState<string>(c.capital_margin_override_usdt ? String(c.capital_margin_override_usdt) : "")
   const [msg, setMsg] = useState("")
   useEffect(() => {
     setValue(c.capital_usdt ? String(c.capital_usdt) : ""); setManual(c.capital_margin_override_usdt ? String(c.capital_margin_override_usdt) : ""); setMsg("")
-  }, [env, c.capital_usdt, c.capital_margin_override_usdt])
+  }, [env, acct, c.capital_usdt, c.capital_margin_override_usdt])
   const p = plan(Number(value), Number(manual), c)
   const changed = Number(value) !== (c.capital_usdt || 0) || Number(manual) !== (c.capital_margin_override_usdt || 0)
   async function save(){
     const n = Number(value) || 0, m = Number(manual) || 0
     const risk = p ? `\nلو الوقف اتضرب في صفقة: −${usd(p.loss)} (${p.lossPct.toFixed(1)}% من راس المال) — ${LEVEL[p.level][0]}` : ""
     // the account first, loud: on 2026-11-03 the real account's plan was saved on the Demo tab by mistake
-    const where = env === "live" ? "⚠️ الحساب الحقيقي — فلوس حقيقية" : "🧪 حساب الـ Demo — فلوس وهمية"
+    const where = env === "live" ? `⚠️ ${accountName(env, acct)} — فلوس حقيقية` : "🧪 حساب الـ Demo — فلوس وهمية"
     if(!confirm(n ? `${where}\n\nراس المال ${usd(n)}:\nمارجن ${usd(p!.margin)} لكل صفقة${m ? " (يدوي)" : ""}، وبحد أقصى ${p!.maxOpen} صفقة مفتوحة.${risk}` : `${where}\n\nإلغاء خطة راس المال؟`)) return
-    try{ await apiSetCapital(env, n, m); setMsg("✅ اتحفظ"); reload() }
+    try{ await apiSetCapital(env, n, m, false, acct); setMsg("✅ اتحفظ"); reload() }
     catch(e: any){
       if(!(e instanceof CapitalQuestion)){ setMsg(`⚠️ ${e.message}`); return }
       if(!confirm(`${where}\n\n${e.message}\n\nاحفظ برضه؟`)){ setMsg("ما اتحفظش"); return }
-      try{ await apiSetCapital(env, n, m, true); setMsg("✅ اتحفظ"); reload() } catch(e2: any){ setMsg(`⚠️ ${e2.message}`) }
+      try{ await apiSetCapital(env, n, m, true, acct); setMsg("✅ اتحفظ"); reload() } catch(e2: any){ setMsg(`⚠️ ${e2.message}`) }
     }
   }
   const lv = p ? LEVEL[p.level] : null
   return (
     <Card>
-      <CardHeader title={`راس المال (${env === "demo" ? "Demo" : "حقيقي"})`} action={lv && <Pill tone={lv[1]}>{lv[0]}</Pill>}
+      <CardHeader title={`راس المال (${env === "demo" ? "Demo" : acct ? `حقيقي · ${acct}` : "حقيقي"})`} action={lv && <Pill tone={lv[1]}>{lv[0]}</Pill>}
         sub={`${c.capital_reserve_pct ?? 40}% احتياطي · رافعة 2x · وقف 40% من السعر`} />
       <div className="grid grid-cols-2 gap-3">
         <label className="min-w-0"><span className={label}>راس المال (USDT)</span>
@@ -121,12 +124,12 @@ const LIMITS: [string, string, string][] = [
 
 /** The account's risk limits, in % of its balance on Binance — the risk gate reads them before every entry. With them,
  *  what the strategies switched on need at the saved margin: one leg, the biggest basket, and one side of it. */
-function LimitsPanel({ env, cfg, chosen, reload }: { env: "demo"|"live", cfg: any, chosen: Set<string>, reload: () => void }){
+function LimitsPanel({ env, acct = "", cfg, chosen, reload }: { env: "demo"|"live", acct?: string, cfg: any, chosen: Set<string>, reload: () => void }){
   const c = cfg.capital || {}
   const saved = () => Object.fromEntries(LIMITS.map(([k]) => [k, c[k] != null ? String(c[k]) : ""]))
   const [vals, setVals] = useState<Record<string, string>>(saved)
   const [msg, setMsg] = useState("")
-  useEffect(() => { setVals(saved()); setMsg("") }, [env, ...LIMITS.map(([k]) => c[k])])   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setVals(saved()); setMsg("") }, [env, acct, ...LIMITS.map(([k]) => c[k])])   // eslint-disable-line react-hooks/exhaustive-deps
   const changed = LIMITS.some(([k]) => vals[k] !== "" && Number(vals[k]) !== Number(c[k]))
   const bad = LIMITS.some(([k]) => vals[k] !== "" && !(Number(vals[k]) > 0 && Number(vals[k]) <= 100))
   // the gate's basis (risk_manager.risk_basis): the capital when a plan is set, at most the account's balance
@@ -141,12 +144,12 @@ function LimitsPanel({ env, cfg, chosen, reload }: { env: "demo"|"live", cfg: an
   async function save(){
     const patch = Object.fromEntries(LIMITS.filter(([k]) => vals[k] !== "" && Number(vals[k]) !== Number(c[k])).map(([k]) => [k, Number(vals[k])]))
     const lines = LIMITS.filter(([k]) => k in patch).map(([k, l]) => `${l}: ${c[k] ?? "—"}% ← ${patch[k]}%`).join("\n")
-    if(!confirm(`حدود المخاطرة على ${env === "demo" ? "الـ Demo" : "الحساب الحقيقي"}:\n${lines}`)) return
-    try{ await apiSetLimits(env, patch); setMsg("✅ اتحفظ"); reload() } catch(e: any){ setMsg(`⚠️ ${e.message}`) }
+    if(!confirm(`حدود المخاطرة على ${accountName(env, acct)}:\n${lines}`)) return
+    try{ await apiSetLimits(env, patch, acct); setMsg("✅ اتحفظ"); reload() } catch(e: any){ setMsg(`⚠️ ${e.message}`) }
   }
   return (
     <Card>
-      <CardHeader title={`حدود المخاطرة (${env === "demo" ? "Demo" : "حقيقي"})`} sub="% من راس المال اللي فوق (ولو الرصيد أقل، من الرصيد) · البوت بيراجعها قبل كل دخول" />
+      <CardHeader title={`حدود المخاطرة (${env === "demo" ? "Demo" : acct ? `حقيقي · ${acct}` : "حقيقي"})`} sub="% من راس المال اللي فوق (ولو الرصيد أقل، من الرصيد) · البوت بيراجعها قبل كل دخول" />
       <div className="grid grid-cols-2 gap-3">
         {LIMITS.map(([k, l, hint]) => (
           <label key={k} className="min-w-0" title={hint}><span className={label}>{l} %</span>
@@ -176,8 +179,34 @@ function LimitsPanel({ env, cfg, chosen, reload }: { env: "demo"|"live", cfg: an
 export const LABELS: Record<string, string> = NAME_AR
 
 /** The drawing only (no fetching), so it can be checked with sample data. */
-export function LiveStrategiesView({ env, onEnv, cfg, status, chosen, onToggle, account, onAccount, onSave, saving, msg, reload }: {
-  env: "demo"|"live", onEnv: (e: "demo"|"live") => void, cfg: any, status: any, chosen: Set<string>, onToggle: (id: string, on: boolean) => void,
+/** The kill switch of the real account shown: every strategy on it stops entering (exits and stops still work). */
+function KillSwitchPanel({ acct, cfg, reload }: { acct: string, cfg: any, reload: () => void }){
+  const ks = cfg.kill_switch || {}
+  const [msg, setMsg] = useState("")
+  useEffect(() => setMsg(""), [acct])
+  async function flip(){
+    const action = ks.tripped ? "reset" : "trip"
+    const text = action === "reset"
+      ? `⚠️ ${accountName("live", acct)} — فلوس حقيقية\n\nفك قفل الطوارئ؟ الاستراتيجيات المفعّلة هترجع تدخل صفقات.${ks.reason ? `\n\nسبب القفل: ${ks.reason}\nلو السبب لسه موجود (زي التراجع) هيقفل تاني في الدقيقة اللي بعدها.` : ""}`
+      : `⚠️ ${accountName("live", acct)} — فلوس حقيقية\n\nتشغيل قفل الطوارئ؟ مفيش دخول جديد لأي استراتيجية على الحساب ده، والخروج والوقفات شغالين.`
+    if(!confirm(text)) return
+    try{ await apiKillSwitch(action, acct); setMsg("✅ اتنفذ"); reload() } catch(e: any){ setMsg(`⚠️ ${e.message}`) }
+  }
+  return (
+    <Card className={ks.tripped ? "border-loss/45" : undefined}>
+      <CardHeader title={`قفل الطوارئ (${acct || "الأساسي"})`} action={<Pill tone={ks.tripped ? "loss" : "profit"}>{ks.tripped ? "شغّال" : "مش شغّال"}</Pill>}
+        sub="بيوقف الدخول الجديد على الحساب ده بس · الخروج والوقفات شغالين" />
+      {ks.tripped && ks.reason && <Note tone="loss">{ks.reason}</Note>}
+      <div className="mt-4 flex items-center gap-3">
+        <button onClick={flip} data-testid="kill-switch" className={`${btn.secondary} flex-1`}>{ks.tripped ? "فك قفل الطوارئ" : "شغّل قفل الطوارئ"}</button>
+        {msg && <span className="text-[12px] text-muted">{msg}</span>}
+      </div>
+    </Card>
+  )
+}
+
+export function LiveStrategiesView({ env, onEnv, acct = "", onAcct = () => {}, cfg, status, chosen, onToggle, account, onAccount, onSave, saving, msg, reload }: {
+  env: "demo"|"live", onEnv: (e: "demo"|"live") => void, acct?: string, onAcct?: (a: string) => void, cfg: any, status: any, chosen: Set<string>, onToggle: (id: string, on: boolean) => void,
   account: string, onAccount: (v: string) => void, onSave: () => void, saving: boolean, msg: string, reload: () => void,
 }){
   const envSwitch = (
@@ -212,21 +241,34 @@ export function LiveStrategiesView({ env, onEnv, cfg, status, chosen, onToggle, 
         {envSwitch}
         {env === "live" && <Pill tone={cfg.enabled ? "profit" : "loss"}>{cfg.enabled ? "التداول الحقيقي مسموح على السيرفر" : "التداول الحقيقي مقفول على السيرفر (ALLOW_LIVE_TRADING)"}</Pill>}
       </div>
+      {env === "live" && (cfg.accounts?.length || 0) > 1 && (
+        // each sub-account is its own Binance account: its own capital, limits, yes/no and kill switch
+        <div className="flex flex-wrap items-center gap-2" data-testid="account-picker">
+          <span className="text-[12px] text-faint">الحساب على Binance:</span>
+          {cfg.accounts.map((a: any) => (
+            <button key={a.name || "main"} onClick={() => onAcct(a.name)}
+              className={`rounded-[9px] border px-3 py-1.5 text-[13px] transition ${acct === a.name ? "border-loss/45 bg-loss/10 font-semibold text-ink" : "border-line text-muted hover:text-ink"}`}>
+              {a.name || "الأساسي"} <span className="text-[11px] text-faint">· {(a.strategies || []).map((s: string) => LABELS[s] || s).join("، ") || "—"}</span>
+            </button>
+          ))}
+        </div>
+      )}
 
       <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_372px]">
         <Card className={env === "live" ? "border-loss/45" : "border-signal/45"}>
           <div className={`mb-3 rounded-lg px-3 py-2 text-[13px] font-semibold ${env === "live" ? "bg-loss/10 text-loss" : "bg-signal/10 text-signal"}`}>
-            {env === "live" ? `بتغيّر الحساب الحقيقي${account.trim() ? ` "${account.trim()}"` : ""} — فلوس حقيقية` : "بتغيّر حساب الـ Demo — فلوس وهمية، وده بيأثر على قياس الـ Demo"}
+            {env === "live" ? `بتغيّر ${accountName(env, acct)}${!acct && account.trim() ? ` "${account.trim()}"` : ""} — فلوس حقيقية` : "بتغيّر حساب الـ Demo — فلوس وهمية، وده بيأثر على قياس الـ Demo"}
           </div>
           <CardHeader title={env === "live" ? "الاستراتيجيات على الحساب الحقيقي" : "الاستراتيجيات على الـ Demo"}
             sub={share != null ? `كل استراتيجية شغالة ليها لحد ${share} صفقات (${total} مكان ÷ ${onCount})` : "تشتغل = تقدر تدخل صفقات. مقفولة = مش هتدخل جديد، والمفتوح بيخرج على قاعدته ووقفه."}
             action={<>
               {msg && <span className="text-[12px] text-muted">{msg}</span>}
-              <button onClick={onSave} disabled={saving || !changed || (env === "live" && !account.trim() && chosen.size > 0)} className={btn.secondary}>{saving ? "بيحفظ…" : "احفظ التغييرات"}</button>
+              <button onClick={onSave} disabled={saving || !changed || (env === "live" && !(acct || account.trim()) && chosen.size > 0)} className={btn.secondary}>{saving ? "بيحفظ…" : "احفظ التغييرات"}</button>
             </>} />
           {env === "live" && (
             <label className="mb-4 block max-w-sm"><span className={label}>اسم الحساب (لازم يطابق BINANCE_LIVE_ACCOUNT على السيرفر)</span>
-              <input value={account} onChange={e => onAccount(e.target.value)} dir="ltr" className={field} />
+              {/* a sub-account's bot reads BINANCE_LIVE_ACCOUNT=<its name> (live_account.py): fixed here */}
+              <input value={acct || account} onChange={e => onAccount(e.target.value)} readOnly={!!acct} dir="ltr" className={field} />
             </label>
           )}
           <div className="overflow-x-auto">
@@ -254,8 +296,10 @@ export function LiveStrategiesView({ env, onEnv, cfg, status, chosen, onToggle, 
           {starved.map(r => <Note key={r.id} tone="loss">{LABELS[r.id] || r.id} بتفتح {OPENS_AT_ONCE[r.id]} صفقات مع بعض، فبنصيب {share} مش هتدخل خالص: ارفع راس المال أو شغّل استراتيجيات أقل.</Note>)}
         </Card>
         <div className="space-y-5">
-          <CapitalPanel env={env} cfg={cfg} reload={reload} />
-          <LimitsPanel env={env} cfg={cfg} chosen={chosen} reload={reload} />
+          <CapitalPanel env={env} acct={acct} cfg={cfg} reload={reload} />
+          <LimitsPanel env={env} acct={acct} cfg={cfg} chosen={chosen} reload={reload} />
+          {/* only from an API that reports it: a missing state must never read as "off" */}
+          {env === "live" && cfg.kill_switch && <KillSwitchPanel acct={acct} cfg={cfg} reload={reload} />}
         </div>
       </div>
 
@@ -269,11 +313,11 @@ export function LiveStrategiesView({ env, onEnv, cfg, status, chosen, onToggle, 
 
 /** What a save changes, account first: what starts, what stops entering (2026-11-03: a Demo save meant for the real
  *  account turned six strategies off, and the old text listed only the ones left on). */
-export function switchConfirmText(env: "demo"|"live", account: string, saved: { id: string, on: boolean }[], chosen: Set<string>){
+export function switchConfirmText(env: "demo"|"live", account: string, saved: { id: string, on: boolean }[], chosen: Set<string>, acct = ""){
   const name = (s: string) => LABELS[s] || s
   const turnOn = saved.filter(r => !r.on && chosen.has(r.id)).map(r => name(r.id))
   const turnOff = saved.filter(r => r.on && !chosen.has(r.id)).map(r => name(r.id))
-  const where = env === "demo" ? "حساب الـ Demo (فلوس وهمية)" : `الحساب الحقيقي "${account.trim()}" (فلوس حقيقية)`
+  const where = env === "demo" ? "حساب الـ Demo (فلوس وهمية)" : acct ? `${accountName(env, acct)} (فلوس حقيقية)` : `الحساب الحقيقي "${account.trim()}" (فلوس حقيقية)`
   return [`هتغيّر ${where}:`,
     turnOn.length ? `\nهتشتغل:\n${turnOn.join("\n")}` : "",
     turnOff.length ? `\nهتبطّل تدخل صفقات جديدة (المفتوح بيخرج عادي):\n${turnOff.join("\n")}` : "",
@@ -286,6 +330,7 @@ export function switchConfirmText(env: "demo"|"live", account: string, saved: { 
 export function LiveStrategies(){
   // real money first (owner, 2026-11-03: the tab opened on Demo, and the real bot was hard to find)
   const [env, setEnv] = useState<"demo"|"live">("live")
+  const [acct, setAcct] = useState("")          // a live strategy's own sub-account; "" = the main account
   const [cfg, setCfg] = useState<any|null|undefined>(undefined)
   const [status, setStatus] = useState<any|null>(null)
   const [chosen, setChosen] = useState<Set<string>>(new Set())
@@ -294,31 +339,33 @@ export function LiveStrategies(){
   const [saving, setSaving] = useState(false)
   // the tab shown now, and whether its switches have unsaved changes: an answer for the other tab (a slow request
   // from before a tab change) is dropped, and the 15 s refresh never overwrites switches the owner is changing
-  const envNow = useRef(env)
+  // the account too: an answer for the main account must never fill a sub-account's switches, or the other way round
+  const envNow = useRef(`${env}:${acct}`)
   const dirty = useRef(false)
 
   const load = useCallback(async () => {
-    const want = env
-    const [c, s] = await Promise.all([apiLiveStrategies(want), apiLiveStatus()])
+    const want = `${env}:${acct}`
+    const [c, s] = await Promise.all([apiLiveStrategies(env, acct), apiLiveStatus()])
     if(envNow.current !== want) return
     setCfg(c); setStatus(s)
     if(c){
       if(!dirty.current) setChosen(new Set(c.strategies.filter((r: any) => r.on).map((r: any) => r.id)))
-      setAccount(a => a || c.account || "")
+      if(!acct) setAccount(a => a || c.account || "")
     }
-  }, [env])
+  }, [env, acct])
   useEffect(() => { load(); const t = setInterval(load, 15_000); return () => clearInterval(t) }, [load])
 
   async function save(){
     const list = [...chosen]
-    if(!confirm(switchConfirmText(env, account, cfg?.strategies || [], chosen))) return
+    if(!confirm(switchConfirmText(env, account, cfg?.strategies || [], chosen, env === "live" ? acct : ""))) return
     setSaving(true); setMsg("")
-    try{ await apiSetLiveStrategies(env, account.trim(), list); dirty.current = false; setMsg("✅ اتحفظ"); load() }
+    try{ await apiSetLiveStrategies(env, env === "live" && acct ? acct : account.trim(), list, env === "live" ? acct : ""); dirty.current = false; setMsg("✅ اتحفظ"); load() }
     catch(e: any){ setMsg(`⚠️ ${e.message}`) }
     finally{ setSaving(false) }
   }
 
-  return <LiveStrategiesView env={env} onEnv={e => { envNow.current = e; dirty.current = false; setEnv(e); setCfg(undefined); setMsg("") }} cfg={cfg} status={status} chosen={chosen}
+  const pick = (e: "demo"|"live", a: string) => { envNow.current = `${e}:${a}`; dirty.current = false; setEnv(e); setAcct(a); setCfg(undefined); setMsg("") }
+  return <LiveStrategiesView env={env} onEnv={e => pick(e, e === "live" ? acct : "")} acct={env === "live" ? acct : ""} onAcct={a => pick("live", a)} cfg={cfg} status={status} chosen={chosen}
     onToggle={(id, on) => { dirty.current = true; setChosen(s => { const n = new Set(s); on ? n.add(id) : n.delete(id); return n }) }}
     account={account} onAccount={setAccount} onSave={save} saving={saving} msg={msg} reload={load} />
 }

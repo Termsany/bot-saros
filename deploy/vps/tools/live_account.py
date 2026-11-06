@@ -4,7 +4,7 @@
   sudo /opt/raqm-live/venv/bin/python -I /usr/local/lib/raqm/live_account.py add trend trend_daily
   sudo /opt/raqm-live/venv/bin/python -I /usr/local/lib/raqm/live_account.py remove trend trend_daily
 
-`add` makes the account's folders (keys folder root 700, ledger raqmlive:raqmrisk 2770), writes the unit's drop-in and
+`add` makes the account's folders (keys folder root 700, ledger /opt/raqm-risk-accounts/<name> raqmlive:raqmrisk 2770), writes the unit's drop-in and
 the registry, and reloads systemd. It never writes keys, never starts or stops a bot, and refuses while
 raqm-live@<strategy> is running or still holds positions in the ledger it would leave: a bot must not change account under
 its own open trades. The owner then writes, themselves:
@@ -89,6 +89,7 @@ def add(host, name, strategy):
     _check_free(host, strategy, host.main_ledger)
     p = la.paths(name, host.accounts_dir, host.risk_root)
     p["dir"].mkdir(parents=True, exist_ok=True); os.chmod(p["dir"], 0o700)
+    host.risk_root.mkdir(parents=True, exist_ok=True); os.chmod(host.risk_root, 0o755)
     p["risk"].mkdir(parents=True, exist_ok=True); os.chmod(p["risk"], 0o2770)
     try:
         host.chown(p["risk"], "raqmlive", "raqmrisk")

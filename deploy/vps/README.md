@@ -105,7 +105,7 @@ Two strategies on one Binance account block each other's coins (one position per
 (docs/trend-daily-live-plan.md §2). With the strategy's unit stopped and flat:
 
 1. `sudo /opt/raqm-live/venv/bin/python -I /usr/local/lib/raqm/live_account.py add <name> <strategy>` makes
-   `/etc/raqm-live/accounts/<name>/` and the ledger `/opt/raqm-risk-<name>`, writes the unit's drop-in
+   `/etc/raqm-live/accounts/<name>/` and the ledger `/opt/raqm-risk-accounts/<name>`, writes the unit's drop-in
    (`raqm-live@<strategy>.service.d/account.conf`) and `/etc/raqm-live/accounts.json`. It writes no keys.
 2. The owner writes, root, chmod 600: `/etc/raqm-live/accounts/<name>/binance` (`BINANCE_API_KEY=`, `BINANCE_SECRET=`,
    the sub-account's key: withdrawals off, IP-restricted, futures on) and `/etc/raqm-live/accounts/<name>/allow-live.env`
@@ -116,8 +116,13 @@ Two strategies on one Binance account block each other's coins (one position per
 The drop-in resets every environment file and writable path the unit inherits, reads the keys only through
 `LoadCredential` (bot.py never falls back to the environment then), and hides `.env.real`, `allow-live.env` and
 `/opt/raqm-risk` from that bot. The watchdog alerts each account's kill switch on its own, and the daily backup takes
-each account's ledger. Not done yet: the dashboard (capital, limits, activation, kill switch per account) and
-realbot.da3m.io / the rebalance check, which read the main account only.
+each account's ledger.
+
+On the dashboard (الإدارة ← التداول الحقيقي) the account picker appears once the registry has an account: each
+account has its own capital, limits, yes/no and kill switch. A sub-account's activation takes its own name. The API
+reaches the ledgers through `ReadWritePaths=-/opt/raqm-risk-accounts` in `api/raqm-api.service`, so install the new
+unit there (and `daemon-reload`, restart the API) before the first account. Not done yet: realbot.da3m.io and the
+rebalance check, which read the main account only.
 
 ### realbot.da3m.io — the real-money bots' public page
 

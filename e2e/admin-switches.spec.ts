@@ -52,6 +52,7 @@ test("turning the real bot off says which account and what stops; cancel sends n
   expect(saves(a.calls)).toEqual([])                                        // cancelled: nothing sent
   page.once("dialog", d => d.accept())
   await page.getByRole("button", { name: "احفظ التغييرات" }).click()
+  // no `acct` for the main account: the request an API without sub-accounts already takes
   await expect.poll(() => saves(a.calls)).toEqual([{ env: "live", account: "main", strategies: [] }])
   await expect(page.getByText("✅ اتحفظ")).toBeVisible()
 })

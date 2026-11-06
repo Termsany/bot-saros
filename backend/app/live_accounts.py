@@ -8,7 +8,8 @@ account only:
                                                   main account's keys (bot.py _binance_keys)
   /etc/raqm-live/accounts/<name>/allow-live.env   ALLOW_LIVE_TRADING, BINANCE_LIVE_ACCOUNT and the five RAQM_CAP_*_PCT
                                                   of that account (root, 600)
-  /opt/raqm-risk-<name>/                          its own risk ledger and activation record
+  /opt/raqm-risk-accounts/<name>/                 its own risk ledger and activation record (one parent folder,
+                                                  so the API's unit opens them all with one ReadWritePaths line)
 The unit raqm-live@<strategy> gets a drop-in (dropin_text) that resets every environment file and writable path it
 inherits and hides the main account's keys and ledger from it.
 
@@ -22,7 +23,7 @@ from pathlib import Path
 
 REGISTRY = Path("/etc/raqm-live/accounts.json")
 ACCOUNTS_DIR = Path("/etc/raqm-live/accounts")
-RISK_ROOT = Path("/opt")                       # /opt/raqm-risk-<name>
+RISK_ROOT = Path("/opt/raqm-risk-accounts")    # <name>/ per account
 MAIN = "main"                                  # the default account's name in reports; never a registry entry
 NAME_RE = re.compile(r"^[a-z][a-z0-9]{1,15}$")
 RESERVED = {MAIN, "demo", "live", "users", "paper"}   # /opt/raqm-risk-demo is the Demo ledger
@@ -78,7 +79,7 @@ def paths(name, accounts_dir=ACCOUNTS_DIR, risk_root=RISK_ROOT):
     if not valid_name(name):
         raise RegistryError(f"bad account name {name!r}")
     d = Path(accounts_dir) / name
-    return {"dir": d, "keys": d / "binance", "allow": d / "allow-live.env", "risk": Path(risk_root) / f"raqm-risk-{name}"}
+    return {"dir": d, "keys": d / "binance", "allow": d / "allow-live.env", "risk": Path(risk_root) / name}
 
 
 def ledger_dirs(accounts, main=Path("/opt/raqm-risk"), risk_root=RISK_ROOT):
