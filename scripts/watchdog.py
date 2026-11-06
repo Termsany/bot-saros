@@ -183,7 +183,7 @@ def send(text):
 
 
 # The server itself (development-plan 2.4): what stops every bot at once without any bot being "down" first.
-DOMAINS = ("api.da3m.io", "bot.da3m.io", "realbot.da3m.io")   # this server's sites (it also hosts others, not ours)
+DOMAINS = ("api.da3m.io", "demo.da3m.io", "realbot.da3m.io")   # this server's sites (it also hosts others, not ours)
 DISK_MIN_FREE = (0.10, 5 * 1024 ** 3)   # under 10 % or 5 GB free: SQLite ledgers and logs start failing to write
 MEM_MIN_AVAILABLE = 0.10
 CLOCK_MAX_OFFSET_MS = 1000              # Binance refuses requests outside recvWindow (5 s): alert well before

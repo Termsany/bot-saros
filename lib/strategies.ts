@@ -10,12 +10,12 @@ export type BotStats = { trades: number; winRate: number; pf: number; pnl: numbe
   minCapital: number; minMargin: number; maxOpen: number; testedCapital: number
   /** smaller tested sizes (fewer coins / positions) for the capital-based setup — see lib/personal.ts */
   profiles?: import("./personal").Profile[] }
-/** `live` = the file the bot writes on the VPS (https://bot.da3m.io/<live>.json). `perCoin` = can be backtested on one coin. */
+/** `live` = the file the bot writes on the VPS (https://demo.da3m.io/<live>.json). `perCoin` = can be backtested on one coin. */
 export type Strategy = { id: string; name: string; nameAr: string; desc: string; method: string; tier: "free"|"starter"|"pro"|"elite"; icon: string
   risk: "normal" | "high"; live: string; perCoin: boolean; sides: string } & BotStats
 export const STATS_META = BOT_STATS.meta
 export const COMBINED = BOT_STATS.combined as unknown as { core: Omit<BotStats, "trades"|"winRate"|"pf">, all: Omit<BotStats, "trades"|"winRate"|"pf"> }
-export const BOT_PAGE = "https://bot.da3m.io"
+export const BOT_PAGE = "https://demo.da3m.io"   // was bot.da3m.io until 2026-11-06
 
 /** The one list (lib/strategies.json, development-plan 3.4): ids, names, status files, order. The API and the scripts read
  *  the same file. Order matters: a plan unlocks the first N planned ones (see TIERS.count). */
