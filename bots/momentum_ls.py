@@ -12,7 +12,20 @@ from pathlib import Path
 # weekday 0 = Monday (owner, 2026-11-03): the rebalance follows Binance's weekly candle. The weekday is arbitrary in the
 # backtest too (every 7 days from the data's start) and the results swing with it (PF 1.08–1.22 over the 7 days,
 # Monday 1.15): Monday is a fixed, readable anchor, not a fitted one.
-MOM = {"weeks": 2, "top": 50, "n": 5, "min_days": 60, "stop": 0.40, "every_days": 7, "weekday": 0}
+MOM = {"weeks": 2, "top": 50, "n": 5, "min_days": 60, "stop": 0.40, "every_days": 7, "weekday": 0, "hold_days": 7}
+# hold_days < every_days: the basket closes that many days after it opened and stays flat until the next rebalance.
+# Only bot.py --mom-weekday / --mom-hold change these two, and only on Demo (research/README.md §23: the Wednesday-6
+# experiment, owner 2026-11-06). The real bot runs the defaults: Monday, the full week.
+
+
+def momentum_hold_over(last_iso, today, hold_days=None, every_days=None):
+    """True when the basket opened at `last_iso` has been held `hold_days` and must close before the next rebalance.
+    Never with the defaults (a full week): the rebalance itself closes it."""
+    hold = int(hold_days if hold_days is not None else MOM["hold_days"])
+    every = int(every_days if every_days is not None else MOM["every_days"])
+    if not last_iso or hold >= every:
+        return False
+    return today >= datetime.fromisoformat(last_iso) + pd.Timedelta(days=hold)
 
 
 def momentum_due(last_iso, today, every_days=MOM["every_days"], weekday=MOM["weekday"]):
@@ -79,6 +92,23 @@ def run_once_momentum(ex):
     # weekly rebalance, at the first cycle after the daily close (00:00 UTC) on Monday (momentum_due)
     today = now.replace(hour=0, minute=0, second=0, microsecond=0)
     last = state.get("mom_last")
+    # the experiment's early close (Demo only, --mom-hold): flat from here until the next rebalance day
+    if state["positions"] and momentum_hold_over(last, today, M.get("hold_days"), M["every_days"]):
+        if not bot.CONFIG["paper_trading"]:
+            exits = []
+            for sym in sorted(state["positions"]):
+                px = float(ex.fetch_ticker(sym)["last"]); pos = state["positions"][sym]
+                exits.append({"symbol": sym, "side": "close_" + pos["side"], "action": "exit", "position": pos, "price": px, "order": 0,
+                              "risk_usdt": 0, "notional_usdt": 0, "correlation_group": bot._correlation_group(sym)})
+            result = bot._phase2_live_basket(ex, state, "momentum_ls", "momentum-hold-exit", exits, reserve=False)
+            if not result or result.get("status") != "filled":
+                bot.save_state(state); return
+        else:
+            for sym in list(state["positions"]):
+                try: bot._paper_close(ex, state, sym, float(ex.fetch_ticker(sym)["last"]), f"خروج بعد {M['hold_days']} أيام")
+                except Exception as e: bot.log(f"قفل {sym}: {e}")
+        bot.save_state(state)
+        bot.log(f"⏹️ مومنتم: السلة اتقفلت بعد {M['hold_days']} أيام — مفيش صفقات لحد التبديل الجاي")
     if bot.momentum_due(last, today, M["every_days"], M.get("weekday")):
         ranked = bot.momentum_rank(ex)
         if len(ranked) >= 20:
@@ -142,7 +172,7 @@ def write_momentum_status(state, prices):
     st = state.get("stats", {}); last = state.get("mom_last")
     data = {"updated": datetime.now(timezone.utc).isoformat(), "mode": "paper" if bot.CONFIG["paper_trading"] else "live", "rules": bot.MOM,
             "leverage": int(bot.CONFIG.get("leverage", 2)), "margin": bot.CONFIG.get("trade_amount_usdt"), "started": bot.CONFIG.get("started_at"),
-            "last_rebalance": last, "next_rebalance": bot.momentum_next(last).isoformat() if last else None,
+            "last_rebalance": last, "next_rebalance": bot.momentum_next(last, bot.MOM["every_days"], bot.MOM["weekday"]).isoformat() if last else None,
             "stats": {"closed": st.get("trades", 0), "wins": st.get("wins", 0), "losses": st.get("losses", 0),
                       "realized": round(float(st.get("pnl", 0)), 4), "unrealized": round(sum(x["pnl"] for x in pos), 4), "open": len(pos)},
             "positions": sorted(pos, key=lambda x: (x["side"], -x["ret"])),
