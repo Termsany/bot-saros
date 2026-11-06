@@ -390,6 +390,23 @@ real funding, a daily model (each unit's notional reset daily).
 - Weaker than docs/demo-baseline.md (PF 1.37, DD 39.7 margins), which used fixed quantities from entry and a
   different start date. The ranking is the same.
 
+### 22. momentum_ls with the weekend off — not adopted (November 2026)
+
+`research/momentum_hold_days_study.py`: the live rule (Monday 00:00 UTC entry, top 50, 5 + 5, stop 40%), $26 ×2,
+2019 → 2026-10, fees and real funding. Only the exit day changes; the basket is flat until the next Monday.
+
+| hold | net | worst DD | PF (2024 →) | Sharpe < 2024 | Sharpe 2024 → |
+|---|---|---|---|---|---|
+| 7 days, Monday → Monday (runs) | **+$1,943** | $476 (18.3 margins) | 1.15 (1.20) | 0.60 | **1.15** |
+| 5 days, close end of Friday | +$1,809 | **$269** (10.3) | 1.16 (1.19) | **0.79** | 1.00 |
+| 4 days, close end of Thursday | +$1,496 | $359 (13.8) | 1.15 (1.20) | 0.64 | 1.01 |
+| 3 days, close end of Wednesday | +$1,238 | $291 (11.2) | 1.14 (1.19) | 0.56 | 0.96 |
+
+- A shorter week makes less (Thursday −23%) for the same profit factor. It cuts the drawdown, mostly 2022's.
+- Closing at the end of Friday has the best drawdown and the best Sharpe before 2024. After 2024, the period not used
+  to pick anything, the full week is best (1.15 against 1.00). The drawdown gain rests mostly on one bad year (2022),
+  so it isn't evidence enough to change a live rule during its first measured weeks.
+
 ## The site now shows only the four paper bots
 
 `research/bots_stats.py` writes `lib/bot-stats.json` (the numbers the site shows); the dashboard's live section and
