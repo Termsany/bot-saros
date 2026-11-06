@@ -9,6 +9,13 @@ Run as raqmlive with the real key (the same file the bot reads):
   sudo -u raqmlive sh -c 'set -a; . /opt/raqm-live/.env.real; . /opt/raqm-live/.env.telegram; set +a; \
       cd /opt/raqm-live && venv/bin/python -E -s scripts/rebalance_check.py [--rebalance-day] [--telegram]'
 raqm-rebalance-check.timer runs it with both flags on Mondays at 00:20 UTC.
+
+Any other live strategy: --strategy <name> checks its positions and stops against its own Binance account (no basket
+or rebalance lines). A strategy on its own sub-account (backend/app/live_accounts.py) is checked with that account's
+key only, read the way its bot reads it, as root:
+  sudo env BINANCE_ENV=live CREDENTIALS_DIRECTORY=/etc/raqm-live/accounts/<name> \
+      /opt/raqm-live/venv/bin/python -E -s /opt/raqm-live/scripts/rebalance_check.py --strategy <strategy>
+Checked against another account's key, every position would look missing: the run refuses instead.
 """
 import json, math, os, sys
 from datetime import datetime, timezone
@@ -16,11 +23,32 @@ from pathlib import Path
 
 ROOT = Path(os.getenv("RAQM_LIVE_ROOT") or Path(__file__).resolve().parent.parent)   # override: a copy run from elsewhere
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "backend"))
+IPC = Path(os.getenv("RAQM_IPC_ROOT", "/opt/raqm-ipc"))
 STATE = ROOT / "state" / "live-momentum_ls.json"
-STATUS = Path(os.getenv("RAQM_IPC_ROOT", "/opt/raqm-ipc")) / "momentum_ls" / "live_status.json"
+STATUS = IPC / "momentum_ls" / "live_status.json"
 WATCHDOG = ROOT / "state" / "watchdog.json"
 LEGS_PER_SIDE = 5
 STALE_S = 300
+BASKET = "momentum_ls"          # the one strategy with a basket and a weekly rebalance
+STRATEGIES = ("trend_daily", "vol_breakout", "rsi2_pullback", "trend_breakout", "listing_short", "momentum_ls", "ratio_trend")
+
+
+def files_of(strategy):
+    """(state, status) of a live strategy's bot."""
+    return ROOT / "state" / f"live-{strategy}.json", IPC / strategy / "live_status.json"
+
+
+def key_source(strategy, accounts, cred_dir, accounts_dir=None):
+    """(ok, why): the run reads the key of the account `strategy` trades on — the main account's (.env.real, no
+    credential directory) or its own sub-account's (CREDENTIALS_DIRECTORY = that account's folder)."""
+    from app import live_accounts as la
+    acct = la.account_of(strategy, accounts)
+    if acct is None:
+        return (not cred_dir, "the main account's key" if not cred_dir else
+                f"{strategy} trades on the main account: run it without CREDENTIALS_DIRECTORY ({cred_dir})")
+    want = la.paths(acct, accounts_dir or la.ACCOUNTS_DIR)["dir"]
+    ok = bool(cred_dir) and Path(cred_dir).resolve() == Path(want).resolve()
+    return ok, (f"the '{acct}' account's key" if ok else f"{strategy} trades on the '{acct}' account: run it with CREDENTIALS_DIRECTORY={want.as_posix()} (see the top of this file)")
 
 
 def _f(v):
@@ -30,8 +58,10 @@ def _f(v):
         return None
 
 
-def check(state, status, ex, now, rebalance_day=False, watchdog=None):
-    """[(ok, line)] — ok None = information only."""
+def check(state, status, ex, now, rebalance_day=False, watchdog=None, strategy=BASKET):
+    """[(ok, line)] — ok None = information only. The basket count and the rebalance lines are momentum_ls's alone."""
+    basket = strategy == BASKET
+    rebalance_day = rebalance_day and basket
     from app import oco
     out = []
     add = lambda ok, text: out.append((ok, text))
@@ -53,7 +83,10 @@ def check(state, status, ex, now, rebalance_day=False, watchdog=None):
     # the basket against the exchange
     pos = state.get("positions") or {}
     longs = sum(1 for p in pos.values() if p.get("side") == "long"); shorts = len(pos) - longs
-    add(longs == LEGS_PER_SIDE and shorts == LEGS_PER_SIDE, f"السلة: {longs} لونج + {shorts} شورت")
+    if basket:
+        add(longs == LEGS_PER_SIDE and shorts == LEGS_PER_SIDE, f"السلة: {longs} لونج + {shorts} شورت")
+    else:
+        add(None, f"مفتوح: {longs} لونج + {shorts} شورت")
     try:
         on_ex = {p["symbol"]: p for p in ex.fetch_positions() if abs(_f(p.get("contracts")) or 0) > 0}
     except Exception as e:
@@ -90,9 +123,12 @@ def check(state, status, ex, now, rebalance_day=False, watchdog=None):
     return out
 
 
-def report(results, rebalance_day):
+def report(results, rebalance_day, strategy=BASKET, account=None):
     bad = sum(1 for ok, _ in results if ok is False)
-    head = "🔄 تشييك التبديل الحقيقي" if rebalance_day else "🔎 تشييك السلة الحقيقية"
+    if strategy == BASKET:
+        head = "🔄 تشييك التبديل الحقيقي" if rebalance_day else "🔎 تشييك السلة الحقيقية"
+    else:
+        head = f"🔎 تشييك {strategy} الحقيقي" + (f" (حساب {account})" if account else "")
     lines = [head] + [f"{'ℹ️' if ok is None else '✅' if ok else '❌'} {t}" for ok, t in results]
     lines.append("كله سليم" if not bad else f"🚨 {bad} محتاج تشوفه")
     return "\n".join(lines), bad
@@ -101,6 +137,15 @@ def report(results, rebalance_day):
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     rebalance_day = "--rebalance-day" in argv
+    i = argv.index("--strategy") if "--strategy" in argv else -1
+    strategy = argv[i + 1] if 0 <= i < len(argv) - 1 else BASKET
+    if strategy not in STRATEGIES:
+        sys.exit(f"unknown strategy {strategy!r}")
+    from app import live_accounts as la
+    accounts = la.load()
+    ok, why = key_source(strategy, accounts, os.getenv("CREDENTIALS_DIRECTORY", "").strip())
+    if not ok:
+        sys.exit(why)
     import bot
     assert bot.binance_env() == "live", f"BINANCE_ENV={bot.binance_env()}: this checks the real account"
     ex, err = bot.get_exchange(auth=True)
@@ -108,7 +153,9 @@ def main(argv=None):
     load = lambda p: json.loads(p.read_text(encoding="utf-8"))
     try: wd = load(WATCHDOG)
     except Exception: wd = None
-    text, bad = report(check(load(STATE), load(STATUS), ex, datetime.now(timezone.utc), rebalance_day, wd), rebalance_day)
+    state_f, status_f = (STATE, STATUS) if strategy == BASKET else files_of(strategy)
+    text, bad = report(check(load(state_f), load(status_f), ex, datetime.now(timezone.utc), rebalance_day, wd, strategy),
+                       rebalance_day, strategy, la.account_of(strategy, accounts))
     print(text)
     if "--telegram" in argv:
         sys.path.insert(0, str(ROOT / "scripts")); import watchdog

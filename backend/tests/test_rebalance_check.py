@@ -97,6 +97,29 @@ class RebalanceCheckTests(unittest.TestCase):
         bad, res = run(s, st, p, o, day=False)
         self.assertEqual(bad, []); self.assertFalse(any("التبديل" in t for _, t in res))
 
+    def test_another_strategy_gets_its_positions_and_stops_checked_but_no_basket_or_rebalance(self):
+        s, st, p, o = basket()
+        for sym in COINS[2:]: s["positions"].pop(sym)                   # trend_daily: two longs, no basket
+        p = [x for x in p if x["symbol"] in s["positions"]]; o = [x for x in o if x["symbol"] in s["positions"]]
+        res = rc.check(s, st, FakeEx(p, o), NOW, rebalance_day=True, watchdog={}, strategy="trend_daily")
+        self.assertEqual([t for ok, t in res if ok is False], [])
+        self.assertFalse(any("التبديل" in t or "السلة" in t for _, t in res))
+        self.assertTrue(any(ok is None and "2 لونج" in t for ok, t in res))
+        o.pop(); res = rc.check(s, st, FakeEx(p, o), NOW, strategy="trend_daily")                 # a stop missing still fails
+        self.assertTrue(any(ok is False and "مش لاقيينه" in t for ok, t in res))
+        self.assertIn("trend_daily", rc.report(res, False, "trend_daily", "trend")[0])
+        self.assertIn("(حساب trend)", rc.report(res, False, "trend_daily", "trend")[0])
+
+    def test_each_strategy_is_checked_with_its_own_accounts_key_only(self):
+        acc = {"trend": ["trend_daily"]}
+        d = Path("/etc/raqm-live/accounts")
+        self.assertTrue(rc.key_source("momentum_ls", acc, "", d)[0])                        # main: .env.real
+        self.assertFalse(rc.key_source("momentum_ls", acc, str(d / "trend"), d)[0])         # main with a sub-account's key
+        self.assertTrue(rc.key_source("trend_daily", acc, str(d / "trend"), d)[0])
+        self.assertFalse(rc.key_source("trend_daily", acc, "", d)[0])                       # its account with the main key
+        ok, why = rc.key_source("trend_daily", acc, str(d / "other"), d)
+        self.assertFalse(ok); self.assertIn("CREDENTIALS_DIRECTORY=/etc/raqm-live/accounts/trend", why)
+
     def test_setup_installs_the_script_and_the_monday_timer(self):
         s = (ROOT / "deploy" / "vps" / "setup-live.sh").read_text(encoding="utf-8")
         self.assertIn("scripts/rebalance_check.py", s); self.assertIn("raqm-rebalance-check.timer", s)
