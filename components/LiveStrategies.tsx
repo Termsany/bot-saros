@@ -298,7 +298,8 @@ export function LiveStrategiesView({ env, onEnv, acct = "", onAcct = () => {}, c
         <div className="space-y-5">
           <CapitalPanel env={env} acct={acct} cfg={cfg} reload={reload} />
           <LimitsPanel env={env} acct={acct} cfg={cfg} chosen={chosen} reload={reload} />
-          {env === "live" && <KillSwitchPanel acct={acct} cfg={cfg} reload={reload} />}
+          {/* only from an API that reports it: a missing state must never read as "off" */}
+          {env === "live" && cfg.kill_switch && <KillSwitchPanel acct={acct} cfg={cfg} reload={reload} />}
         </div>
       </div>
 
