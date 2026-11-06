@@ -121,8 +121,13 @@ each account's ledger.
 On the dashboard (الإدارة ← التداول الحقيقي) the account picker appears once the registry has an account: each
 account has its own capital, limits, yes/no and kill switch. A sub-account's activation takes its own name. The API
 reaches the ledgers through `ReadWritePaths=-/opt/raqm-risk-accounts` in `api/raqm-api.service`, so install the new
-unit there (and `daemon-reload`, restart the API) before the first account. Not done yet: realbot.da3m.io and the
-rebalance check, which read the main account only.
+unit there (and `daemon-reload`, restart the API) before the first account.
+
+realbot.da3m.io shows every live bot whatever its account (each strategy writes its own status folder). To check a
+sub-account strategy's positions and stops against its own Binance account, read only, as root:
+`sudo env BINANCE_ENV=live CREDENTIALS_DIRECTORY=/etc/raqm-live/accounts/<name> /opt/raqm-live/venv/bin/python -E -s
+/opt/raqm-live/scripts/rebalance_check.py --strategy <strategy>`. The check refuses another account's key. The Monday
+timer still checks momentum_ls on the main account.
 
 ### realbot.da3m.io — the real-money bots' public page
 
