@@ -54,7 +54,9 @@ class UserLiveEnableReq(_BM2):
     leverage: Optional[int] = None
     risk_per_trade_pct: Optional[float] = None
     max_aggregate_risk_pct: Optional[float] = None
-    environment: str = "live"      # "demo": Binance Demo (play money), allowed while the server's real-money switch is off
+    environment: str = "demo"      # "demo": Binance Demo (play money); "live" (real money) only when asked for explicitly
+    capital_usdt: Optional[float] = None    # real money: the capital and margin whose risk the user saw and accepts
+    margin_usdt: Optional[float] = None
 
 class UserBotsReq(_BM2):
     """A user's desired bots (Phase 2): checked again by app/user_bots.validate here and by the root provisioner."""
@@ -103,7 +105,8 @@ async def user_live_status(user: dict = Depends(require_user)):
         return {"enabled": False}
     return {"enabled": bool(rec["enabled"]), "exchange": rec["exchange"], "leverage": rec["leverage"],
             "risk_per_trade_pct": rec["risk_per_trade_pct"], "max_aggregate_risk_pct": rec["max_aggregate_risk_pct"],
-            "consented_at": rec["consented_at"], "environment": rec.get("environment") or "live"}
+            "consented_at": rec["consented_at"], "environment": rec.get("environment") or "live",
+            "capital_usdt": rec.get("capital_usdt"), "margin_usdt": rec.get("margin_usdt")}
 
 @router.post("/api/user/live/enable")
 async def user_live_enable(req: UserLiveEnableReq, request: Request, user: dict = Depends(require_user)):
@@ -122,7 +125,8 @@ async def user_live_enable(req: UserLiveEnableReq, request: Request, user: dict 
         enable_user_live(M.USER_LIVE_ACTIVATION_PATH, user_id=user["id"], exchange=ex, confirm=req.confirm,
                           actor=str(user.get("email") or user["id"]), ip=(request.client.host if request.client else None),
                           leverage=req.leverage, risk_per_trade_pct=req.risk_per_trade_pct,
-                          max_aggregate_risk_pct=req.max_aggregate_risk_pct, environment=req.environment)
+                          max_aggregate_risk_pct=req.max_aggregate_risk_pct, environment=req.environment,
+                          capital_usdt=req.capital_usdt, margin_usdt=req.margin_usdt)
     except (PermissionError, ValueError) as e:
         raise HTTPException(400, str(e))
     if req.environment == "live":          # a Demo consent leaves the keys marked as they were
@@ -145,7 +149,24 @@ from app import user_bots
 async def user_bots_get(user: dict = Depends(require_user)):
     return {"desired": user_bots.read_desired(user["id"]), **user_bots.status(user["id"]),
             "rules": {"envs": list(user_bots.ENVS_ALLOWED), "max_strategies": user_bots.MAX_STRATEGIES,
-                      "strategies": list(user_bots.STRATEGIES), "bounds": user_bots.BOUNDS}}
+                      "strategies": list(user_bots.STRATEGIES), "bounds": user_bots.BOUNDS,
+                      # real money (docs/users-real-money-plan.md): the page shows live_risk() for the numbers typed
+                      "live": {"strategies": list(user_bots.LIVE_STRATEGIES), "leverage": user_bots.LIVE_LEVERAGE,
+                               "stop": user_bots.LIVE_STOP, "min_margin": user_bots.LIVE_MIN_MARGIN,
+                               "legs": user_bots.STRATEGY_SLOTS["momentum_ls"]}}}
+
+@router.get("/api/user/bots/risk")
+async def user_bots_risk(capital: float, margin: float, user: dict = Depends(require_user)):
+    """The risk of a real-money plan before the user accepts it — the same numbers the server will hold them to."""
+    r = user_bots.live_risk(capital, margin)
+    if r is None:
+        raise HTTPException(400, "capital and margin must be positive numbers")
+    try:
+        user_bots._validate_live("live", True, list(user_bots.LIVE_STRATEGIES), {"capital_usdt": capital, "capital_margin_override_usdt": margin})
+        r["ok"], r["why"] = True, None
+    except ValueError as e:
+        r["ok"], r["why"] = False, str(e)
+    return r
 
 @router.post("/api/user/bots")
 async def user_bots_set(req: UserBotsReq, user: dict = Depends(require_user)):

@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from app.db import init_db, async_session, Trade, BacktestRun, UserSetting, UserClose, PlanPrice, Invitation, PlanGrant
 from app.auth import require_user, require_admin, require_admin_or_cron, is_admin
 from app import live_activation
+from app import live_accounts
 from sqlalchemy import select, desc
 import ccxt, pandas as pd, numpy as np
 from datetime import datetime, timezone
@@ -806,13 +807,45 @@ class LiveCloseReq(BaseModel):
     strategy: str = Field(pattern=r"^[a-z0-9_]{1,30}$")
     symbol: str
 
+def capital_check(env: str, patch: dict, acct: str = "") -> str | None:
+    """Why a capital save may be meant for the other account, or None. On 2026-11-03 the real account's plan ($500,
+    margin $26) was saved on the Demo tab three minutes before the real one, and the Demo refused every entry for a
+    day; the same slip the other way would size real money on the Demo's capital. Two signs, each confirmable:
+    - the capital and the margin are exactly the other account's;
+    - on the real account, a capital above twice the balance the bot last read."""
+    cap, margin = patch.get("capital_usdt"), patch.get("capital_margin_override_usdt")
+    if not cap:
+        return None
+    # every other account: Demo, the main real account and each live strategy's own sub-account
+    others = [("demo", "", "الـ Demo")] if env == "live" else []
+    others += [("live", a, "الحساب الحقيقي" if not a else f"الحساب الحقيقي '{a}'") for a in [""] + sorted(_accounts_or_empty())
+               if not (env == "live" and a == acct)]
+    for o_env, o_acct, name in others:
+        try:
+            o = risk_manager.load_risk_state(_ledger(o_env, o_acct))["limits"]
+            if float(o.get("capital_usdt") or 0) == float(cap) and float(o.get("capital_margin_override_usdt") or 0) == float(margin or 0):
+                return f"نفس راس المال والمارجن المحفوظين على {name} بالظبط — متأكد إنك على الحساب الصح؟"
+        except Exception:
+            pass
+    if env == "live":
+        try:
+            eq = risk_manager.load_risk_state(_ledger("live", acct)).get("equity_last")
+            if eq and float(eq) > 0 and float(cap) > 2 * float(eq):
+                return f"راس المال {float(cap):,.0f}$ أكتر من ضعف رصيد الحساب الحقيقي ({float(eq):,.0f}$) — ده رقم الـ Demo؟"
+        except Exception:
+            pass
+    return None
+
+
 class CapitalReq(BaseModel):
     env: str = Field(default="live", pattern=r"^(live|demo)$")
+    acct: str = Field(default="", pattern=r"^([a-z][a-z0-9]{1,15})?$")   # a live strategy's own sub-account; "" = main
     capital_usdt: Optional[float] = Field(None, ge=0, le=100_000_000)     # 0 / None = no plan
     capital_reserve_pct: Optional[float] = Field(None, ge=0, le=90)
     capital_margin_pct: Optional[float] = Field(None, gt=0, le=50)
     capital_min_margin_usdt: Optional[float] = Field(None, ge=5, le=1_000_000)
     capital_margin_override_usdt: Optional[float] = Field(None, ge=0, le=10_000_000)   # 0 = back to the rule
+    confirm: bool = False      # the owner saw capital_check's warning and saves anyway
 
 LIMIT_KEYS = ("risk_per_trade_pct", "max_aggregate_risk_pct", "max_correlated_risk_pct", "max_daily_loss_pct", "max_drawdown_pct")
 
@@ -821,17 +854,58 @@ class LimitsReq(BaseModel):
     (RAQM_CAP_*_PCT in /opt/raqm-live/allow-live.env), which nothing here can change."""
     model_config = ConfigDict(extra="forbid")
     env: str = Field(default="live", pattern=r"^(live|demo)$")
+    acct: str = Field(default="", pattern=r"^([a-z][a-z0-9]{1,15})?$")   # a live strategy's own sub-account; "" = main
     risk_per_trade_pct: Optional[float] = Field(None, gt=0, le=100)
     max_aggregate_risk_pct: Optional[float] = Field(None, gt=0, le=100)
     max_correlated_risk_pct: Optional[float] = Field(None, gt=0, le=100)
     max_daily_loss_pct: Optional[float] = Field(None, gt=0, le=100)
     max_drawdown_pct: Optional[float] = Field(None, gt=0, le=100)
 
-def _ledger(env: str) -> Path:
-    return (Path(os.getenv("RAQM_RISK_DIR_DEMO", "/opt/raqm-risk-demo")) / "risk_state.json") if env == "demo" else _risk_path()
+# Live strategies on their own Binance sub-account (backend/app/live_accounts.py, docs/trend-daily-live-plan.md §2):
+# each account has its own ledger and activation record. "" is the main account (RAQM_RISK_DIR), as before.
+ACCOUNTS_REGISTRY = live_accounts.REGISTRY
+ACCOUNTS_RISK_ROOT = live_accounts.RISK_ROOT
+ACCT_RE = re.compile(r"^([a-z][a-z0-9]{1,15})?$")
+
+def _accounts_or_empty() -> dict:
+    try:
+        return live_accounts.load(ACCOUNTS_REGISTRY)
+    except live_accounts.RegistryError:
+        return {}
+
+def _accounts() -> dict:
+    try:
+        return live_accounts.load(ACCOUNTS_REGISTRY)
+    except live_accounts.RegistryError as e:
+        raise HTTPException(503, f"accounts registry: {e}")
+
+def _acct_dir(acct: str):
+    """None for the main account; the sub-account's ledger folder; 400/404 for anything else."""
+    if not acct: return None
+    if not ACCT_RE.match(acct): raise HTTPException(400, "bad account name")
+    if acct not in _accounts(): raise HTTPException(404, "unknown live account")
+    return live_accounts.paths(acct, risk_root=ACCOUNTS_RISK_ROOT)["risk"]
+
+def _live_activation_path(acct: str = "") -> Path:
+    d = _acct_dir(acct)
+    return LIVE_ACTIVATION_PATH if d is None else d / "live_activation.sqlite3"
+
+def _account_strategies(acct: str = "") -> list:
+    """The live strategies that trade on this account: its own, or for the main one every strategy no sub-account has."""
+    accs = _accounts()
+    if acct: return [s for s in LIVE_STRATEGIES if s in accs.get(acct, [])]
+    elsewhere = {s for ss in accs.values() for s in ss}
+    return [s for s in LIVE_STRATEGIES if s not in elsewhere]
+
+def _ledger(env: str, acct: str = "") -> Path:
+    if env == "demo":
+        return Path(os.getenv("RAQM_RISK_DIR_DEMO", "/opt/raqm-risk-demo")) / "risk_state.json"
+    d = _acct_dir(acct)
+    return _risk_path() if d is None else d / "risk_state.json"
 
 class LiveStrategiesReq(BaseModel):
     env: str = Field(default="live", pattern=r"^(live|demo)$")
+    acct: str = Field(default="", pattern=r"^([a-z][a-z0-9]{1,15})?$")   # a live strategy's own sub-account; "" = main
     account: str = Field(default="", max_length=120)
     strategies: List[str] = Field(max_length=len(LIVE_STRATEGIES))
 
@@ -888,18 +962,21 @@ async def live_measurement(user: dict = Depends(require_admin)):
 
 
 @app.get("/api/live/strategies")
-async def live_strategies(env: str = "live", user: dict = Depends(require_admin)):
+async def live_strategies(env: str = "live", acct: str = "", user: dict = Depends(require_admin)):
     """Which strategies may enter on the admin's account — real money (the active activation record) or Demo (the Demo
-    yes/no) — and how each bot is."""
+    yes/no) — and how each bot is. On real money, `acct` picks a strategy's own sub-account ("" = main)."""
     if env not in ("live", "demo"): raise HTTPException(400, "env must be live or demo")
     if env == "demo":
+        acct = ""
         chosen = live_activation.demo_strategies(DEMO_ACTIVATION_PATH)
         record, on = None, set(LIVE_STRATEGIES if chosen is None else chosen)
+        listed = list(LIVE_STRATEGIES)
     else:
-        record = live_activation.active_record(LIVE_ACTIVATION_PATH)
+        record = live_activation.active_record(_live_activation_path(acct))
         on = set((record or {}).get("strategies") or [])
+        listed = _account_strategies(acct)
     rows = []
-    for s in LIVE_STRATEGIES:
+    for s in listed:
         st = _live_status_of(s)
         # one status folder per strategy for both bots (raqm-demo@ and raqm-live@): only the asked account's bot counts —
         # the real-money view showed the Demo bots' positions as its own (2026-11-03)
@@ -908,8 +985,10 @@ async def live_strategies(env: str = "live", user: dict = Depends(require_admin)
                      "positions": len(st.get("positions") or []) if mine else 0,
                      "entry_block": (st.get("entry_block") or "") if mine else "",
                      "review": list((st.get("review") or {}).keys()) if mine else []})
+    kill = None
     try:
-        ledger = risk_manager.load_risk_state(_ledger(env))
+        ledger = risk_manager.load_risk_state(_ledger(env, acct))
+        kill = ledger.get("kill_switch")
         lim = ledger["limits"]
         plan = risk_manager.capital_plan(lim, ledger.get("equity_last"))
         capital = {"plan": plan, "limits_check": risk_manager.plan_vs_limits(lim, plan), "equity_last": ledger.get("equity_last"),
@@ -918,20 +997,31 @@ async def live_strategies(env: str = "live", user: dict = Depends(require_admin)
                                               "capital_margin_override_usdt") + LIMIT_KEYS}}
     except Exception as e:
         capital = {"error": str(e)}
-    return {"env": env, "enabled": live_trading_allowed() if env == "live" else True, "capital": capital,
+    accounts = []
+    if env == "live":
+        accounts = [{"name": "", "strategies": _account_strategies("")}]
+        accounts += [{"name": n, "strategies": ss} for n, ss in sorted(_accounts().items())]
+    return {"env": env, "acct": acct, "accounts": accounts, "kill_switch": kill,
+            "enabled": live_trading_allowed() if env == "live" else True, "capital": capital,
             "account": (record or {}).get("account"), "record": record, "strategies": rows}
 
 
 @app.post("/api/live/capital")
 async def live_capital(req: CapitalReq, user: dict = Depends(require_admin)):
     """The owner's capital for an account: it sets the margin per trade and the most trades open at once, every strategy
-    together (risk_manager.capital_plan). 0 = no plan. The bots and the risk gate read it before every entry."""
-    patch = {k: v for k, v in req.model_dump().items() if k != "env" and v is not None}
+    together (risk_manager.capital_plan). 0 = no plan. The bots and the risk gate read it before every entry.
+    A save that looks like the wrong account is refused with 409 until the owner confirms it (capital_check)."""
+    acct = req.acct if req.env == "live" else ""
+    patch = {k: v for k, v in req.model_dump().items() if k not in ("env", "confirm", "acct") and v is not None}
     for k in ("capital_usdt", "capital_margin_override_usdt"):
         if patch.get(k) == 0: patch[k] = None
-    limits = risk_manager.update_limits(_ledger(req.env), patch)
-    admin_control.audit(BOT_DIR, str(user.get("email") or user.get("id")), "capital_plan", "ok", {"env": req.env, **patch})
-    plan = risk_manager.capital_plan(limits, risk_manager.load_risk_state(_ledger(req.env)).get("equity_last"))
+    ledger = _ledger(req.env, acct)
+    if not req.confirm:
+        warning = capital_check(req.env, patch, acct)
+        if warning: raise HTTPException(409, warning)
+    limits = risk_manager.update_limits(ledger, patch)
+    admin_control.audit(BOT_DIR, str(user.get("email") or user.get("id")), "capital_plan", "ok", {"env": req.env, "acct": acct, **patch})
+    plan = risk_manager.capital_plan(limits, risk_manager.load_risk_state(ledger).get("equity_last"))
     return {"ok": True, "plan": plan, "limits_check": risk_manager.plan_vs_limits(limits, plan)}
 
 
@@ -940,15 +1030,17 @@ async def live_limits(req: LimitsReq, user: dict = Depends(require_admin)):
     """An account's risk limits from the dashboard (the risk tab only showed them). Per trade can't be above the
     aggregate: one trade alone would then be refused by the aggregate check anyway."""
     rate_limit(user["id"], "admin_mutation", 30, 60)
-    patch = {k: v for k, v in req.model_dump().items() if k != "env" and v is not None}
+    acct = req.acct if req.env == "live" else ""
+    patch = {k: v for k, v in req.model_dump().items() if k not in ("env", "acct") and v is not None}
     if not patch: raise HTTPException(400, "nothing to change")
-    current = risk_manager.load_risk_state(_ledger(req.env))["limits"]
+    ledger = _ledger(req.env, acct)
+    current = risk_manager.load_risk_state(ledger)["limits"]
     merged = {**current, **patch}
     if float(merged["risk_per_trade_pct"]) > float(merged["max_aggregate_risk_pct"]):
         raise HTTPException(400, "risk per trade is above the aggregate limit")
-    limits = risk_manager.update_limits(_ledger(req.env), patch)
-    admin_control.audit(BOT_DIR, str(user.get("email") or user.get("id")), "risk_limits", "ok", {"env": req.env, **patch})
-    return {"ok": True, "env": req.env, "limits": {k: limits.get(k) for k in LIMIT_KEYS}}
+    limits = risk_manager.update_limits(ledger, patch)
+    admin_control.audit(BOT_DIR, str(user.get("email") or user.get("id")), "risk_limits", "ok", {"env": req.env, "acct": acct, **patch})
+    return {"ok": True, "env": req.env, "acct": acct, "limits": {k: limits.get(k) for k in LIMIT_KEYS}}
 
 
 @app.post("/api/live/strategies")
@@ -963,13 +1055,20 @@ async def live_strategies_set(req: LiveStrategiesReq, user: dict = Depends(requi
         return {"ok": True, "env": "demo", "strategies": sorted(set(req.strategies))}
     if not req.account.strip():
         raise HTTPException(422, "the live account name is required")
+    act_path = _live_activation_path(req.acct)
+    # a sub-account's bot reads BINANCE_LIVE_ACCOUNT=<its name> (live_account.py); another name would never match it
+    if req.acct and req.account.strip() != req.acct:
+        raise HTTPException(422, f"on the '{req.acct}' account the activation's account name is '{req.acct}'")
+    mine = set(_account_strategies(req.acct))
+    if not set(req.strategies) <= mine:
+        raise HTTPException(422, f"not on this account: {', '.join(sorted(set(req.strategies) - mine))}")
     if not req.strategies:
-        live_activation.revoke(LIVE_ACTIVATION_PATH, reason=f"all live strategies turned off by {actor}")
-        admin_control.audit(BOT_DIR, actor, "live_strategies", "ok", {"strategies": []})
+        live_activation.revoke(act_path, reason=f"all live strategies turned off by {actor}")
+        admin_control.audit(BOT_DIR, actor, "live_strategies", "ok", {"acct": req.acct, "strategies": []})
         return {"ok": True, "strategies": []}
     chosen = sorted(set(req.strategies))
     try:
-        aid = live_activation.activate(LIVE_ACTIVATION_PATH, environment="live", account=req.account, approved_by=actor,
+        aid = live_activation.activate(act_path, environment="live", account=req.account, approved_by=actor,
                                        strategies=chosen,
                                        readiness_evidence=_safe_json_file(BOT_DIR / "readiness_evidence.json") or {},
                                        expected_reviewed_commit_sha=_trusted_readiness_commit())
@@ -977,7 +1076,7 @@ async def live_strategies_set(req: LiveStrategiesReq, user: dict = Depends(requi
         raise HTTPException(403, str(exc))
     except ValueError as exc:
         raise HTTPException(422, str(exc))
-    admin_control.audit(BOT_DIR, actor, "live_strategies", "ok", {"account": req.account, "strategies": chosen})
+    admin_control.audit(BOT_DIR, actor, "live_strategies", "ok", {"acct": req.acct, "account": req.account, "strategies": chosen})
     return {"ok": True, "activation_id": aid, "strategies": chosen}
 
 
@@ -1082,6 +1181,7 @@ class RiskLimitsReq(AdminModel):
 
 class KillSwitchReq(AdminModel):
     action: str = Field(pattern=r"^(trip|reset)$")
+    acct: str = Field(default="", pattern=r"^([a-z][a-z0-9]{1,15})?$")   # a live strategy's own sub-account; "" = main
     reason: Optional[str] = Field(None, min_length=3, max_length=240)
     confirm: bool = False
 
@@ -1176,8 +1276,8 @@ async def admin_paper_portfolio(user: dict = Depends(require_admin)):
                          "aggregate":live_bots_feed.aggregate_summary(live_feed),"strategies":live_strategies}}
 
 @app.get("/api/admin/risk")
-async def admin_risk(user: dict = Depends(require_admin)):
-    st=risk_manager.load_risk_state(_risk_path()); return {"available":True,"state":st}
+async def admin_risk(acct: str = "", user: dict = Depends(require_admin)):
+    st=risk_manager.load_risk_state(_ledger("live", acct)); return {"available":True,"acct":acct,"state":st}
 
 @app.patch("/api/admin/risk/limits")
 async def admin_risk_limits(req: RiskLimitsReq, user: dict = Depends(require_admin)):
@@ -1188,11 +1288,11 @@ async def admin_risk_limits(req: RiskLimitsReq, user: dict = Depends(require_adm
 async def admin_kill_switch(req: KillSwitchReq, user: dict = Depends(require_admin)):
     rate_limit(user["id"], "admin_mutation", 30, 60)
     if not req.confirm: raise HTTPException(400,"confirmation required")
-    actor=await _admin_actor(user)
-    if req.action=="trip": risk_manager.trip_kill_switch(_risk_path(),req.reason or "manual operator trip",by=actor)
-    else: risk_manager.reset_kill_switch(_risk_path(),operator=actor)
-    admin_control.audit_kill(BOT_DIR,actor,"kill_switch_"+req.action,"ok",{"reason":req.reason})
-    return {"ok":True,"state":risk_manager.load_risk_state(_risk_path())["kill_switch"]}
+    actor=await _admin_actor(user); ledger=_ledger("live", req.acct)
+    if req.action=="trip": risk_manager.trip_kill_switch(ledger,req.reason or "manual operator trip",by=actor)
+    else: risk_manager.reset_kill_switch(ledger,operator=actor)
+    admin_control.audit_kill(BOT_DIR,actor,"kill_switch_"+req.action,"ok",{"reason":req.reason,"acct":req.acct})
+    return {"ok":True,"acct":req.acct,"state":risk_manager.load_risk_state(ledger)["kill_switch"]}
 
 @app.post("/api/admin/controls/entry-pause")
 async def admin_entry_pause(req: PauseReq, user: dict = Depends(require_admin)):

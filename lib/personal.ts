@@ -76,3 +76,12 @@ export function personalPortfolio(s: Strategy, raw: any, setup: Setup, startedAt
   open = open.filter(t => !mine.has(tradeKey(t)))
   return { open, closed, scale, realized: closed.reduce((a, t) => a + t.pnl, 0), unrealized: open.reduce((a, t) => a + t.pnl, 0) }
 }
+
+/** A tested size's label (lib/bot-stats.json keeps them in Arabic) in English. */
+export function profileLabelEn(label: string){
+  return label
+    .replace(/^أعلى (\d+) عملات \((\d+) (?:أزواج|زوج)\)$/, "Top $1 coins ($2 pairs)")
+    .replace(/^أعلى (\d+) عملات$/, "Top $1 coins")
+    .replace(/^أقوى (\d+) \+ أضعف (\d+)$/, "Strongest $1 + weakest $2")
+    .replace(/^لحد (\d+) صفقات$/, "Up to $1 trades")
+}

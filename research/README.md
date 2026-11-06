@@ -21,6 +21,16 @@ python research/universe_data.py && python research/funding_store.py
 
 Without a copy the same two commands build everything from scratch (about 10 minutes of candles, longer for funding).
 
+**Bybit** (a second exchange, November 2026): `bybit_daily.pkl`, `bybit_funding.pkl`, `bybit_meta.pkl` — every crypto
+USDT perpetual Bybit lists or has closed (835, 318 delisted; stocks, ETFs, commodities and forex left out), daily
+candles and real funding since 2020, in the same folder on the server. Copy, or refresh (resumable, only what is
+missing; ~40 minutes from scratch on the server at `RAQM_BYBIT_PAUSE=0.04`):
+
+```bash
+scp root@bot.da3m.io:/opt/raqm-data/research/bybit_*.pkl research/.cache/
+python research/bybit_data.py
+```
+
 ## Method
 
 - **Data:** last 2,000 closed candles from Bybit for BTC, ETH, SOL and XRP on 1h and 4h — 8 data sets
@@ -317,6 +327,68 @@ exact-time funding) and `research/hourly_study.py`. Daily membership from the pr
 | funding-time effect | 0 / 9 | −0.95 |
 
 None improved the three core bots. On hourly candles the extra trades' costs eat any small edge.
+
+### 19. Filters on the new-listing short — not adopted (November 2026)
+
+`research/listing_improve_study.py`: the rule that runs (30 days after listing, hold 90, stop 40%, at most 10 open,
+577 listings since 2021) with four filters fixed before any result, every combination (36): BTC regime (none / below
+its 200-day average / 30-day return below 0), the coin's move since listing (none / below its listing open / not up
+50%+), skip on negative 7-day funding, and a cover at −60%. Chosen on Sharpe before 2024, 60 trades at least.
+
+| | trades | PnL | max DD | Sharpe < 2024 | Sharpe 2024 → | PnL 2024 → |
+|---|---|---|---|---|---|---|
+| **the rule that runs** | 251 | **+775** | 358 | 0.64 | **1.30** | **+529** |
+| in-sample pick: skip coins up 50%+ since listing | 239 | +608 | 353 | 0.71 | 0.88 | +344 |
+| BTC 30-day return below 0 | 152 | +498 | 238 | 0.56 | 0.92 | +344 |
+
+- **0 of 36 variants beat the rule out-of-sample.** The rule stays as it is.
+- The losses are the stops: 110 trades hit the 40% stop (−1,716); the 139 held 90 days made +2,451.
+- Shorting new coins while BTC is below its 200-day average lost (92 trades, −51): in a falling market the new
+  coins have often already fallen, and they bounce. Every BTC-below-200d variant lost before 2024.
+- The BTC-30-day filter cut the drawdown (358 → 238) but also half the profit; it was not the in-sample pick.
+
+### 20. The new-listing short on Bybit — weaker, and more fragile than Binance alone showed (November 2026)
+
+`research/bybit_listing_study.py`: the exact rule (30 days after the first candle, hold 90, stop 40%, at most 10 open,
+fees, real funding) on Bybit's 803 listings since 2021, 294 of them delisted. Nothing tuned on Bybit.
+
+| | trades | PnL | max DD | Sharpe < 2024 | Sharpe 2024 → |
+|---|---|---|---|---|---|
+| Binance, every listing (the rule that runs) | 251 | +775 | 358 | 0.64 | 1.30 |
+| Bybit, every listing | 275 | +301 | 390 | −0.26 | 0.80 |
+| Bybit, coins also on Binance | 263 | −96 | 429 | −0.17 | −0.07 |
+| Bybit, coins never on Binance (≥ $1M a day) | 114 | +606 | 161 | 0.57 | 1.16 |
+
+- **The same coins, two exchanges:** the coins on both made +630 with Binance's listing dates and −96 with Bybit's.
+  Not a matter of who listed first (Bybit first or the same week: −12). With at most 10 open, which listings get a
+  slot decides much of the result — the edge is real on average but noisier than one exchange's history shows.
+- On Binance, its 39 listings that Bybit never had lost (−194); on Bybit, the coins Binance never had made +606
+  (mostly 2025–2026, 114 trades). Small samples, likely luck of the period.
+- **Not adopted:** no Bybit bot. For the listing short on Binance it means caution before real money — its
+  backtest result depends on which coins fill the 10 slots, so the paper and Demo sample matters more.
+
+### 21. The ratio trend: tested, netted per coin, and as live runs it (November 2026)
+
+`research/ratio_netting_study.py` (docs/ratio-trend-live-plan.md §1): the bot's rule (every pair among the weekly top
+7 by volume, ratio vs its 50-day mean) at the real account's $26 margin ×2 per unit, 2020-01 → 2026-10, fees and
+real funding, a daily model (each unit's notional reset daily).
+
+| | PnL | worst DD | Sharpe < 2024 | Sharpe 2024 → | margin used | 2022 | 2026 |
+|---|---|---|---|---|---|---|---|
+| PAIRS: the tested strategy, 21 pairs, no stop | +1,949 | 1,406 (54 units) | 0.70 | 0.19 | ~$588 | −439 | +29 |
+| NETTED: one position per coin (+6 … −6 units) | +2,011 | 1,400 | 0.71 | 0.20 | ~$588 | −429 | +37 |
+| NETTED + 40% stop per coin | **+2,455** | **1,273 (49 units)** | 0.59 | **0.64** | ~$582 | −387 | +772 |
+| LIVE NOW: coin-disjoint pairs only | +219 | 246 | 0.51 | 0.10 | ~$149 | −101 | +8 |
+
+- **Netting works:** the same PnL as the 21 pairs, with 20% less in fees.
+- **The stop matters:** in 2026 pump coins entered the top 7 (SIREN +269% in one day on 2026-04-04 while the
+  basket was short 6 units: −$839 that day without a stop). With the stop, 2026 is +772. Without the stop, 2026 is
+  flat, though one coin (LAB) alone made +856 in it: the year rests on a few coins either way.
+- **The drawdown is the problem:** about 49 units ($1,273 at $26), lasting from 2021-11 to 2023-08. That's roughly 3×
+  momentum's and trend_daily's, for a Sharpe after 2024 (0.64) below both.
+- **What runs live now** (coin-disjoint pairs) is a quarter of the size, and its edge after 2024 is near zero.
+- Weaker than docs/demo-baseline.md (PF 1.37, DD 39.7 margins), which used fixed quantities from entry and a
+  different start date. The ranking is the same.
 
 ## The site now shows only the four paper bots
 

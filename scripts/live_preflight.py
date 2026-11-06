@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from backend.app import risk_manager as riskmgr
 from backend.app import testnet_readiness
+from backend.app import live_accounts
 
 PATHS = {
     "live": Path("/opt/raqm-live"),
@@ -22,6 +23,8 @@ PATHS = {
     "evidence": Path("/opt/raqm-api/app/readiness_evidence.json"),   # the API's BOT_DIR
     "ledger": Path("/opt/raqm-risk/risk_state.json"),
     "unit": Path("/etc/systemd/system/raqm-live@.service"),
+    "units": Path("/etc/systemd/system"),
+    "registry": live_accounts.REGISTRY, "accounts_dir": live_accounts.ACCOUNTS_DIR, "risk_root": live_accounts.RISK_ROOT,
 }
 # legs a strategy opens at once and its protective stop (bot.py: MOM, the single-leg adapters' 40% plan stop)
 BASKET = {"momentum_ls": 10, "ratio_trend": 2}
@@ -97,19 +100,50 @@ def trading_code_diff(src, reviewed, live, deployed):
         return f"{type(e).__name__}: {e}"
 
 
-def check_files(paths, strategy):
+def account(paths, strategy):
+    """Where `strategy` trades (backend/app/live_accounts.py): the main account's files, or its own account's. Raises
+    live_accounts.RegistryError on a registry that can't be trusted (run() turns it into a failed check)."""
+    accounts = live_accounts.load(paths.get("registry", live_accounts.REGISTRY))
+    name = live_accounts.account_of(strategy, accounts)
+    if name is None:
+        return {"name": None, "keys": paths["live"] / ".env.real", "keys_owner": "raqmlive", "allow": paths["live"] / "allow-live.env",
+                "ledger": paths["ledger"]}
+    p = live_accounts.paths(name, paths.get("accounts_dir", live_accounts.ACCOUNTS_DIR), paths.get("risk_root", live_accounts.RISK_ROOT))
+    return {"name": name, "keys": p["keys"], "keys_owner": "root", "allow": p["allow"], "ledger": p["risk"] / "risk_state.json"}
+
+
+def check_account(paths, strategy, acct):
+    """A strategy on its own account: its unit's drop-in is the one live_account.py writes, and its key is not the main
+    account's (two strategies on one Binance account block each other's coins — the reason it has its own)."""
+    if acct["name"] is None:
+        return [("account", True, "main (/opt/raqm-live/.env.real)")]
+    rows = [("account", True, f"'{acct['name']}' ({acct['keys'].parent})")]
+    d = Path(paths.get("units", "/etc/systemd/system")) / f"raqm-live@{strategy}.service.d" / "account.conf"
+    want = live_accounts.dropin_text(acct["name"], strategy, paths.get("accounts_dir", live_accounts.ACCOUNTS_DIR),
+                                     paths.get("risk_root", live_accounts.RISK_ROOT))
+    have = d.read_text(encoding="utf-8") if d.is_file() else None
+    rows.append((f"raqm-live@{strategy} drop-in for '{acct['name']}'", have == want,
+                 "as live_account.py writes it" if have == want else f"{d} {'missing' if have is None else 'changed'}: run live_account.py add {acct['name']} {strategy}"))
+    mine, main = parse_env(acct["keys"]).get("BINANCE_API_KEY"), parse_env(paths["live"] / ".env.real").get("BINANCE_API_KEY")
+    rows.append(("its key is not the main account's", bool(mine) and mine != main,
+                 "different keys (not shown)" if mine and mine != main else "the same key as .env.real: give this bot its own sub-account" if mine else "no key yet"))
+    return rows
+
+
+def check_files(paths, strategy, acct=None):
+    acct = acct or account(paths, strategy)
     live = paths["live"]; rows = []
     sha = (live / "DEPLOYED_COMMIT").read_text(encoding="utf-8").strip() if (live / "DEPLOYED_COMMIT").is_file() else ""
     rows.append(("deployed commit", bool(SHA40.match(sha)), sha or "no DEPLOYED_COMMIT: run setup-live.sh <sha>"))
 
-    ok, why = file_ok(live / ".env.real", "raqmlive")
-    keys = parse_env(live / ".env.real")
+    ok, why = file_ok(acct["keys"], acct["keys_owner"])
+    keys = parse_env(acct["keys"])
     if ok and not (keys.get("BINANCE_API_KEY") and keys.get("BINANCE_SECRET")):
-        ok, why = False, ".env.real has no BINANCE_API_KEY / BINANCE_SECRET line"
+        ok, why = False, f"{acct['keys'].name} has no BINANCE_API_KEY / BINANCE_SECRET line"
     rows.append(("real account keys file", ok, why if not ok else "keys present (not shown)"))
 
-    ok, why = file_ok(live / "allow-live.env", "root")
-    allow = parse_env(live / "allow-live.env")
+    ok, why = file_ok(acct["allow"], "root")
+    allow = parse_env(acct["allow"])
     rows.append(("allow-live.env (root, 600)", ok, why))
     rows.append(("ALLOW_LIVE_TRADING=true for the bot", allow.get("ALLOW_LIVE_TRADING", "").lower() == "true", "in allow-live.env"))
     rows.append(("BINANCE_LIVE_ACCOUNT", bool(allow.get("BINANCE_LIVE_ACCOUNT")), allow.get("BINANCE_LIVE_ACCOUNT") or "set a name in allow-live.env; the dashboard's activation uses the same"))
@@ -157,13 +191,16 @@ def check_files(paths, strategy):
     return rows, caps
 
 
-def check_ledger(paths):
+def check_ledger(paths, ledger=None):
+    ledger = ledger or paths["ledger"]
+    if not live_accounts.ledger_exists(Path(ledger).parent):   # never made here, as root: the bot or the API makes it
+        return [("real-money risk ledger", False, f"{Path(ledger).parent} has no ledger yet: set the account's capital and limits on the dashboard")], None
     try:
-        st = riskmgr.load_risk_state(paths["ledger"])
+        st = riskmgr.load_risk_state(ledger)
     except Exception as e:
-        return [("real-money risk ledger", False, f"{paths['ledger']}: {e}")], None
+        return [("real-money risk ledger", False, f"{ledger}: {e}")], None
     ks = st.get("kill_switch") or {}
-    return [("real-money risk ledger", True, str(paths["ledger"])),
+    return [("real-money risk ledger", True, str(ledger)),
             ("kill switch clear", not ks.get("tripped"), ks.get("reason") or "clear")], st
 
 
@@ -189,7 +226,7 @@ def check_binance(keys, strategy, caps, ledger_state, args_line, clients=None):
     """The real account, on read-only endpoints. `clients` = (futures, spot) for tests; ccxt otherwise."""
     rows = []
     if not (keys.get("BINANCE_API_KEY") and keys.get("BINANCE_SECRET")):
-        return [("Binance real account", False, "skipped: no keys in .env.real")]
+        return [("Binance real account", False, "skipped: no keys in the account's keys file")]
     if clients is None:
         import ccxt
         conf = {"apiKey": keys["BINANCE_API_KEY"], "secret": keys["BINANCE_SECRET"], "enableRateLimit": True}
@@ -241,11 +278,17 @@ def _arg(line, name, default):
 
 
 def run(paths, strategy, clients=None):
-    rows, caps = check_files(paths, strategy)
-    ledger_rows, ledger_state = check_ledger(paths)
+    try:
+        acct = account(paths, strategy)
+    except live_accounts.RegistryError as e:
+        return [("accounts registry", False, f"{e} — fix it with deploy/vps/tools/live_account.py")]
+    rows = check_account(paths, strategy, acct)
+    file_rows, caps = check_files(paths, strategy, acct)
+    rows += file_rows
+    ledger_rows, ledger_state = check_ledger(paths, acct["ledger"])
     rows += ledger_rows
     args_line = parse_env(paths["live"] / "strategies" / f"{strategy}.env").get("RAQM_ARGS", "--leverage 2 --amount 100")
-    rows += check_binance(parse_env(paths["live"] / ".env.real"), strategy, caps, ledger_state, args_line, clients)
+    rows += check_binance(parse_env(acct["keys"]), strategy, caps, ledger_state, args_line, clients)
     return rows
 
 

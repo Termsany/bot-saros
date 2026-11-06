@@ -83,15 +83,16 @@ export function AccountMenu({ email, tier, isAdmin, compact = false }: { email: 
 }
 
 /** The landing header's end: "دخول" + "افتح المنصة" for visitors; "لوحة التحكم" + the account menu once signed in. */
-export function LandingNavAuth(){
+export function LandingNavAuth({ labels }: { labels?: { signIn: string; start: string; dashboard: string } } = {}){
   const acc = useAccount()
+  const l = labels || { signIn: "دخول", start: "افتح المنصة", dashboard: "لوحة التحكم" }
   if (acc.state === "loading") return <span className="h-9 w-[132px]" aria-hidden />
   if (acc.state === "out") return <>
-    <a href="/auth" className="hidden px-3 text-sm text-muted hover:text-ink sm:block">دخول</a>
-    <a href="/dashboard" className="rounded-xl bg-corona px-4 py-2 text-sm font-bold text-void transition hover:bg-corona-soft">افتح المنصة</a>
+    <a href="/auth" className="hidden whitespace-nowrap px-3 text-sm text-muted hover:text-ink sm:block">{l.signIn}</a>
+    <a href="/dashboard" className="whitespace-nowrap rounded-xl bg-corona px-3 py-2 text-[13px] font-bold text-on-corona transition hover:bg-corona-soft sm:px-4 sm:text-sm">{l.start}</a>
   </>
   return <>
-    <a href="/dashboard" className="hidden rounded-xl bg-corona px-4 py-2 text-sm font-bold text-void transition hover:bg-corona-soft sm:block">لوحة التحكم</a>
+    <a href="/dashboard" className="hidden rounded-xl bg-corona px-4 py-2 text-sm font-bold text-on-corona transition hover:bg-corona-soft sm:block">{l.dashboard}</a>
     <span className="w-1.5" />
     <AccountMenu email={acc.email} tier={acc.tier} isAdmin={acc.isAdmin} />
   </>

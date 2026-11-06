@@ -47,7 +47,7 @@ install -d -o root -g root -m 755 "$L/backend" "$L/backend/app"
 # every backend module bot.py imports (stdlib only): order placement, multi-leg engine, execution checks, risk ledger, activation
 # (+ user_bots: the users' rules the provisioner shares with the API; testnet_readiness: the evidence check the
 # real-money preflight runs, the same one the API's activation applies)
-for m in __init__ oco multi_leg_execution execution_safety risk_manager live_activation user_bots testnet_readiness; do
+for m in __init__ oco multi_leg_execution execution_safety risk_manager live_activation user_bots testnet_readiness live_accounts; do
     install -m 644 -o root -g root "$T/backend/app/$m.py" "$L/backend/app/$m.py"
 done
 # Phase 1 harness (scripts/demo_e2e.py): runs as raqmlive from this root-owned copy, refuses anything but Demo
@@ -65,6 +65,7 @@ install -m 644 -o root -g root "$T/scripts/restore_check.py" "$L/scripts/restore
 install -d -o root -g root -m 755 /usr/local/lib/raqm
 install -m 644 -o root -g root "$T/deploy/vps/tools/set_demo_keys.sh" /usr/local/lib/raqm/set_demo_keys.sh
 install -m 644 -o root -g root "$T/deploy/vps/tools/set_reviewers.py" /usr/local/lib/raqm/set_reviewers.py
+install -m 644 -o root -g root "$T/deploy/vps/tools/live_account.py" /usr/local/lib/raqm/live_account.py   # a live strategy on its own sub-account
 # what a real rebalance cost (read only), run after the Monday check: kept here, not in $L, so it can be updated
 # without touching the real bot's folder (whose code the readiness evidence is bound to)
 install -m 644 -o root -g root "$T/scripts/rebalance_costs.py" /usr/local/lib/raqm/rebalance_costs.py
