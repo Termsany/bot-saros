@@ -28,7 +28,7 @@ from typing import Any
 
 import httpx
 
-DEFAULT_BASE_URL = "https://bot.da3m.io"
+DEFAULT_BASE_URL = "https://demo.da3m.io"   # the paper bots' page (bot.da3m.io until 2026-11-06)
 DEFAULT_TIMEOUT_SECONDS = 5.0
 DEFAULT_STALE_SECONDS = 300.0  # 5 minutes with no update => considered stale
 

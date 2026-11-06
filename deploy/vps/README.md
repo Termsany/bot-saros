@@ -1,4 +1,4 @@
-# Paper bot on a VPS (bot.da3m.io)
+# Paper bot on a VPS (demo.da3m.io, bot.da3m.io until 2026-11-06)
 
 The daily trend bot runs on its own server (Render's free plan sleeps and loses its files), in paper mode:
 `bot.py --paper --strategy trend_daily --leverage 2 --universe 10` — the top 10 crypto USDT perpetuals on Bybit by
@@ -9,8 +9,8 @@ The daily trend bot runs on its own server (Render's free plan sleeps and loses 
 | code + venv + state.json + trades.log | `/opt/raqm-bot` (user `raqm`) |
 | Telegram token / chat id | `/opt/raqm-bot/.env` (mode 600, never committed) |
 | service | `raqm-bot.service` → `/etc/systemd/system/` |
-| public page | `page/index.html` + `status.json` (written by the bot) → `/var/www/bot.da3m.io` |
-| nginx site | `nginx-bot.da3m.io.conf` → `/etc/nginx/sites-available/`, HTTPS by certbot |
+| public page | `page/index.html` + `status.json` (written by the bot) → `/var/www/bot.da3m.io` (the folder keeps its old name: the bots' units write there) |
+| nginx site | `nginx-demo.da3m.io.conf` → `/etc/nginx/sites-available/demo.da3m.io`, HTTPS by certbot. `nginx-bot.da3m.io.conf`: the old name, answering 410 until its DNS record is gone |
 
 Update the bot after a change:
 

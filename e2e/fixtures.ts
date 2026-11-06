@@ -67,7 +67,7 @@ async function offline(page: Page, api?: { handler: ApiHandler, calls: ApiCall[]
       return answer === undefined ? route.fulfill({ status: 404, headers: CORS, contentType: "application/json", body: "{}" })
         : route.fulfill({ status: 200, headers: CORS, contentType: "application/json", body: JSON.stringify(answer) })
     }
-    if (url.hostname === "bot.da3m.io") return route.fulfill(json(PAPER(url.pathname.replace(/^\/|\.json$/g, ""))))
+    if (url.hostname === "demo.da3m.io") return route.fulfill(json(PAPER(url.pathname.replace(/^\/|\.json$/g, ""))))
     if (url.hostname === "realbot.test") {
       if (url.pathname === "/live.json") return route.fulfill(json(REAL()))
       return route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: REALBOT_HTML })
