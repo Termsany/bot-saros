@@ -73,11 +73,11 @@ class DropinTests(unittest.TestCase):
         self.assertNotIn("/opt/raqm-live/.env.real", lists["EnvironmentFile"])
         self.assertNotIn("/opt/raqm-live/allow-live.env", lists["EnvironmentFile"])
         self.assertIn("/etc/raqm-live/accounts/trend/allow-live.env", lists["EnvironmentFile"])
-        self.assertEqual(env["RAQM_RISK_DIR"], "/opt/raqm-risk-trend")
+        self.assertEqual(env["RAQM_RISK_DIR"], "/opt/raqm-risk-accounts/trend")
         self.assertEqual(lists["LoadCredential"], ["binance:/etc/raqm-live/accounts/trend/binance"])   # keys only from here
         self.assertTrue({"BINANCE_API_KEY", "BINANCE_SECRET"} <= set(lists["UnsetEnvironment"]))
         self.assertNotIn("/opt/raqm-risk", lists["ReadWritePaths"])
-        self.assertIn("/opt/raqm-risk-trend", lists["ReadWritePaths"])
+        self.assertIn("/opt/raqm-risk-accounts/trend", lists["ReadWritePaths"])
         self.assertTrue({"-/opt/raqm-live/.env.real", "-/opt/raqm-live/allow-live.env", "-/opt/raqm-risk"} <= set(lists["InaccessiblePaths"]))
 
     def test_the_strategys_own_settings_and_telegram_are_kept(self):
@@ -119,7 +119,7 @@ class ToolTests(unittest.TestCase):
         self.assertEqual(la.load(self.h.registry), {"trend": ["trend_daily"]})
         self.assertEqual(self.dropin().read_text(encoding="utf-8"),
                          la.dropin_text("trend", "trend_daily", self.h.accounts_dir, self.h.risk_root))
-        self.assertTrue((self.h.accounts_dir / "trend").is_dir() and (self.h.risk_root / "raqm-risk-trend").is_dir())
+        self.assertTrue((self.h.accounts_dir / "trend").is_dir() and (self.h.risk_root / "trend").is_dir())
         self.assertFalse((self.h.accounts_dir / "trend" / "binance").exists())          # keys are the owner's to write
         self.assertEqual(self.h.reloads, 1)
         tool.main(["add", "trend", "trend_daily"], host=self.h)                          # again: nothing changes
@@ -140,7 +140,7 @@ class ToolTests(unittest.TestCase):
 
     def test_remove_puts_it_back_on_the_main_account_only_when_flat(self):
         tool.main(["add", "trend", "trend_daily"], host=self.h)
-        self.h.held[(self.h.risk_root / "raqm-risk-trend", "trend_daily")] = 1
+        self.h.held[(self.h.risk_root / "trend", "trend_daily")] = 1
         with self.assertRaises(SystemExit): tool.main(["remove", "trend", "trend_daily"], host=self.h)
         self.assertTrue(self.dropin().exists())
         self.h.held.clear()
@@ -158,7 +158,7 @@ class PreflightAccountTests(unittest.TestCase):
         (self.paths["live"] / ".env.real").write_text("BINANCE_API_KEY=mainkey\nBINANCE_SECRET=s\n", encoding="utf-8")
         self.paths["registry"].write_text(la.dump({"trend": ["trend_daily"]}), encoding="utf-8")
         self.acct = self.paths["accounts_dir"] / "trend"; self.acct.mkdir(parents=True)
-        (self.paths["risk_root"] / "raqm-risk-trend").mkdir(parents=True)
+        (self.paths["risk_root"] / "trend").mkdir(parents=True)
         d = self.paths["units"] / "raqm-live@trend_daily.service.d"; d.mkdir(parents=True)
         (d / "account.conf").write_text(la.dropin_text("trend", "trend_daily", self.paths["accounts_dir"], self.paths["risk_root"]), encoding="utf-8")
         owners = {".env.real": "raqmlive", "binance": "root", "allow-live.env": "root"}
@@ -185,7 +185,7 @@ class PreflightAccountTests(unittest.TestCase):
         self.assertTrue(out["raqm-live@trend_daily drop-in for 'trend'"][0])
         self.assertTrue(out["its key is not the main account's"][0])
         self.assertTrue(out["real account keys file"][0])
-        self.assertFalse(out["real-money risk ledger"][0]); self.assertIn("raqm-risk-trend", out["real-money risk ledger"][1])
+        self.assertFalse(out["real-money risk ledger"][0]); self.assertIn("trend", out["real-money risk ledger"][1])
 
     def test_the_main_accounts_key_or_a_changed_drop_in_fails(self):
         out, _ = self.rows(key="mainkey")
@@ -200,7 +200,7 @@ class PreflightAccountTests(unittest.TestCase):
         self.assertEqual([(n, ok) for n, ok, _ in rows], [("accounts registry", False)])
 
     def test_a_missing_ledger_is_reported_never_created(self):
-        led = self.paths["risk_root"] / "raqm-risk-trend"
+        led = self.paths["risk_root"] / "trend"
         out, _ = self.rows()
         self.assertFalse(out["real-money risk ledger"][0])
         self.assertEqual(list(led.iterdir()), [])
@@ -228,7 +228,7 @@ class WatchdogAndBackupTests(unittest.TestCase):
         self.td = tempfile.TemporaryDirectory(ignore_cleanup_errors=True); d = Path(self.td.name)
         self.ipc, self.root = d / "ipc", d / "opt"
         self.ledgers = {"demo": d / "risk-demo", "live": d / "risk"}
-        for p in (self.ledgers["live"], self.root / "raqm-risk-trend"):
+        for p in (self.ledgers["live"], self.root / "trend"):
             rm.save_risk_state(p / "risk_state.json", rm._default_state())
         for s in ("momentum_ls", "trend_daily"):
             (self.ipc / s).mkdir(parents=True)
@@ -243,7 +243,7 @@ class WatchdogAndBackupTests(unittest.TestCase):
 
     def test_each_account_has_its_own_kill_switch_alert(self):
         self.assertEqual(self.seen({"trend": ["trend_daily"]}), {})
-        rm.trip_kill_switch(self.root / "raqm-risk-trend" / "risk_state.json", "drawdown 50%")
+        rm.trip_kill_switch(self.root / "trend" / "risk_state.json", "drawdown 50%")
         out = self.seen({"trend": ["trend_daily"]})
         self.assertIn("kill:live:trend", out); self.assertNotIn("kill:live", out)
         self.assertIn("(trend)", out["kill:live:trend"][0])
@@ -251,11 +251,11 @@ class WatchdogAndBackupTests(unittest.TestCase):
     def test_an_unreadable_account_ledger_is_its_own_problem(self):
         out = self.seen({"other": ["trend_daily"]})            # registered, but its ledger doesn't exist yet
         self.assertIn("ledger:live:other", out)
-        self.assertFalse((self.root / "raqm-risk-other").exists())  # and the watchdog didn't make one
+        self.assertFalse((self.root / "other").exists())  # and the watchdog didn't make one
 
     def test_the_backup_takes_every_accounts_ledger(self):
         src = backup.all_sources(accounts={"trend": ["trend_daily"]}, risk_root=self.root)
-        self.assertEqual(src["risk-live-trend"], self.root / "raqm-risk-trend")
+        self.assertEqual(src["risk-live-trend"], self.root / "trend")
         self.assertEqual(src["risk-live"], Path("/opt/raqm-risk"))
         self.assertEqual(set(backup.all_sources(accounts={})), set(backup.SOURCES))
 

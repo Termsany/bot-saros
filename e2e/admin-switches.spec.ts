@@ -52,7 +52,7 @@ test("turning the real bot off says which account and what stops; cancel sends n
   expect(saves(a.calls)).toEqual([])                                        // cancelled: nothing sent
   page.once("dialog", d => d.accept())
   await page.getByRole("button", { name: "احفظ التغييرات" }).click()
-  await expect.poll(() => saves(a.calls)).toEqual([{ env: "live", account: "main", strategies: [] }])
+  await expect.poll(() => saves(a.calls)).toEqual([{ env: "live", account: "main", strategies: [], acct: "" }])   // "" = the main account
   await expect(page.getByText("✅ اتحفظ")).toBeVisible()
 })
 
