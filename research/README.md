@@ -407,6 +407,30 @@ real funding, a daily model (each unit's notional reset daily).
   to pick anything, the full week is best (1.15 against 1.00). The drawdown gain rests mostly on one bad year (2022),
   so it isn't evidence enough to change a live rule during its first measured weeks.
 
+### 23. momentum_ls: every open day × every hold — Wednesday stands out, not adopted yet (November 2026)
+
+`research/momentum_day_grid_study.py`: the live rule on all 49 combinations (open Monday … Sunday, hold 1–7 days, flat
+until the next open), $26 ×2, fees and real funding. To keep a choice out of luck, a variant is picked on before 2024 only
+and judged on 2024 → 2026-10.
+
+| | net | worst DD | PF (2024 →) | Sharpe < 2024 | Sharpe 2024 → | 2022 | 2024 |
+|---|---|---|---|---|---|---|---|
+| Mon, 7 days (runs) | +$1,943 | $476 | 1.15 (1.20) | 0.60 | 1.15 | −259 | −37 |
+| **Wed, 3 days** (best before 2024) | +$1,932 | **$160** | 1.21 (1.23) | 1.12 | 1.10 | +195 | +237 |
+| Wed, 6 days | +$2,527 | $323 | 1.20 (1.27) | 0.83 | 1.34 | −91 | +485 |
+| Wed, 7 days | +$2,368 | — | — | 0.73 | 1.22 | −97 | +359 |
+| Sun, 7 days (best after 2024) | +$2,933 | — | — | 0.31 | 1.48 | −228 | +222 |
+
+- **Across all 49 the two periods agree only weakly** (rank correlation of Sharpe +0.22). Most of the differences
+  between days are timing luck, as §22 and docs/live-small-size-plan.md found for the full week.
+- **Wednesday is the exception:** every Wednesday hold is good in both periods (Sharpe 0.73–1.12 before 2024,
+  0.95–1.34 after). Wednesday-3 makes the same as the live rule with a third of its drawdown, and it was positive in
+  every year 2020–2026 (2022 +195, 2024 +237, where Monday lost). Thursday is the weakest in both.
+- **Sunday** is the best after 2024 and among the worst before: chosen on its recent numbers it would be hindsight.
+- Every variant takes about 70% of its profit from its 10 best weeks.
+- **Not adopted now:** the live rule stays Monday through its first real rebalances (one change at a time, and a
+  change needs a code change and a restart). Worth revisiting after them: Wednesday-6 or Wednesday-3.
+
 ## The site now shows only the four paper bots
 
 `research/bots_stats.py` writes `lib/bot-stats.json` (the numbers the site shows); the dashboard's live section and
