@@ -418,8 +418,8 @@ and judged on 2024 → 2026-10.
 | Mon, 7 days (runs) | +$1,943 | $476 | 1.15 (1.20) | 0.60 | 1.15 | −259 | −37 |
 | **Wed, 3 days** (best before 2024) | +$1,932 | **$160** | 1.21 (1.23) | 1.12 | 1.10 | +195 | +237 |
 | Wed, 6 days | +$2,527 | $323 | 1.20 (1.27) | 0.83 | 1.34 | −91 | +485 |
-| Wed, 7 days | +$2,368 | — | — | 0.73 | 1.22 | −97 | +359 |
-| Sun, 7 days (best after 2024) | +$2,933 | — | — | 0.31 | 1.48 | −228 | +222 |
+| Wed, 7 days | +$2,368 | $312 | 1.18 (1.24) | 0.73 | 1.22 | −97 | +359 |
+| Sun, 7 days (best after 2024) | +$2,933 | $442 | 1.22 (1.42) | 0.31 | 1.48 | −228 | +222 |
 
 - **Across all 49 the two periods agree only weakly** (rank correlation of Sharpe +0.22). Most of the differences
   between days are timing luck, as §22 and docs/live-small-size-plan.md found for the full week.
