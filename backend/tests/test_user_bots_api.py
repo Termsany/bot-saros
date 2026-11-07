@@ -101,6 +101,14 @@ class UserBotsApiTests(ApiAuthTests):
         self.assertEqual(self.c.get("/api/admin/user-bots", headers=self.h("u1-token")).status_code, 403)
         r = self.c.get("/api/admin/user-bots", headers=self.h("admin-token")).json()
         self.assertEqual([(u["user_id"], u["provision"]["state"]) for u in r["users"]], [(U1, "running")])
+        self.assertIsNone(r["users"][0]["email"])                                   # Supabase unreachable: no email, no error
+        from app import admin_users
+
+        async def accounts(**kw):
+            return {"available": True, "error": None, "users": [{"id": U1, "email": "friend@example.com"}, {"id": "x", "email": "y"}]}
+        with mock.patch.object(admin_users, "fetch_gotrue_users", accounts):
+            r = self.c.get("/api/admin/user-bots", headers=self.h("admin-token")).json()
+        self.assertEqual(r["users"][0]["email"], "friend@example.com")              # the owner sees who it is
 
     def test_the_owner_opens_and_closes_real_money_for_users_from_the_admin_page(self):
         # owner, 2026-11-07: no server command for the day-to-day switch; root's main lock still needed (provisioner)

@@ -59,11 +59,11 @@ export function AdminUserBots(){
   }
   return (
     <Card>
-      <CardHeader title="بوتات المستخدمين (Demo)" sub={`${running} من ${d.max_users} أماكن مستخدمة · الدعوة الهدية بتوافق على الحساب لوحدها`} />
+      <CardHeader title="بوتات المستخدمين" sub={`${running} من ${d.max_users} أماكن مستخدمة · الدعوة الهدية بتوافق على الحساب لوحدها`} />
       {err && <p className="mb-2 text-[13px] text-loss">{err}</p>}
       <div className="overflow-x-auto">
         <table className="w-full min-w-[640px] text-[13px]">
-          <thead className="text-[12px] text-faint"><tr>{["المستخدم", "الموافقة", "الحالة", "الاستراتيجيات", "صفقات مفتوحة", "مشاكل"].map(h => <th key={h} className="px-2 py-2 text-right font-semibold">{h}</th>)}</tr></thead>
+          <thead className="text-[12px] text-faint"><tr>{["المستخدم", "الموافقة", "الحالة", "الفلوس", "الاستراتيجيات", "صفقات مفتوحة", "مشاكل"].map(h => <th key={h} className="px-2 py-2 text-right font-semibold">{h}</th>)}</tr></thead>
           <tbody>
             {d.users.map((u: any) => {
               const [st, tone] = STATE[u.provision?.state] || ["لسه", "neutral"] as [string, Tone]
@@ -71,12 +71,18 @@ export function AdminUserBots(){
               const problems = bots.filter(b => !b.running || b.review || b.unprotected || b.entry_block).length
               return (
                 <tr key={u.user_id} className="border-t border-line">
-                  <td className="px-2 py-2.5 font-mono text-[12px]" dir="ltr" style={{ textAlign: "right" }}>{u.user_id}</td>
+                  <td className="px-2 py-2.5" dir="ltr" style={{ textAlign: "right" }} data-testid="user-bots-who">
+                    {u.email ? <div className="text-[13px] font-semibold text-ink">{u.email}</div> : null}
+                    <div className={`font-mono ${u.email ? "text-[11px] text-faint" : "text-[12px]"}`}>{u.email ? u.user_id.slice(0, 8) : u.user_id}</div>
+                  </td>
                   <td className="px-2 py-2.5">
                     <button disabled={busy === u.user_id} onClick={() => approve(u.user_id, !u.approved)}
                       className={u.approved ? btn.secondary : btn.primary}>{u.approved ? "موافَق · شيل" : "وافق"}</button>
                   </td>
                   <td className="px-2 py-2.5">{u.provision ? <Pill tone={tone}>{st}</Pill> : <span className="text-faint">لسه ما طلبش بوتات</span>}</td>
+                  <td className="px-2 py-2.5">{!u.desired ? "—" : u.desired.env === "live"
+                    ? <Pill tone="loss">{`حقيقية · ${u.desired.capital_usdt}$ / ${u.desired.capital_margin_override_usdt}$`}</Pill>
+                    : <Pill tone="neutral">Demo</Pill>}</td>
                   <td className="px-2 py-2.5">{(u.desired?.strategies || []).map((s: string) => LABELS[s] || s).join("، ") || "—"}</td>
                   <td className="px-2 py-2.5 font-mono">{bots.reduce((a, b) => a + (b.positions || 0), 0)}</td>
                   <td className="px-2 py-2.5">{problems ? <Pill tone="loss">{problems}</Pill> : <span className="text-faint">—</span>}</td>
