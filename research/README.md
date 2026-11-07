@@ -529,6 +529,31 @@ variants fixed before any result:
 - Capital is not the obstacle: at $200 a position is $80 (over the $5 minimum); at $10,000 it is $4,000, a median
   0.01% of the signal hour's volume. The problem is the edge, not the account size.
 
+### 28. Raising the win rate of the daily trend, momentum_ls and RSI-2 — one candidate, nothing adopted (November 2026)
+
+`research/core_improve_study.py`: ideas not tried before, fixed before any result, each against the rule the bot runs
+today (same simulators as `baseline_stats.py`: $20 x2, fees, real funding, the 40% guard). Pick = best Sharpe
+before 2024.
+
+| bot | variants | today: win % after 2024 / Sharpe after | in-sample pick | pick: win % / Sharpe after | beat today after 2024 |
+|---|---|---|---|---|---|
+| daily trend | 12 | 33.8 / **1.32** | BTC above its 200-day average | 35.0 / 1.08 (max DD 317 → 137) | 0 / 11 |
+| momentum_ls | 8 | 49.6 / **1.22** | 2w / volatility, no shorts in a bull market | 42.6 / −0.04 | 0 / 7 |
+| RSI-2 | 16 | 65.1 / 1.26 | BTC above its 200-day average | **67.8 / 1.24** (max DD 48 → 28) | 3 / 15 |
+
+- **Daily trend:** a 30% trailing stop does raise the win rate (up to 39% after 2024) but cuts the big trends it
+  lives on: PnL after 2024 670 → 410–458. 3 of 3 (instead of 2 of 3) and a BTC filter halve the drawdown and also
+  the profit. Nothing beats today's rule on Sharpe. It stays.
+- **momentum_ls:** today's 2-week ranking is the best of four in both periods; dropping the shorts in a bull market
+  (Daniel & Moskowitz's crash guard) was good before 2024 and failed after (Sharpe 0.47 to −0.04). It stays.
+- **RSI-2 with BTC above its 200-day average — the one candidate:** win rate 66.1 → **70.4%** (67.8% after 2024),
+  max drawdown 48 → **28** margins, PF 1.69 → 1.99, Sharpe after 2024 1.24 vs 1.26 — the same edge with fewer bad
+  trades, but 27% fewer trades (PnL 216 → 163). Top 20 with the same filter looked best after 2024 (Sharpe 1.50,
+  PnL 557) but was worse before it (0.70 vs 0.82): not the pick, hindsight.
+- A raised RSI-2 threshold (10) adds trades that lose the edge (PF ~1.1) in every combination.
+- **Decision:** no change while the Demo measurement runs against `docs/demo-baseline.md`; the RSI-2 BTC filter is
+  the candidate to try after it.
+
 ## The site now shows only the four paper bots
 
 `research/bots_stats.py` writes `lib/bot-stats.json` (the numbers the site shows); the dashboard's live section and
