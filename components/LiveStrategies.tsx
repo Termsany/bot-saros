@@ -229,7 +229,10 @@ export function LiveStrategiesView({ env, onEnv, acct = "", onAcct = () => {}, c
   const starved = share != null ? rows.filter(r => chosen.has(r.id) && (OPENS_AT_ONCE[r.id] || 1) > share) : []
   const changed = rows.some(r => r.on !== chosen.has(r.id))
   // the Demo and the real-money bot of a strategy share one status folder: only this account's bot is shown here
-  const mine = (id: string) => status?.strategies?.[id]?.env === env ? status.strategies[id] : null
+  // a copy account's bots write their own folders, which /api/live/status doesn't read: never show the main account's
+  // positions (and their close buttons) under a copy account
+  const isCopy = !!(cfg.accounts || []).find((a: any) => a.name === acct && a.copy)
+  const mine = (id: string) => !isCopy && status?.strategies?.[id]?.env === env ? status.strategies[id] : null
   const openPnl = (id: string) => ((mine(id)?.positions || []) as any[]).reduce((a, p) => a + (Number(p.pnl) || 0), 0)
   const state = (r: any): [string, Tone] => r.review?.length ? ["محتاج مراجعة", "loss"] : !chosen.has(r.id) ? ["متوقفة", "neutral"]
     : r.entry_block ? ["الدخول متوقف", "corona"] : r.running ? ["شغال", "profit"] : ["البوت مش شغال", "neutral"]
