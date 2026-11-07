@@ -7,6 +7,7 @@ app.main, and state that lives there, are read as M.<name> at call time.
 from fastapi import APIRouter
 
 from app import main as M
+from app.auth import mfa_state
 from app.main import (  # noqa: F401
     BaseModel,
     Depends,
@@ -47,7 +48,8 @@ def _label(name: str, p: dict) -> str:
 
 @router.get("/api/user/me")
 async def user_me(user: dict = Depends(require_user)):
-    return {"admin": is_admin(user)}
+    admin = is_admin(user)
+    return {"admin": admin, **({"mfa": mfa_state(user)} if admin else {})}
 
 class PortfolioCloseReq(BaseModel):
     label: str = Field(max_length=60)

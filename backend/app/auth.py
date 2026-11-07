@@ -9,9 +9,13 @@ legacy HS256 and the newer asymmetric signing keys, and cache the result briefly
 - require_admin         -> email listed in ADMIN_EMAILS (comma-separated). Fails closed if unset.
 - require_admin_or_cron -> admin, or header `X-Cron-Secret: $CRON_SECRET` (for cron-job.org / GitHub Actions)
 
-Env: SUPABASE_URL, SUPABASE_ANON_KEY (or SUPABASE_SERVICE_KEY), ADMIN_EMAILS, CRON_SECRET
+2FA (owner, 2026-11-07): once the admin has a verified authenticator (Supabase TOTP), every admin endpoint wants a
+session that passed it (the token's `aal` is "aal2"); a password alone is refused. ADMIN_REQUIRE_MFA=1 also refuses an
+admin who has none yet, so removing the authenticator can't drop the rule.
+
+Env: SUPABASE_URL, SUPABASE_ANON_KEY (or SUPABASE_SERVICE_KEY), ADMIN_EMAILS, CRON_SECRET, ADMIN_REQUIRE_MFA
 """
-import os, time, hashlib, hmac
+import os, time, hashlib, hmac, json, base64
 import httpx
 from fastapi import Header, HTTPException
 
@@ -27,6 +31,20 @@ def _supabase_conf():
 
 def _admin_emails():
     return {e.strip().lower() for e in os.getenv("ADMIN_EMAILS", "").split(",") if e.strip()}
+
+
+def _token_aal(token: str) -> str:
+    """The token's assurance level. Read only after Supabase accepted this very token, so its claims are Supabase's."""
+    try:
+        part = token.split(".")[1]
+        claims = json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
+        return claims.get("aal") if claims.get("aal") in ("aal1", "aal2") else "aal1"
+    except Exception:
+        return "aal1"
+
+
+def _mfa_required() -> bool:
+    return os.getenv("ADMIN_REQUIRE_MFA", "").strip().lower() in ("1", "true", "yes")
 
 
 async def _verify_token(token: str) -> dict:
@@ -47,7 +65,9 @@ async def _verify_token(token: str) -> dict:
     j = r.json()
     user = {"id": j.get("id"), "email": (j.get("email") or "").lower(),
             # email_confirmed_at only: confirmed_at is also set by a confirmed *phone*, which proves nothing about the email
-            "email_confirmed": bool(j.get("email_confirmed_at"))}
+            "email_confirmed": bool(j.get("email_confirmed_at")),
+            "mfa_enrolled": any(f.get("status") == "verified" for f in (j.get("factors") or []) if isinstance(f, dict)),
+            "aal": _token_aal(token)}
     if not user["id"]:
         raise HTTPException(401, "invalid session")
     if len(_CACHE) > 1000:   # drop expired entries first — a flood of junk tokens must not empty everyone's cache
@@ -90,7 +110,20 @@ async def require_admin(authorization: str = Header(default="")) -> dict:
     ids = {x.strip() for x in os.getenv("ADMIN_USER_IDS", "").split(",") if x.strip()}
     if ids and user["id"] not in ids:
         raise HTTPException(403, "admin only")
+    check_admin_mfa(user)
     return user
+
+
+def mfa_state(user: dict) -> dict:
+    """What the site shows the admin: whether an authenticator is set, and whether this session passed it."""
+    return {"enrolled": bool(user.get("mfa_enrolled")), "aal": user.get("aal") or "aal1", "required": _mfa_required()}
+
+
+def check_admin_mfa(user: dict) -> None:
+    if user.get("mfa_enrolled") and user.get("aal") != "aal2":
+        raise HTTPException(403, "mfa_required: enter the code from your authenticator app")
+    if _mfa_required() and not user.get("mfa_enrolled"):
+        raise HTTPException(403, "mfa_enroll_required: set up an authenticator app for the admin account")
 
 
 async def require_admin_or_cron(authorization: str = Header(default=""), x_cron_secret: str = Header(default="")) -> dict:
