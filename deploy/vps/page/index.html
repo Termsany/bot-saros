@@ -274,6 +274,25 @@
       <tbody id="r2History"><tr><td colspan="6" class="empty">لسه مفيش صفقات اتقفلت</td></tr></tbody>
     </table></div>
   </section>
+  <section id="rbSec" style="margin-top:44px;border-top:1px solid var(--line);padding-top:26px;display:none">
+    <div class="head"><h2>RSI-2 + فلتر BTC — تجربة Paper تانية</h2><span class="count" id="rbUpdated"></span></div>
+    <p class="sub" style="font-size:13px">نفس بوت RSI-2 بنفس الحجم، بس ما بيدخلش صفقة جديدة غير لما BTC يقفل فوق متوسط 200 يوم. في الاختبار (research §28) نسبة الكسب طلعت من 66% لـ 70% وأقصى تراجع نزل من 48 لـ 28 مارجن، بنفس العائد مقابل المخاطرة بعد 2024 وصفقات أقل — شغال Paper جنب الأصلي عشان نقارنهم.</p>
+    <div class="kpis" style="margin-top:14px">
+      <div class="card kpi"><div class="label">ربح محقق</div><div class="value mono" id="rbRealized">—</div><div class="note" id="rbWl">—</div></div>
+      <div class="card kpi"><div class="label">ربح الصفقات المفتوحة</div><div class="value mono" id="rbUnreal">—</div><div class="note">بالسعر اللحظي من Binance</div></div>
+      <div class="card kpi"><div class="label">مفتوحة</div><div class="value mono" id="rbOpen" style="font-size:18px">—</div><div class="note" id="rbMargin">—</div></div>
+      <div class="card kpi"><div class="label">فلتر BTC · أقرب عملات</div><div class="value mono" id="rbWatch" style="font-size:14px">—</div><div class="note" id="rbTotal">—</div></div>
+    </div>
+    <div class="table" style="margin-top:14px"><table>
+      <thead><tr><th>العملة</th><th>الدخول</th><th>السعر الحالي</th><th>الوقف</th><th>الخروج</th><th>الربح $</th><th>على الهامش</th></tr></thead>
+      <tbody id="rbPositions"><tr><td colspan="7" class="empty">بيحمّل…</td></tr></tbody>
+    </table></div>
+    <div class="head" style="margin-top:16px"><h2 style="font-size:14px">اتقفلت</h2><span class="count" id="rbHistCount"></span></div>
+    <div class="table"><table>
+      <thead><tr><th>العملة</th><th>الدخول</th><th>الخروج</th><th>الربح $</th><th>السبب</th><th>الوقت</th></tr></thead>
+      <tbody id="rbHistory"><tr><td colspan="6" class="empty">لسه مفيش صفقات اتقفلت</td></tr></tbody>
+    </table></div>
+  </section>
 
   <section id="tbSec" style="margin-top:44px;border-top:1px solid var(--line);padding-top:26px;display:none">
     <div class="head"><h2>اختراق الترند (Minervini / Darvas) — تجربة Paper</h2><span class="count" id="tbUpdated"></span></div>
@@ -340,6 +359,9 @@ const EN = {
   "RSI-2 شراء الهبوط (Larry Connors) — تجربة Paper": "RSI-2 buy the dip (Larry Connors) — Paper test",
   "بوت سادس منفصل: كل يوم على أعلى 10 عملات فوليوم فوق متوسط 200 يوم، بيشتري لما RSI-2 ينزل تحت 5 (هبوط حاد في ترند صاعد)، ويقفل أول ما يقفل يومي فوق متوسط 5 أيام أو بعد 10 أيام. وقف 40%.": "A sixth, separate bot: every day, on the top 10 coins by volume above their 200-day average, it buys when RSI-2 drops below 5 (a sharp dip in an uptrend), and closes at the first daily close above the 5-day average or after 10 days. 40% stop.",
   "أقرب عملات لإشارة": "Closest coins to a signal",
+  "RSI-2 + فلتر BTC — تجربة Paper تانية": "RSI-2 + BTC filter — second Paper test",
+  "نفس بوت RSI-2 بنفس الحجم، بس ما بيدخلش صفقة جديدة غير لما BTC يقفل فوق متوسط 200 يوم. في الاختبار (research §28) نسبة الكسب طلعت من 66% لـ 70% وأقصى تراجع نزل من 48 لـ 28 مارجن، بنفس العائد مقابل المخاطرة بعد 2024 وصفقات أقل — شغال Paper جنب الأصلي عشان نقارنهم.": "The same RSI-2 bot at the same size, but it opens a new trade only while BTC closes above its 200-day average. In the test (research §28) the win rate rose from 66% to 70% and the worst drawdown fell from 48 to 28 margins, with the same return for the risk after 2024 and fewer trades — it runs on paper next to the original so we can compare them.",
+  "فلتر BTC · أقرب عملات": "BTC filter · closest coins",
   "اختراق الترند (Minervini / Darvas) — تجربة Paper": "Trend breakout (Minervini / Darvas) — Paper test",
   "بوت سابع منفصل: على أعلى 100 عملة فوليوم في ترند صاعد واضح (السعر فوق متوسط 50 فوق 150 فوق 200 يوم)، بيشتري لما القفل اليومي يكسر أعلى سعر في آخر 20 يوم، ويقفل أول قفل يومي تحت متوسط 20 يوم. وقف 40%. تجربة: في الاختبار زوّد الربح بس مش العائد مقابل المخاطرة، وبيكسب في سنين الصعود القوية بس.": "A seventh, separate bot: on the top 100 coins by volume in a clear uptrend (price above the 50-, over the 150-, over the 200-day average), it buys when the daily close breaks the highest price of the last 20 days, and closes at the first daily close below the 20-day average. 40% stop. A test: in the backtest it raised profit but not the return for the risk, and it only wins in strong bull years.",
   "أقرب عملات للاختراق": "Closest coins to a breakout",
@@ -536,6 +558,7 @@ function bsubscribe(){
                ...(typeof RS !== "undefined" && RS ? RS.pairs.flatMap(p => [p.long, p.short]) : []),
                ...(typeof RN !== "undefined" && RN ? RN.pairs.flatMap(p => [p.long, p.short]) : []),
                ...(typeof BO !== "undefined" && BO ? BO.positions : []), ...(typeof R2 !== "undefined" && R2 ? R2.positions : []),
+               ...(typeof RB !== "undefined" && RB ? RB.positions : []),
                ...(typeof TBk !== "undefined" && TBk ? TBk.positions : [])].map(p => p.id)
   const add = ids.filter(x => !bsubs.has(x))
   if(add.length) bws.send(JSON.stringify({ method: "SUBSCRIBE", params: add.map(x => `${x.toLowerCase()}@miniTicker`), id: Date.now() }))
@@ -645,7 +668,7 @@ loadRatio()
 setInterval(loadRatio, 15000)
 setInterval(() => { if(RS) renderRatio(); if(RN) renderRatioNb() }, 1000)
 // ── volatility breakout + RSI-2 (fifth and sixth paper bots): breakout.json / rsi2.json every 15 s, Binance prices ──
-let BO = null, R2 = null, TBk = null
+let BO = null, R2 = null, TBk = null, RB = null
 function renderSimple(key, d, watchHtml){
   const sec = $(key + "Sec")
   if(!d){ sec.style.display = "none"; return }
@@ -687,8 +710,16 @@ function renderRsi2(){
   renderSimple("r2", R2, w.length ? w.slice(0, 4).map(x => `${esc(x.symbol.replace("/USDT", ""))} <span class="mono">RSI ${Number(x.rsi2).toFixed(0)}</span>`).join("<br>")
                                   : `<span style="color:var(--faint)">${tx("مفيش عملة في ترند صاعد", "No coin in an uptrend")}</span>`)
 }
+function renderRsi2Btc(){
+  const f = RB && RB.btc_filter, w = (RB && RB.watch || []).filter(x => x.above_200).sort((a, b) => a.rsi2 - b.rsi2)
+  const btc = !f ? "" : f.error ? `<span style="color:var(--faint)">${tx("BTC: مفيش داتا — مفيش دخول", "BTC: no data — no entries")}</span><br>`
+    : f.above ? `<span class="profit">${tx("BTC فوق متوسط 200 — الدخول مفتوح", "BTC above its 200-day average — entries on")}</span><br>`
+    : `<span class="loss">${tx("BTC تحت متوسط 200 — مفيش دخول", "BTC below its 200-day average — no entries")}</span><br>`
+  renderSimple("rb", RB, btc + (w.length ? w.slice(0, 3).map(x => `${esc(x.symbol.replace("/USDT", ""))} <span class="mono">RSI ${Number(x.rsi2).toFixed(0)}</span>`).join("<br>")
+                                         : `<span style="color:var(--faint)">${tx("مفيش عملة في ترند صاعد", "No coin in an uptrend")}</span>`))
+}
 async function loadSimple(){
-  for(const [file, set, render] of [["breakout", v => BO = v, renderBreakout], ["rsi2", v => R2 = v, renderRsi2], ["tbreak", v => TBk = v, renderTbreak]]){
+  for(const [file, set, render] of [["breakout", v => BO = v, renderBreakout], ["rsi2", v => R2 = v, renderRsi2], ["rsi2_btc", v => RB = v, renderRsi2Btc], ["tbreak", v => TBk = v, renderTbreak]]){
     try{ const r = await fetch(`${file}.json?t=${Date.now()}`, {cache: "no-store"}); if(!r.ok) throw 0; set(await r.json()); render() } catch{ render() }
   }
   bsubscribe()
@@ -704,7 +735,7 @@ setInterval(loadSimple, 15000)
 function renderAll(){
   applyWords()
   if(D){ renderSettings(D); render() }
-  renderListing(); renderMomentum(); renderRatio(); renderBreakout(); renderRsi2(); renderTbreak()
+  renderListing(); renderMomentum(); renderRatio(); renderBreakout(); renderRsi2(); renderRsi2Btc(); renderTbreak()
 }
 $("langBtn").onclick = () => {
   L = L === "ar" ? "en" : "ar"
@@ -719,7 +750,7 @@ $("themeBtn").onclick = () => {
   try { localStorage.setItem("raqm-theme", next) } catch(e){}
   applyWords()
 }
-setInterval(() => { if(BO) renderBreakout(); if(R2) renderRsi2(); if(TBk) renderTbreak() }, 1000)
+setInterval(() => { if(BO) renderBreakout(); if(R2) renderRsi2(); if(RB) renderRsi2Btc(); if(TBk) renderTbreak() }, 1000)
 </script>
 </body>
 </html>
