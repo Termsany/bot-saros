@@ -177,6 +177,14 @@ export async function apiAdminUserBots(): Promise<any|null>{
     const r=await fetch(`${API}/api/admin/user-bots`, { headers, cache: "no-store" }); return r.ok ? r.json() : null
   }catch{ return null }
 }
+/** Admin: the owner's switch for real money for invited users (root's main lock on the server is needed too). */
+export async function apiAdminUsersLive(): Promise<{ on: boolean, by: string | null, at: string | null } | null>{
+  try{
+    const headers = await signedInHeaders(); if(!headers) return null
+    const r=await fetch(`${API}/api/admin/users-live`, { headers, cache: "no-store" }); return r.ok ? r.json() : null
+  }catch{ return null }
+}
+export const apiSetAdminUsersLive = (on: boolean) => postJson("/api/admin/users-live", { on, confirm: true })
 export function chartUrl(file:string){ return `${API}/api/chart?file=${encodeURIComponent(file)}` }
 /** The chart needs the user's login (it's theirs only) — an <img src> can't send it, so fetch it and show a local copy. */
 export async function apiChartObjectUrl(file:string): Promise<string|null>{

@@ -253,3 +253,28 @@ async def admin_user_bots_approve(uid: str, req: UserApproveReq, user: dict = De
         raise HTTPException(503, f"approval list can't be written: {type(e).__name__}")
     admin_control.audit(M.BOT_DIR, await _admin_actor(user), "demo_bots_approve" if req.on else "demo_bots_remove", "ok", {"user": uid[:8]})
     return {"ok": True, "approved": uid in now}
+
+class UsersLiveReq(AdminModel):
+    on: bool
+    confirm: bool = False
+
+@router.get("/api/admin/users-live")
+async def admin_users_live(user: dict = Depends(require_admin)):
+    """The owner's switch for real money for invited users (the provisioner also needs root's main lock)."""
+    return user_bots.read_site_live()
+
+@router.post("/api/admin/users-live")
+async def admin_users_live_set(req: UsersLiveReq, user: dict = Depends(require_admin)):
+    """On: invited users whose keys pass the server's checks and who agreed to their numbers can start real money.
+    Off: no real-money user bot starts, and the running ones stop opening new baskets at the next provisioner run
+    (their open trades still exit on their own rules and stops)."""
+    rate_limit(user["id"], "admin_mutation", 30, 60)
+    if not req.confirm:
+        raise HTTPException(400, "confirmation required")
+    actor = await _admin_actor(user)
+    try:
+        doc = user_bots.write_site_live(req.on, actor)
+    except OSError as e:
+        raise HTTPException(503, f"the switch can't be written: {type(e).__name__}")
+    admin_control.audit(M.BOT_DIR, actor, "users_live_on" if req.on else "users_live_off", "ok", {})
+    return {"ok": True, **doc}

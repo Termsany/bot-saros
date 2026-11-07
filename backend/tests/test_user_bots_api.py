@@ -102,6 +102,22 @@ class UserBotsApiTests(ApiAuthTests):
         r = self.c.get("/api/admin/user-bots", headers=self.h("admin-token")).json()
         self.assertEqual([(u["user_id"], u["provision"]["state"]) for u in r["users"]], [(U1, "running")])
 
+    def test_the_owner_opens_and_closes_real_money_for_users_from_the_admin_page(self):
+        # owner, 2026-11-07: no server command for the day-to-day switch; root's main lock still needed (provisioner)
+        get = lambda tok="admin-token": self.c.get("/api/admin/users-live", headers=self.h(tok))
+        post = lambda body, tok="admin-token": self.c.post("/api/admin/users-live", headers=self.h(tok), json=body)
+        self.assertEqual(get().json()["on"], False)                                   # no file yet: off
+        self.assertEqual(post({"on": True}).status_code, 400)                         # confirmation required
+        self.assertEqual(post({"on": True, "confirm": True}, "u1-token").status_code, 403)
+        self.assertEqual(get("u1-token").status_code, 403)
+        r = post({"on": True, "confirm": True})
+        self.assertEqual(r.status_code, 200, r.text); self.assertTrue(r.json()["on"])
+        self.assertEqual(json.loads((self.desired / "live.switch").read_text(encoding="utf-8"))["on"], True)
+        self.assertTrue(get().json()["on"]); self.assertTrue(get().json()["by"])
+        post({"on": False, "confirm": True})
+        self.assertFalse(get().json()["on"])
+        self.assertEqual(self.c.get("/api/admin/user-bots", headers=self.h("admin-token")).json()["users"], [])   # not a user
+
     # P2.7 review
     def test_a_status_file_that_is_a_link_is_not_read(self):
         other = self.ipc / "owner_status.json"

@@ -346,6 +346,26 @@ class RealMoneyTests(unittest.TestCase):
             (Path(d) / "live.enabled").write_text("", encoding="utf-8")
             self.assertEqual(pu.live_switch_on(Path(d) / "live.enabled"), os.lstat(Path(d) / "live.enabled").st_uid == 0)
 
+    def test_real_money_needs_roots_lock_and_the_owners_switch_on_the_site(self):
+        # owner, 2026-11-07: the day-to-day switch from the admin page; root's lock stays out of the site's reach
+        from app import user_bots as ub
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
+            d = Path(d); f = d / ub.SITE_LIVE_SWITCH
+            self.assertFalse(pu.site_switch_on(d))                                   # no file: off
+            for body, on in (('{"on": true}', True), ('{"on": false}', False), ('{"on": "true"}', False), ("[true]", False), ("{", False)):
+                f.write_text(body, encoding="utf-8")
+                self.assertEqual(pu.site_switch_on(d), on, body)
+            ub.write_site_live(True, "owner@example.com", d)
+            self.assertTrue(pu.site_switch_on(d)); self.assertEqual(ub.read_site_live(d)["by"], "owner@example.com")
+            self.assertEqual(ub.read_desired("live", d), None)                        # never read as a user's request
+            self.assertEqual([p.name for p in d.glob("*.json")], [])
+            with mock.patch.object(pu, "live_switch_on", return_value=False):
+                self.assertFalse(pu.real_money_on(folder=d))                          # the site alone isn't enough
+            with mock.patch.object(pu, "live_switch_on", return_value=True):
+                self.assertTrue(pu.real_money_on(folder=d))
+                ub.write_site_live(False, "owner@example.com", d)
+                self.assertFalse(pu.real_money_on(folder=d))                          # root's lock alone isn't enough
+
     def test_a_key_failing_any_preflight_row_is_refused_and_says_which(self):
         rows = [("key: withdrawals OFF", False, "x"), ("key: restricted to this server's IP", True, "y")]
         with mock.patch("live_preflight.check_binance", return_value=rows):
