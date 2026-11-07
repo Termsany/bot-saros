@@ -6,20 +6,23 @@ Wants=network-online.target
 [Service]
 User=raqm
 Group=raqm
-WorkingDirectory=/opt/raqm-bot
+WorkingDirectory=/opt/raqm-ratio-nobtc
 EnvironmentFile=-/opt/raqm-bot/.env
 Environment=PYTHONUNBUFFERED=1
 # owner, 2026-11-07: a second ratio paper bot next to raqm-ratio — BTC and ETH left out (the next coins in line come
 # in), $40 margin x2 per leg. Own state (state_ratio_nobtc.json / .log), page data -> ratio_nobtc.json, Telegram
 # messages marked [ratio no BTC/ETH]. Paper only: no order reaches an exchange.
-ExecStart=/opt/raqm-bot/venv/bin/python bot.py --paper --strategy ratio_trend --ratio-exclude BTC,ETH --public-name ratio_nobtc --label "ratio no BTC/ETH" --amount 40 --leverage 2 --poll 60 --notify --public /var/www/bot.da3m.io --state state_ratio_nobtc.json
+# Its own code folder (main's bot.py and what it imports, installed by deploy/vps/install-ratio-nobtc.sh), so
+# installing it never changes the code the other paper bots in /opt/raqm-bot run on their next restart. It shares
+# their venv and Telegram settings only.
+ExecStart=/opt/raqm-bot/venv/bin/python -E -s bot.py --paper --strategy ratio_trend --ratio-exclude BTC,ETH --public-name ratio_nobtc --label "ratio no BTC/ETH" --amount 40 --leverage 2 --poll 60 --notify --public /var/www/bot.da3m.io --state state_ratio_nobtc.json
 Restart=always
 RestartSec=30
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-ReadWritePaths=/opt/raqm-bot /var/www/bot.da3m.io
+ReadWritePaths=/opt/raqm-ratio-nobtc /var/www/bot.da3m.io
 
 [Install]
 WantedBy=multi-user.target
