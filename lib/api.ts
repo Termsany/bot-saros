@@ -52,6 +52,14 @@ export async function apiSaveSettings(body: { capital: number; strategy: string 
   if(!r.ok) throw new Error(d.detail || "ما اتحفظش")
   return d
 }
+/** The signed-in user as the API sees them: admin or not, and for the admin the 2FA state (null: not signed in or
+ *  the API can't be reached). */
+export async function apiMe(): Promise<{ admin: boolean, mfa?: { enrolled: boolean, aal: string, required: boolean } } | null>{
+  try{
+    const headers = await signedInHeaders(); if(!headers) return null
+    const r=await fetch(`${API}/api/user/me`, { headers, cache: "no-store" }); return r.ok ? await r.json() : null
+  }catch{ return null }
+}
 /** Is the signed-in user the admin (shows the admin buttons; every admin endpoint checks again). */
 export async function apiIsAdmin(): Promise<boolean>{
   try{
