@@ -431,6 +431,32 @@ and judged on 2024 → 2026-10.
 - **Not adopted now:** the live rule stays Monday through its first real rebalances (one change at a time, and a
   change needs a code change and a restart). Worth revisiting after them: Wednesday-6 or Wednesday-3.
 
+### 24. The ratio trend: which coins? No fair rule is good in both periods (November 2026)
+
+`research/ratio_universe_study.py` (owner, 2026-11-07: "must the pairs be among high-volume coins?"): the bot's rule,
+netted per coin with a 40% stop, $26 ×2 per unit, 2020-01 → 2026-10, fees and real funding. Every universe is
+re-picked weekly by a rule known at the time; only "5 majors" is hindsight.
+
+| universe | PnL | worst DD | PnL/DD | Sharpe < 2024 | Sharpe 2024 → | 2022 | 2026 |
+|---|---|---|---|---|---|---|---|
+| 5 majors (hindsight) | +1,428 | 236 | 6.05 | **1.13** | 0.65 | +135 | −108 |
+| 30-day volume, top 7 (runs now) | **+2,455** | 1,273 | 1.93 | 0.59 | 0.64 | −387 | +772 |
+| 90-day volume, top 5 | +568 | 327 | 1.73 | 0.64 | −0.12 | +195 | −178 |
+| persistent top 7 (in the top 10 in 8 of the last 12 weeks) | +1,708 | **588** | **2.91** | 0.14 | **1.27** | −62 | +834 |
+| 180-day volume, top 7 | +903 | 798 | 1.13 | 0.14 | 0.63 | −118 | −47 |
+| 365 days of history, top 7 | +1,061 | 885 | 1.20 | 0.40 | 0.20 | −94 | −301 |
+
+(13 universes in the script's output; each top 5 version makes less than its top 7.)
+
+- **Volume matters, but no volume rule rescues the strategy.** Picked before 2024, the best fair rules are the one
+  that runs now (0.59) and 90-day top 5 (0.64); after 2024 the second loses.
+- **Persistent top 7** halves the drawdown (588 vs 1,273) for 70% of the PnL and has the best Sharpe after 2024. But
+  its Sharpe before 2024 is 0.14: choosing it would be choosing on the period kept for checking. Worth a forward
+  test, not real money.
+- Even the hindsight majors are weak after 2024 (0.65, 2026 −108): the edge itself has faded, not only the coin pick.
+- 13 universes were tried, so the best number in each column is partly luck.
+- **Decision:** the ratio trend stays off real money. If tested further, persistent top 7 on Demo.
+
 ## The site now shows only the four paper bots
 
 `research/bots_stats.py` writes `lib/bot-stats.json` (the numbers the site shows); the dashboard's live section and
