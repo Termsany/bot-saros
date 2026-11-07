@@ -552,7 +552,38 @@ before 2024.
   PnL 557) but was worse before it (0.70 vs 0.82): not the pick, hindsight.
 - A raised RSI-2 threshold (10) adds trades that lose the edge (PF ~1.1) in every combination.
 - **Decision:** no change while the Demo measurement runs against `docs/demo-baseline.md`; the RSI-2 BTC filter is
-  the candidate to try after it.
+  the candidate to try after it. (Owner, 2026-11-07: it runs on paper as `raqm-rsi2-btc` and is offered for real
+  money next to momentum.)
+
+### 29. Open interest and positioning — one family holds in both periods, a paper candidate (November 2026)
+
+`research/oi_data.py` (Binance's daily metrics files: open interest, top traders' and all accounts' long/short
+ratios, taker buy/sell ratio — every coin ever in the top 20 by volume since 2021, 215, delisted included; kept on
+the server in `/opt/raqm-data/research/oi`) and `research/oi_study.py`. From 2021-12 (most coins' files start
+there): before 2024 is two years. Each day the previous day's top 20 (every one has data: no hindsight); weekly
+baskets of 3 long + 3 short held 7 days or event trades, $20 x2, fees, real funding, the 40% guard. 14 variants fixed
+before any result.
+
+| family | Sharpe < 2024 / 2024 → (L = 3 days; 7 days) | PnL 2024 → | note |
+|---|---|---|---|
+| X1 open-interest growth (Hong & Yogo 2012) | −0.50 / −0.42; −0.41 / 0.13 | −162; +51 | |
+| X2 OI up while price down (crowded side) | −0.74 / −1.13; −0.47 / −0.17 | −371; −65 | |
+| **X3 against retail: long the lowest all-accounts long/short ratio, short the highest** | **0.27 / 0.98; 0.37 / 0.59** | **+472; +286** | both lookbacks, both periods |
+| X4 top traders' position ratio rising | 0.64 / −0.01; −0.52 / −0.47 | −4; −170 | the in-sample pick |
+| X5 taker buy/sell flow | −0.55 / 0.34; −0.66 / 0.19 | +119; +65 | |
+| F liquidation flush (OI −10/20% and price −5% in a day, long 3/7 days) | −0.30 to −1.18 / 0.71 to 0.90 | +93 to +310 | lost before 2024 |
+| (ref) momentum 2w on the same top 20, 3+3 | 0.06 / 0.79 | +373 | |
+
+- **The rule's pick failed:** top traders' rising positions (Sharpe 0.64 before 2024) → −0.01 after.
+- **The one family that held — after the fact, not by the pick rule:** fading the crowd's long/short ratio
+  (Baker & Wurgler-style sentiment as a contrarian signal). Both lookbacks were positive in both periods; L3: 1,518
+  trades, PF 1.17 (1.24 after 2024), max DD 108, win 49.7%.
+- **It is independent of momentum_ls:** correlation −0.02. Together (momentum_ls + X3 L3) the Sharpe after 2024 goes
+  1.22 → **1.54** with about the same drawdown (245 vs 240 margins); L7: 1.36.
+- **Caveats:** before 2024 is only 2022–2023 and its Sharpe is weak (0.27); it was found by looking at the results
+  (14 variants); the liquidation flush made money only after 2024.
+- **Decision:** not for real money. X3 L3 is the candidate for a paper bot next to momentum, to see whether it holds
+  live.
 
 ## The site now shows only the four paper bots
 
