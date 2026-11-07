@@ -48,7 +48,7 @@ USER_DAILY_LOSS_PCT, USER_DRAWDOWN_PCT = 20.0, 45.0              # each user's k
 
 sys.path.insert(0, str(ROOT / "backend"))
 # the rules shared with the API (the same checks on both sides): environments, the cap, the strategies, the bounds
-from app.user_bots import ENVS_ALLOWED, MAX_USERS, MAX_STRATEGIES, STRATEGIES, UID_RE, BOUNDS, validate, strategy_policy  # noqa: E402,F401
+from app.user_bots import ENVS_ALLOWED, MAX_USERS, MAX_STRATEGIES, STRATEGIES, UID_RE, BOUNDS, SITE_LIVE_SWITCH, validate, strategy_policy  # noqa: E402,F401
 
 EXTRA_ARGS = {"trend_daily": "--universe 10"}      # as the owner's /opt/raqm-live/strategies/*.env
 NO_ENTRIES = '"no entries"'   # the applied record while a user is wound down
@@ -164,6 +164,21 @@ def live_switch_on(path=LIVE_SWITCH):
     except OSError:
         return False
     return stat.S_ISREG(st.st_mode) and st.st_uid == 0
+
+
+def site_switch_on(folder=DESIRED):
+    """The owner's switch from the admin page (user_bots.write_site_live): on only if its small regular file says
+    exactly true. Missing, unreadable, a link or anything else is off."""
+    try:
+        doc = json.loads(_read_small(Path(folder) / SITE_LIVE_SWITCH, 4096))
+    except Exception:
+        return False
+    return isinstance(doc, dict) and doc.get("on") is True
+
+
+def real_money_on(path=LIVE_SWITCH, folder=DESIRED):
+    """Real money for users: root's main lock (out of the site's reach) and the owner's switch on the site."""
+    return live_switch_on(path) and site_switch_on(folder)
 
 
 def key_checks(keys):
@@ -483,7 +498,7 @@ def main(argv=None):
     owner_key = {u for u, (k, _) in keys.items() if k in mine}
     sys_ = System()
     running = sys_.running()
-    live_on = live_switch_on()
+    live_on = real_money_on()
     key_ok = {}
     if live_on:
         try:

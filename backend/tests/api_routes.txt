@@ -12,6 +12,7 @@ GET /api/admin/risk
 GET /api/admin/strategies
 GET /api/admin/user-bots
 GET /api/admin/users
+GET /api/admin/users-live
 GET /api/backtest/history
 GET /api/bot/status
 GET /api/chart
@@ -50,6 +51,7 @@ POST /api/admin/plans
 POST /api/admin/risk/kill-switch
 POST /api/admin/strategies/{strategy}/lifecycle
 POST /api/admin/user-bots/{uid}/approve
+POST /api/admin/users-live
 POST /api/admin/users/{target_user_id}/ban
 POST /api/backtest
 POST /api/bot/start

@@ -1,13 +1,44 @@
 "use client"
 import { useEffect, useState } from "react"
-import { apiAdminApproveUser, apiAdminUserBots } from "@/lib/api"
+import { apiAdminApproveUser, apiAdminUserBots, apiAdminUsersLive, apiSetAdminUsersLive } from "@/lib/api"
 import { LABELS } from "@/components/LiveStrategies"
 import { Card, CardHeader, Pill, btn, type Tone } from "@/components/ui"
 
 const STATE: Record<string, [string, Tone]> = {
   running: ["شغّال", "profit"], waiting_approval: ["مستني موافقتك", "corona"], no_consent: ["ناقص الموافقة", "neutral"],
   no_keys: ["ناقص المفاتيح", "neutral"], no_place: ["مفيش مكان", "corona"], off: ["متوقف", "neutral"], refused: ["اترفض", "loss"],
-  owner_key: ["مفتاحك انت", "loss"],
+  owner_key: ["مفتاحك انت", "loss"], live_off: ["الفلوس الحقيقية مقفولة", "corona"], key_refused: ["المفتاح اترفض", "loss"],
+}
+
+/** The owner's switch for real money for invited users (owner, 2026-11-07: from the site, no server command). The
+ *  server's provisioner also needs root's main lock (/etc/raqm-users/live.enabled), out of the site's reach. Off: no
+ *  user's real-money bot starts, and the running ones stop opening new baskets; their trades still exit with stops. */
+export function AdminUsersLive(){
+  const [s, setS] = useState<{ on: boolean, by: string | null, at: string | null } | null | undefined>(undefined)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState("")
+  const load = () => apiAdminUsersLive().then(setS)
+  useEffect(() => { load() }, [])
+  if(!s) return null
+  async function flip(){
+    const on = !s!.on
+    const text = on
+      ? "⚠️ فلوس حقيقية للمستخدمين المدعوين\n\nتفتحها؟ أي حساب انت دعيته، مفتاحه عدّى فحص السيرفر، ووافق على أرقامه، هيبدأ يتداول بفلوسه الحقيقية خلال دقيقة."
+      : "تقفل الفلوس الحقيقية للمستخدمين؟\n\nمفيش بوت فلوس حقيقية هيبدأ، واللي شغّالين هيبطّلوا يفتحوا سلات جديدة. صفقاتهم المفتوحة بتخرج على قاعدتها ووقفها."
+    if(!window.confirm(text)) return
+    setBusy(true); setErr("")
+    try { await apiSetAdminUsersLive(on); await load() } catch(e: any) { setErr(e.message || "ما اتحفظش") } finally { setBusy(false) }
+  }
+  return (
+    <Card className={s.on ? "border-loss/45" : undefined}>
+      <CardHeader title="فلوس حقيقية للمستخدمين المدعوين" action={<Pill tone={s.on ? "loss" : "neutral"}>{s.on ? "مفتوحة" : "مقفولة"}</Pill>}
+        sub="momentum بس · كل واحد بمفاتيحه وأرقامه وموافقته · السيرفر بيشوف الزرار ده كل دقيقة" />
+      {s.at && <p className="mb-2 text-[12px] text-faint" dir="ltr" style={{ textAlign: "right" }}>{s.by} · {s.at.slice(0, 16).replace("T", " ")} UTC</p>}
+      {err && <p className="mb-2 text-[13px] text-loss">{err}</p>}
+      <button onClick={flip} disabled={busy} data-testid="users-live-switch" className={s.on ? btn.secondary : btn.primary}>
+        {s.on ? "اقفل الفلوس الحقيقية للمستخدمين" : "افتح الفلوس الحقيقية للمستخدمين"}</button>
+    </Card>
+  )
 }
 
 /** The users who asked for their own bots (Phase 2, Demo only) or that the owner approved: the approval, what the

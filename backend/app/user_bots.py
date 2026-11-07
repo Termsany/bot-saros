@@ -176,6 +176,33 @@ def read_desired(uid, folder=None):
         return None
 
 
+# The owner's day-to-day switch for real money for users, from the admin page (owner, 2026-11-07: no server command).
+# Real money needs both this and root's /etc/raqm-users/live.enabled (the main lock, out of the site's reach): the
+# provisioner reads both every minute. No file = off. Not a .json: read_desired and the admin list read *.json as users.
+SITE_LIVE_SWITCH = "live.switch"
+
+
+def read_site_live(folder=None):
+    """{"on": bool, "by", "at"}: off unless the file says on is exactly true."""
+    doc = read_json((folder or DESIRED) / SITE_LIVE_SWITCH, 4096)
+    if not isinstance(doc, dict):
+        return {"on": False, "by": None, "at": None}
+    return {"on": doc.get("on") is True, "by": doc.get("by") if isinstance(doc.get("by"), str) else None,
+            "at": doc.get("at") if isinstance(doc.get("at"), str) else None}
+
+
+def write_site_live(on, by, folder=None):
+    """Written new and renamed in, group-readable (root's provisioner reads it)."""
+    folder = folder or DESIRED
+    doc = {"on": on is True, "by": str(by)[:200], "at": datetime.now(timezone.utc).isoformat()}
+    tmp = folder / ".live.switch.tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o640)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(doc))
+    os.replace(tmp, folder / SITE_LIVE_SWITCH)
+    return doc
+
+
 def read_json(path, limit=1 << 20):
     """A file a user's bot wrote: a small regular file, not followed through a link (a bot could point its status at
     another user's or the owner's), opened non-blocking (a FIFO in its place must not freeze the API). None otherwise."""
