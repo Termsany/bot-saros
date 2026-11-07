@@ -11,6 +11,9 @@ function api(state: { on: boolean }){
     if (c.path === "/api/admin/users-live" && c.method === "GET")
       return { on: state.on, by: state.on ? "admin@example.com" : null, at: state.on ? "2026-11-07T09:00:00+00:00" : null }
     if (c.path === "/api/admin/users-live" && c.method === "POST") { state.on = c.body.on; return { ok: true, on: state.on } }
+    if (c.path === "/api/admin/user-bots") return { max_users: 4, approved: 0, users: [
+      { user_id: "e8a3ec73-a62c-42c1-afa1-90a96e3aa75d", email: "second@example.com", approved: false, bots: {},
+        provision: { state: "waiting_approval" }, desired: { env: "live", strategies: ["momentum_ls"], capital_usdt: 405, capital_margin_override_usdt: 36 } }] }
     return undefined
   }
 }
@@ -31,4 +34,14 @@ test("the owner opens real money for invited users after a warning, and can clos
   page.once("dialog", d => { expect(d.message()).toContain("هيبطّلوا يفتحوا سلات جديدة"); d.accept() })
   await page.getByTestId("users-live-switch").click()
   await expect(page.getByText("مقفولة", { exact: true })).toBeVisible()
+})
+
+test("the users' table names each account by its email and says when it's real money", async ({ page, api: a }) => {
+  a.handler = api({ on: false })
+  await page.goto("/admin?tab=real")
+  const who = page.getByTestId("user-bots-who")
+  await expect(who).toContainText("second@example.com")
+  await expect(who).toContainText("e8a3ec73")
+  await expect(page.getByText("حقيقية · 405$ / 36$")).toBeVisible()
+  await expect(page.getByText("بوتات المستخدمين", { exact: true })).toBeVisible()
 })

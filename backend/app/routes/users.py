@@ -237,6 +237,12 @@ async def admin_user_bots(user: dict = Depends(require_admin)):
                     "approved": uid in approved})
     seen = {u["user_id"] for u in out}
     out += [{"user_id": uid, "desired": None, "provision": None, "bots": {}, "approved": True} for uid in approved if uid not in seen]
+    # the account's email, so the owner knows who it is (owner, 2026-11-07); Supabase unreachable: no email, no error
+    from app import admin_users
+    accounts = await admin_users.fetch_gotrue_users()
+    email = {a.get("id"): a.get("email") for a in accounts.get("users") or [] if isinstance(a, dict)}
+    for u in out:
+        u["email"] = email.get(u["user_id"])
     return {"users": out, "max_users": user_bots.MAX_USERS, "approved": len(approved)}
 
 class UserApproveReq(AdminModel):
