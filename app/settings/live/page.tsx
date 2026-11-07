@@ -45,7 +45,7 @@ const T = {
     agreeLive: "وافق على الفلوس الحقيقية",
     agreedLive: (cap?: number | null, mar?: number | null) => `موافق على فلوس حقيقية · راس مال $${cap} · مارجن $${mar} للصفقة`,
     sRiskLive: (lvl: string, worst: string) => `${lvl} · أسوأ أسبوع ${worst}`,
-    liveNote: <><b className="text-loss">فلوس حقيقية</b>: البوت بيتداول بفلوسك على حسابك انت في Binance، وممكن تخسر. المفتاح لازم يكون <b>السحب فيه مقفول</b> و<b>مقفول على IP السيرفر</b> — السيرفر بيتأكد من ده بنفسه قبل أول صفقة، ومفتاح مش كده بيترفض.</>,
+    liveNote: <><b className="text-loss">فلوس حقيقية</b>: البوت بيتداول بفلوسك على حسابك انت في Binance، وممكن تخسر. المفتاح لازم يكون <b>مقفول على IP السيرفر</b> وعليه <b>Reading وFutures بس</b>: السحب والتحويلات والـ Spot/Margin والـ Options كلها مقفولة. السيرفر بيتأكد من ده بنفسه قبل أول صفقة وكل يوم بعدها، ومفتاح مش كده بيترفض والبوت بيبطّل يفتح صفقات.</>,
   },
   en: {
     rLev: "Leverage is 1 to 5", rTrade: "Risk per trade is up to 1%", rMax: "Max open risk is up to 3%", rOrder: "Risk per trade must be below the max open risk",
@@ -81,7 +81,7 @@ const T = {
     agreeLive: "Agree to real money",
     agreedLive: (cap?: number | null, mar?: number | null) => `Agreed to real money · capital $${cap} · margin $${mar} per trade`,
     sRiskLive: (lvl: string, worst: string) => `${lvl} · worst week ${worst}`,
-    liveNote: <><b className="text-loss">Real money</b>: the bot trades your money on your own Binance account, and you can lose. The key must have <b>withdrawals off</b> and be <b>restricted to the server's IP</b> — the server checks this itself before the first trade and refuses a key that isn't.</>,
+    liveNote: <><b className="text-loss">Real money</b>: the bot trades your money on your own Binance account, and you can lose. The key must be <b>restricted to the server's IP</b> with <b>Reading and Futures only</b>: withdrawals, transfers, Spot/Margin and Options all off. The server checks this itself before the first trade and every day after; a key that isn't is refused and the bot stops opening trades.</>,
   },
 }
 
