@@ -485,6 +485,28 @@ volume come in. Same strategy and costs as §24, $26 ×2 per unit.
 - **Decision:** still not real money. The fair candidate worth a forward test is "30-day top 7, no BTC/ETH" on
   Demo at $4 a unit.
 
+### 26. 5–15 minute strategies — none survives costs, not adopted (November 2026)
+
+`research/m5_data.py` (5-minute candles since 2021 for the 102 coins ever in the top 10 by 30-day volume, delisted
+included, from Binance's monthly files; kept on the server in `/opt/raqm-data/research/m5`, 1.3 GB, rerun adds only
+new months) and `research/intraday_study.py`. Each day the previous day's top 10; $100 notional a trade; taker 0.05%
++ 0.02% slippage a side, maker 0.02% (limit fills only when the next bar trades through the price). 24 variants fixed
+before any result:
+
+| family | variants | best gross edge / trade | variants positive after 2024 | in-sample pick, Sharpe after 2024 |
+|---|---|---|---|---|
+| A. 15m Bollinger reversal, limit in (short-term reversal) | 12 | +5.4 bps | 0 / 12 | |
+| B. 15m channel breakout, trailing ATR stop (intraday momentum) | 8 | −4.4 bps | 0 / 8 | |
+| C. 5m shock reversal after a 4–6σ move, limit in | 4 | +11.4 bps | 1 / 4 | **0.02** (+$8 on 4,100 trades) |
+
+- **The edge before costs is a few basis points.** Almost every variant's gross edge is below the cheapest possible
+  round trip (maker both sides, 4 bps); a realistic one (maker in, taker out) costs 9 bps, taker both sides 14.
+- Breakouts lose even before costs (whipsaws on 15m); reversals make 1–5 bps gross, and the costs turn it into a loss.
+- The one survivor (C, 6σ, out after 15 minutes) earned 2.4 bps net in all, Sharpe 0.42 before 2024 and 0.02 after,
+  and its limit fills are optimistic (a shock fills the queue first). It is noise, not an edge.
+- With §16–18 (hourly), the answer is the same at every short timeframe we tried: the edge lives on daily and
+  weekly holds (momentum, trend), where a move is much bigger than the fees.
+
 ## The site now shows only the four paper bots
 
 `research/bots_stats.py` writes `lib/bot-stats.json` (the numbers the site shows); the dashboard's live section and
