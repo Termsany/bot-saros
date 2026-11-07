@@ -8,6 +8,7 @@ from fastapi import APIRouter
 
 from app import main as M
 from app.auth import check_real_money_mfa
+from app import security_alerts
 from app.main import (  # noqa: F401
     AdminModel,
     Depends,
@@ -92,11 +93,14 @@ def _trades_real_money(uid: str) -> bool:
 async def user_keys_save(req: UserSaveKeyReq, user: dict = Depends(require_user)):
     _require_confirmed(user)
     rate_limit(user["id"], "user_keys", 10, 60)
-    if _trades_real_money(user["id"]):          # replacing the key of a real-money bot needs the code
+    real = _trades_real_money(user["id"])
+    if real:                                    # replacing the key of a real-money bot needs the code
         check_real_money_mfa(user)
     from app.user_keys_vault import save_user_keys
     try:
         save_user_keys(user["id"], req.exchange.lower().strip(), req.apiKey.strip(), req.secret.strip(), req.passphrase.strip())
+        if real:
+            security_alerts.user_real_money(user, "غيّر مفتاح حساب بفلوس حقيقية", {"exchange": req.exchange.lower().strip()})
         return {"ok": True}
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -149,6 +153,7 @@ async def user_live_enable(req: UserLiveEnableReq, request: Request, user: dict 
     if req.environment == "live":          # a Demo consent leaves the keys marked as they were
         from app.user_keys_vault import set_user_paper
         set_user_paper(user["id"], ex, False)  # the per-user vault entry itself switches to LIVE too
+        security_alerts.user_real_money(user, "وافق على فلوس حقيقية", {"capital": req.capital_usdt, "margin": req.margin_usdt})
     return {"ok": True}
 
 @router.post("/api/user/live/disable")
@@ -199,9 +204,14 @@ async def user_bots_set(req: UserBotsReq, user: dict = Depends(require_user)):
     if req.env == "live" and req.enabled:      # turning a real-money bot on or changing its numbers; off never asks
         check_real_money_mfa(user)
     try:
-        return {"ok": True, "desired": user_bots.write_desired(user["id"], req.model_dump())}
+        desired = user_bots.write_desired(user["id"], req.model_dump())
     except ValueError as e:
         raise HTTPException(400, str(e))
+    if req.env == "live":
+        security_alerts.user_real_money(user, "شغّل/غيّر بوت فلوس حقيقية" if req.enabled else "وقّف بوت فلوس حقيقية",
+                                        {"capital": desired.get("capital_usdt"), "margin": desired.get("capital_margin_override_usdt"),
+                                         "reserve": desired.get("capital_reserve_pct")} if req.enabled else None)
+    return {"ok": True, "desired": desired}
 
 @router.post("/api/user/bots/close")
 async def user_bots_close(req: UserBotCloseReq, user: dict = Depends(require_user)):
