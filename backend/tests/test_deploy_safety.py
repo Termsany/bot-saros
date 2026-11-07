@@ -26,6 +26,11 @@ class UpdaterTests(unittest.TestCase):
 class SetupLiveTests(unittest.TestCase):
     S = (VPS / "setup-live.sh").read_text(encoding="utf-8")
 
+    def test_the_strategy_files_reach_both_copies(self):
+        # bot.py imports bots/ (one file per strategy): a copy without them can't start
+        self.assertIn('for f in "$T"/bots/*.py; do install -m 644 -o root -g root "$f" "$L/bots/"; done', self.S)
+        self.assertIn('for f in "$L"/bots/*.py; do install -m 644 -o root -g root "$f" "$U/bots/"; done', self.S)
+
     def test_only_key_lines_reach_the_live_env_file(self):
         self.assertIn("^(BINANCE_API_KEY|BINANCE_SECRET|BINANCE_LIVE_ACCOUNT)=", self.S)
         self.assertNotIn('install -o raqmlive -g raqmlive -m 600 "$B/.env.demo"', self.S)   # no whole-file copy

@@ -1,0 +1,155 @@
+"""momentum_ls — cross-sectional momentum on Binance USDT-M: every week (Monday 00:00 UTC) long the 5 strongest and
+short the 5 weakest of the top 50 by volume on their last 2 weeks' return, stop 40%. Live: one basket per rebalance
+through bot._phase2_live_basket. Moved from bot.py unchanged; shared names are read through `bot` (bots/__init__.py)."""
+
+import bot
+import json
+import pandas as pd
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+# weekday 0 = Monday (owner, 2026-11-03): the rebalance follows Binance's weekly candle. The weekday is arbitrary in the
+# backtest too (every 7 days from the data's start) and the results swing with it (PF 1.08–1.22 over the 7 days,
+# Monday 1.15): Monday is a fixed, readable anchor, not a fitted one.
+MOM = {"weeks": 2, "top": 50, "n": 5, "min_days": 60, "stop": 0.40, "every_days": 7, "weekday": 0}
+
+
+def momentum_due(last_iso, today, every_days=MOM["every_days"], weekday=MOM["weekday"]):
+    """The basket is rebuilt at the first cycle after 00:00 UTC on `weekday`; never twice on one day; and if that day
+    was missed (the bot down all day), as soon as `every_days` have passed. No rebalance yet: now. `today` is 00:00 UTC."""
+    if not last_iso:
+        return True
+    last = datetime.fromisoformat(last_iso)
+    if today - last >= pd.Timedelta(days=every_days):
+        return True
+    return weekday is not None and today.weekday() == weekday and last < today
+
+
+def momentum_next(last_iso, every_days=MOM["every_days"], weekday=MOM["weekday"]):
+    """The next rebalance's day (00:00 UTC) after the one recorded: the next `weekday`, within `every_days`."""
+    if not last_iso:
+        return None
+    last = datetime.fromisoformat(last_iso)
+    if weekday is None:
+        return last + pd.Timedelta(days=every_days)
+    return last + pd.Timedelta(days=(weekday - last.weekday()) % 7 or 7)
+
+def momentum_mode():
+    """Paper cross-sectional momentum on Binance: every 7 days rank the top 50 USDT perpetuals by 30-day volume on
+    their last 2 weeks' return, long the strongest 5 and short the weakest 5 for a week, stop 40% —
+    research/pump_momentum_study.py idea 2 (Liu, Tsyvinski & Wu 2022)."""
+    return "momentum_ls" in (bot.CONFIG.get("enabled_strategies") or [])
+
+def momentum_rank(ex):
+    """[(symbol, return over MOM weeks)] weakest first, among the top MOM["top"] by 30-day average USDT volume
+    (crypto perpetuals with >= min_days closed daily candles)."""
+    syms = [s for s, _, _ in bot.listing_markets(ex)]
+    tick = ex.fetch_tickers()
+    cands = sorted(syms, key=lambda s: -float((tick.get(s) or {}).get("quoteVolume") or 0))[:bot.MOM["top"] * 3]
+    rows = []
+    for sym in cands:
+        try:
+            k = ex.fetch_ohlcv(sym, "1d", limit=70)[:-1]          # closed candles only
+            if len(k) < bot.MOM["min_days"]: continue
+            rows.append((sum(r[4] * r[5] for r in k[-30:]) / 30, sym, k[-1][4] / k[-1 - 7 * bot.MOM["weeks"]][4] - 1))
+        except Exception as e: bot.log(f"momentum {sym}: {e}")
+    top = sorted(rows, reverse=True)[:bot.MOM["top"]]
+    return [(sym, ret) for _, sym, ret in sorted(top, key=lambda r: r[2])]
+
+def run_once_momentum(ex):
+    M = bot.MOM; state = bot.load_state(); now = datetime.now(timezone.utc); prices = {}
+    if not bot.CONFIG["paper_trading"]:
+        # a block (recovery, kill switch, unknown position) stops entries only — the live adapters refuse them. The
+        # strategy's own exits still run: returning here left open positions without their signal exits
+        bot.reconcile_live(state, ex)
+        if bot._ENTRY_BLOCK.get("reason"): bot.log(f"⛔ دخول جديد متوقف، الخروج شغّال — {bot._ENTRY_BLOCK['reason']}")
+        bot.process_manual_closes(state, ex, {})   # the site's close button (it waited unanswered for the basket bots)
+    bot.process_paper_closes(state, ex, "momentum")
+    # protective stops during the week (paper; live, the stop order is on the exchange and reconcile_live books its fill —
+    # _paper_close here dropped the live position from the books without closing it on the exchange)
+    for sym, pos in (list(state["positions"].items()) if bot.CONFIG["paper_trading"] else []):
+        try:
+            price = float(ex.fetch_ticker(sym)["last"]); prices[sym] = price
+            hit = price >= pos["sl"] if pos["side"] == "short" else price <= pos["sl"]
+            if hit:
+                pnl = bot._paper_close(ex, state, sym, price, f"وقف {pos['sl']:.6g}"); bot.save_state(state)
+                bot.log(f"🔒 وقف {pos['side']} {sym} @ {price:.6g} PnL {pnl:+.4f}")
+        except Exception as e: bot.log(f"مومنتم {sym}: {e}")
+    # weekly rebalance, at the first cycle after the daily close (00:00 UTC) on Monday (momentum_due)
+    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    last = state.get("mom_last")
+    if bot.momentum_due(last, today, M["every_days"], M.get("weekday")):
+        ranked = bot.momentum_rank(ex)
+        if len(ranked) >= 20:
+            closed = 0.0
+            lev = int(bot.CONFIG.get("leverage", 2)); picks = [(s, r, "short") for s, r in ranked[:M["n"]]] + [(s, r, "long") for s, r in ranked[-M["n"]:]]
+            if not bot.CONFIG["paper_trading"]:
+                exits = []
+                for sym in sorted(state["positions"]):
+                    px = float(ex.fetch_ticker(sym)["last"]); pos = state["positions"][sym]
+                    exits.append({"symbol": sym, "side": "close_" + pos["side"], "action": "exit", "position": pos, "price": px, "order": 0,
+                                  "risk_usdt": 0, "notional_usdt": 0, "correlation_group": bot._correlation_group(sym)})
+                if exits:
+                    closed_result = bot._phase2_live_basket(ex, state, "momentum_ls", "momentum-rebalance-exit", exits, reserve=False)
+                    if not closed_result or closed_result.get("status") != "filled":
+                        bot.save_state(state); return
+                entries = []
+                for sym, ret, side in picks:
+                    px = float(ex.fetch_ticker(sym)["last"]); prices[sym] = px
+                    stop = px * (1 + M["stop"]) if side == "short" else px * (1 - M["stop"])
+                    entries.append(bot._phase2_leg(sym, side, bot.position_size(px), px, stop, None, "momentum_ls", extra={"ret": ret}))
+                result = bot._phase2_live_basket(ex, state, "momentum_ls", "momentum-rebalance-entry", entries)
+                if result and result.get("status") == "filled":
+                    state["mom_last"] = today.isoformat(); state["mom_ranking"] = [{"symbol": s.split(":")[0], "ret": round(r * 100, 1)} for s, r in ranked]; bot.save_state(state)
+                return
+            for sym in list(state["positions"]):
+                try:
+                    price = float(ex.fetch_ticker(sym)["last"]); closed += bot._paper_close(ex, state, sym, price, "تبديل أسبوعي")
+                except Exception as e: bot.log(f"قفل {sym}: {e}")
+            for sym, ret, side in picks:
+                try:
+                    price = float(ex.fetch_ticker(sym)["last"]); prices[sym] = price; q = bot.position_size(price) * lev / price
+                    sl = price * (1 + M["stop"]) if side == "short" else price * (1 - M["stop"])
+                    state["positions"][sym] = {"side": side, "entry": price, "qty": q, "leverage": lev, "time": now.isoformat(),
+                                               "sl": sl, "tp": None, "ret": ret}
+                except Exception as e: bot.log(f"فتح {sym}: {e}")
+            state["mom_last"] = today.isoformat()
+            state["mom_ranking"] = [{"symbol": s.split(":")[0], "ret": round(r * 100, 1)} for s, r in ranked]
+            bot.save_state(state)
+            longs = ", ".join(f"{s.split('/')[0]} {r * 100:+.0f}%" for s, r, sd in picks if sd == "long")
+            shorts = ", ".join(f"{s.split('/')[0]} {r * 100:+.0f}%" for s, r, sd in picks if sd == "short")
+            bot.log(f"🔄 مومنتم: تبديل أسبوعي — قفل {closed:+.4f} | لونج: {longs} | شورت: {shorts}")
+            bot.notify(f"🔄 مومنتم — تبديل أسبوعي (Paper)\nالأسبوع اللي فات: {closed:+.2f}$\n🟢 لونج الأقوى: {longs}\n🔴 شورت الأضعف: {shorts}")
+        else: bot.log(f"مومنتم: {len(ranked)} عملة بس في القائمة — مفيش تبديل")
+    for sym in state["positions"]:
+        if sym not in prices:
+            try: prices[sym] = float(ex.fetch_ticker(sym)["last"])
+            except Exception: pass
+    bot.write_momentum_status(state, prices)
+    bot.log(f"📊 مومنتم: {len(state['positions'])} مفتوحة | PnL محقق {state['stats']['pnl']:+.4f}")
+
+def write_momentum_status(state, prices):
+    out_dir = bot.CONFIG.get("public_dir")
+    if not out_dir: return
+    pos = []
+    for sym, p in state["positions"].items():
+        price = prices.get(sym, p["entry"]); sg = 1 if p["side"] == "long" else -1
+        pnl = sg * (price - p["entry"]) * p["qty"]; margin = p["entry"] * p["qty"] / max(1, int(p.get("leverage", 2)))
+        pos.append({"symbol": sym.split(":")[0], "id": sym.split("/")[0] + "USDT", "side": p["side"], "entry": p["entry"], "price": price,
+                    "qty": p["qty"], "margin": round(margin, 2), "sl": p["sl"], "pnl": round(pnl, 4),
+                    "pnl_pct": round(pnl / margin * 100, 2) if margin else 0, "ret": round(p.get("ret", 0) * 100, 1), "opened": p["time"]})
+    st = state.get("stats", {}); last = state.get("mom_last")
+    data = {"updated": datetime.now(timezone.utc).isoformat(), "mode": "paper" if bot.CONFIG["paper_trading"] else "live", "rules": bot.MOM,
+            "leverage": int(bot.CONFIG.get("leverage", 2)), "margin": bot.CONFIG.get("trade_amount_usdt"), "started": bot.CONFIG.get("started_at"),
+            "last_rebalance": last, "next_rebalance": bot.momentum_next(last).isoformat() if last else None,
+            "stats": {"closed": st.get("trades", 0), "wins": st.get("wins", 0), "losses": st.get("losses", 0),
+                      "realized": round(float(st.get("pnl", 0)), 4), "unrealized": round(sum(x["pnl"] for x in pos), 4), "open": len(pos)},
+            "positions": sorted(pos, key=lambda x: (x["side"], -x["ret"])),
+            "history": [{"symbol": h["symbol"].split(":")[0], "side": h.get("side"), "entry": h["entry"], "exit": h["exit"], "pnl": bot._r4(h.get("pnl")),
+                         "reason": h.get("reason", ""), "time": h.get("time"), "opened": h.get("opened"), "ret": h.get("ret")}
+                        for h in state.get("history", [])[-300:]][::-1]}
+    try:
+        d = Path(out_dir); tmp = d / "momentum.json.tmp"
+        tmp.write_text(json.dumps(data, ensure_ascii=False, default=str), encoding="utf-8"); tmp.replace(d / "momentum.json")
+    except Exception as e: bot.log(f"public momentum status: {e}")

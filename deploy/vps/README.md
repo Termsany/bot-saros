@@ -15,7 +15,7 @@ The daily trend bot runs on its own server (Render's free plan sleeps and loses 
 Update the bot after a change:
 
 ```bash
-scp -r bot.py strategies_*.py trade_card.py assets root@SERVER:/opt/raqm-bot/ && ssh root@SERVER 'chown -R raqm:raqm /opt/raqm-bot/*.py /opt/raqm-bot/assets && systemctl restart raqm-bot'
+scp -r bot.py bots strategies_*.py trade_card.py assets root@SERVER:/opt/raqm-bot/ && ssh root@SERVER 'chown -R raqm:raqm /opt/raqm-bot/*.py /opt/raqm-bot/bots /opt/raqm-bot/assets && systemctl restart raqm-bot'
 ```
 
 Closed trades go to Telegram as an image card (`trade_card.py`, fonts in `assets/fonts`). The card needs Pillow in
