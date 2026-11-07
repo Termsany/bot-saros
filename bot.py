@@ -155,9 +155,27 @@ def _fetch_equity_usdt(ex):
         return None
 
 
+_TRANSFERS = {"rows": None}   # the account's transfers, read by _equity_now just before the balance
+
+
+def _transfers_recent(ex, days=3):
+    """[(epoch ms, usdt)] of the futures wallet's transfers in and out (Binance income TRANSFER) of the last `days`,
+    or None when they can't be read (the risk ledger then leaves its figures as they were). Read only."""
+    if CONFIG.get("paper_trading") or not hasattr(ex, "fapiPrivateGetIncome"):
+        return None
+    try:
+        since = int((time.time() - days * 86400) * 1000)
+        rows = ex.fapiPrivateGetIncome({"incomeType": "TRANSFER", "startTime": since, "limit": 1000}) or []
+        return [(int(r["time"]), float(r["income"])) for r in rows if str(r.get("asset") or "USDT") == "USDT"]
+    except Exception as e:
+        log(f"⚠️ التحويلات مش متاحة من Binance: {type(e).__name__}"); return None
+
+
 def _equity_now(ex):
     """Equity and the instant it was observed, as one pair. The central risk gate refuses a figure with no
-    timestamp (freshness is a real gate, not a formality), so every live entry/equity check must carry both."""
+    timestamp (freshness is a real gate, not a formality), so every live entry/equity check must carry both.
+    The transfers are read first (_TRANSFERS): a transfer already in the balance is then in the list too."""
+    _TRANSFERS["rows"] = _transfers_recent(ex)
     return _fetch_equity_usdt(ex), datetime.now(timezone.utc).isoformat()
 
 def _estimate_trade_risk_usdt(margin_usdt, leverage, entry_price, sl_price):
@@ -1853,7 +1871,7 @@ def reconcile_live(state, ex):
         log(f"⚠️ {_ENTRY_BLOCK['reason']}")
     else:
         try:
-            tripped, kill_reason = riskmgr.update_equity_and_check_kill_switch(RISK_PATH, equity, equity_observed_at=equity_at)
+            tripped, kill_reason = riskmgr.update_equity_and_check_kill_switch(RISK_PATH, equity, equity_observed_at=equity_at, transfers=_TRANSFERS["rows"])
             if tripped:
                 _ENTRY_BLOCK["reason"] = f"Central Risk Manager kill switch is tripped — {kill_reason}"
                 log(f"🛑 {_ENTRY_BLOCK['reason']}")
@@ -2800,7 +2818,7 @@ def _phase2_live_basket(ex, state, strategy, intent, legs, *, reserve=True):
     if equity is None and not is_exit:
         _ENTRY_BLOCK["reason"] = "account equity unavailable — blocking new entries"; return None
     if not is_exit:
-        tripped, reason = riskmgr.update_equity_and_check_kill_switch(RISK_PATH, equity, equity_observed_at=equity_at)
+        tripped, reason = riskmgr.update_equity_and_check_kill_switch(RISK_PATH, equity, equity_observed_at=equity_at, transfers=_TRANSFERS["rows"])
         if tripped:
             _ENTRY_BLOCK["reason"] = f"Central Risk Manager kill switch is tripped — {reason}"; return None
     equity = equity or 1.0
@@ -2996,7 +3014,7 @@ def _single_leg_live_entry(ex, state, symbol, side, margin, price, sl, tp, strat
         _ENTRY_BLOCK["reason"] = "account equity unavailable — blocking new entries"
         return None
     try:
-        tripped, reason = riskmgr.update_equity_and_check_kill_switch(RISK_PATH, equity, equity_observed_at=equity_at)
+        tripped, reason = riskmgr.update_equity_and_check_kill_switch(RISK_PATH, equity, equity_observed_at=equity_at, transfers=_TRANSFERS["rows"])
     except Exception as exc:
         _ENTRY_BLOCK["reason"] = f"risk ledger unavailable — blocking new entries: {exc}"
         return None
