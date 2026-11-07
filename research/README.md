@@ -457,6 +457,34 @@ re-picked weekly by a rule known at the time; only "5 majors" is hindsight.
 - 13 universes were tried, so the best number in each column is partly luck.
 - **Decision:** the ratio trend stays off real money. If tested further, persistent top 7 on Demo.
 
+### 25. The ratio trend without BTC and ETH: better, and it fits a small account, but the drawdown stays (November 2026)
+
+`research/ratio_universe_study.py --no-btc` (owner, 2026-11-07: "can the ratio trend run on a small account?").
+Binance's smallest futures order (checked 2026-11-07): BTC $50, ETH $20, 653 other USDT perpetuals $5. With BTC in,
+a unit can't go below $25 margin at ×2 (why the Demo bot runs $26). Without BTC and ETH, the next coins in line by
+volume come in. Same strategy and costs as §24, $26 ×2 per unit.
+
+| universe | PnL | worst DD | Sharpe < 2024 | Sharpe 2024 → | 2022 | 2026 | max units | DD units |
+|---|---|---|---|---|---|---|---|---|
+| 30-day volume, top 5 | +296 | 829 | 0.15 | 0.13 | −407 | +176 | 12 | 32 |
+| … no BTC/ETH | +1,493 | 690 | **0.59** | 0.59 | −226 | +455 | 12 | 27 |
+| 30-day volume, top 7 (runs now) | +2,455 | 1,273 | 0.59 | 0.64 | −387 | +772 | 24 | 49 |
+| … no BTC/ETH | **+3,324** | 1,301 | **0.62** | **0.86** | −216 | +1,172 | 24 | 50 |
+| persistent top 7 | +1,708 | 588 | 0.14 | 1.27 | −62 | +834 | 24 | 23 |
+| … no BTC/ETH | +2,718 | 1,089 | 0.24 | 1.74 | −578 | +1,446 | 24 | 42 |
+
+- **Taking BTC and ETH out helps in every version.** "30-day top 7, no BTC/ETH" has the best Sharpe before 2024 of
+  any fair universe (0.62), and it holds after (0.86). Picked by the rule of §24 (judge before 2024), it would be
+  chosen. But 17 universes have now been tried on the same data.
+- **It fits a small account.** Capital ≈ (max units + drawdown units) × unit margin. At $4 a unit ($8 notional, above
+  the $5 minimum): (24 + 50) × $4 ≈ **$300**. The PnL scales with the unit: about +$510 over 6.8 years at $4.
+- **The drawdown is the catch.** 50 units is about two thirds of that capital (momentum's worst is 18 margins),
+  lasting from 2021-11 to 2023-08. One coin can carry up to 6 of the 24 units.
+- Not every $5 coin can take an $8 order: a coarse quantity step on a high-priced coin raises its real minimum. A
+  live version must check each coin's step size before it trades.
+- **Decision:** still not real money. The fair candidate worth a forward test is "30-day top 7, no BTC/ETH" on
+  Demo at $4 a unit.
+
 ## The site now shows only the four paper bots
 
 `research/bots_stats.py` writes `lib/bot-stats.json` (the numbers the site shows); the dashboard's live section and

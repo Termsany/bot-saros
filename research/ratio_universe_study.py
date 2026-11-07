@@ -15,7 +15,8 @@ Universes:
 
 The pick: judged before 2024 only; 2024 -> is the check nobody chose with.
 
-  python -X utf8 research/ratio_universe_study.py
+  python -X utf8 research/ratio_universe_study.py            the 13 universes
+  python -X utf8 research/ratio_universe_study.py --no-btc   without BTC and ETH (a small account, §25)
 """
 import sys, math
 from pathlib import Path
@@ -67,6 +68,17 @@ def members_fixed(days, coins, data):
     return pd.Series({d: pick for d in days})
 
 
+def without(members, coins=("BTCUSDT", "ETHUSDT")):
+    """The same weekly pick with these coins taken out and the next ones in line not added: what a small account can
+    hold (Binance's smallest order: BTC $50, ETH $20, almost every other coin $5, checked 2026-11-07)."""
+    return members.map(lambda ms: tuple(c for c in ms if c not in coins) if isinstance(ms, tuple) else ms)
+
+
+def members_top_excluding(rk, days, k, coins=("BTCUSDT", "ETHUSDT")):
+    """The top K by volume among the coins left once these are taken out (the next ones in line come in)."""
+    return members_top(rk.drop(columns=[c for c in coins if c in rk.columns]).rank(axis=1), days, k)
+
+
 def stats(df, label):
     d = df.pnl; eq = d.cumsum(); dd = float((eq.cummax() - eq).max())
     sh = lambda x: round(x.mean() / x.std() * math.sqrt(365), 2) if x.std() else 0.0
@@ -75,7 +87,8 @@ def stats(df, label):
             "pnl/DD": round(d.sum() / dd, 2) if dd else None,
             "Sharpe <2024": sh(d[d.index < CUT]), "Sharpe 2024→": sh(d[d.index >= CUT]),
             "pnl 2024→ $": round(d[d.index >= CUT].sum()), "avg margin $": round(df.gross_units.mean() * AMOUNT),
-            "worst year $": round(yrs.min()), "2022 $": round(yrs.get(2022, 0)), "2026 $": round(yrs.get(2026, 0))}
+            "worst year $": round(yrs.min()), "2022 $": round(yrs.get(2022, 0)), "2026 $": round(yrs.get(2026, 0)),
+            "max units": int(df.gross_units.max()), "DD units": round(dd / AMOUNT)}
 
 
 def main():
@@ -93,6 +106,14 @@ def main():
                       (f"persistent top {k}", members_persistent(r30, days, k)),
                       (f"aged top {k}", members_top(a30, days, k)),
                       (f"aged vol90 top {k}", members_top(a90, days, k))]
+    if "--no-btc" in sys.argv:          # owner, 2026-11-07: can the ratio trend run on a small account?
+        universes = []
+        for k in (5, 7):
+            universes += [(f"vol30 top {k}", members_top(r30, days, k)),
+                          (f"vol30 top {k}, no BTC/ETH (next in line)", members_top_excluding(r30, days, k)),
+                          (f"persistent top {k}", members_persistent(r30, days, k)),
+                          (f"persistent top {k}, no BTC/ETH (next in line)",
+                           members_persistent(r30.drop(columns=["BTCUSDT", "ETHUSDT"]).rank(axis=1), days, k))]
     rows, churn = [], {}
     for label, members in universes:
         sig = rn.signals(C, days, members)
