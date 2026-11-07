@@ -160,9 +160,13 @@ export async function apiUserBotsRisk(capital: number, margin: number, reserve =
   }catch{ return null }
 }
 export async function apiSetUserBots(body: any): Promise<any>{
-  const r=await fetch(`${API}/api/user/bots`, { method:"POST", headers: await authHeaders(JSON_CT), body: JSON.stringify(body) })
+  let r: Response | undefined
+  try{ r = await fetch(`${API}/api/user/bots`, { method:"POST", headers: await authHeaders(JSON_CT), body: JSON.stringify(body) }) }
+  catch{ r = undefined }
+  // a server error answered without CORS headers reaches the page as no answer at all (2026-11-07: "reading 'json'")
+  if(!r) throw new Error("الطلب ما وصلش للسيرفر أو السيرفر وقع — جرّب تاني بعد شوية، ولو اتكرر بلّغ")
   const d = await r.json().catch(()=>({}))
-  if(!r.ok) throw new Error(d.detail || "ما اتحفظش")
+  if(!r.ok) throw new Error(d.detail || (r.status >= 500 ? "حصل خطأ في السيرفر — ما اتحفظش" : "ما اتحفظش"))
   return d
 }
 export async function apiUserBotClose(strategy: string, symbol: string): Promise<{ id: string }>{
