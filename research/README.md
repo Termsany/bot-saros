@@ -507,6 +507,28 @@ before any result:
 - With §16–18 (hourly), the answer is the same at every short timeframe we tried: the edge lives on daily and
   weekly holds (momentum, trend), where a move is much bigger than the fees.
 
+### 27. Hourly strategies that hold hours to days — none holds out-of-sample, not adopted (November 2026)
+
+`research/hourly_trend_study.py`, on hourly candles made from §26's 5m store (cached in
+`/opt/raqm-data/research/h1`). The previous day's top 10; taker 0.05% + 0.02% slippage a side **and each coin's real
+funding for the time held**; an account of at most 5 positions, each 40% of equity as notional, compounding. 20
+variants fixed before any result:
+
+| family | variants | win % | profit factor | gross / funding / net bps a trade | positive after 2024 |
+|---|---|---|---|---|---|
+| P. trend pullback (daily trend + hourly RSI dip, out at RSI 50 / 4 ATR stop / T hours) | 8 | 53–60 | 0.87–0.95 | +1 to −20 / 3–5 / −11 to −30 | 0 / 8 |
+| Q. 72h / 168h channel breakout, trailing ATR | 8 | 37–40 | 0.91–1.03 | −5 to +42 / 2–15 / −22 to +13 | 2 / 8 |
+| R. volatility squeeze breakout, trailing ATR | 4 | 38–39 | 0.98–1.09 | +10 to +29 / 1–5 / −6 to +11 | 0 / 4 |
+
+- **In-sample pick** (R, 3 ATR trail, with the trend: Sharpe 0.85 before 2024) → **Sharpe −0.34, −46% after 2024.**
+- The two variants positive after 2024 (Q 168h, 8 ATR) were negative before it: Sharpe −0.13 / −0.08.
+- **A high win rate isn't profit.** The pullbacks win 53–60% of trades, but the average loss (−4.6 to −5.5%) is
+  bigger than the average win (+3.1 to +3.7%), so every variant loses.
+- The long breakouts do have a gross edge (+24 to +42 bps), but it is the daily trend seen hour by hour: holds of
+  5–6 days, where funding (up to 15 bps) and fees take most of it. The daily trend bot already trades that move.
+- Capital is not the obstacle: at $200 a position is $80 (over the $5 minimum); at $10,000 it is $4,000, a median
+  0.01% of the signal hour's volume. The problem is the edge, not the account size.
+
 ## The site now shows only the four paper bots
 
 `research/bots_stats.py` writes `lib/bot-stats.json` (the numbers the site shows); the dashboard's live section and
