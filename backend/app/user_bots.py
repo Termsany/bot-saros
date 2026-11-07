@@ -19,6 +19,13 @@ ENVS_ALLOWED = ("demo", "live")
 LIVE_STRATEGIES = ("momentum_ls",)
 LIVE_LEVERAGE, LIVE_STOP = 2, 0.40          # the strategy's, not the user's (risk_manager.PLAN_LEVERAGE / PLAN_STOP_LOSS)
 LIVE_MIN_MARGIN = 2.5                       # Binance's smallest order is $5: at x2 a margin below $2.5 buys nothing
+# the share of the capital kept out of trades (risk_manager.capital_plan): the user's choice within these bounds; the
+# whole basket must fit what's left (owner, 2026-11-07: $300, $24 margin needs a 20% reserve)
+LIVE_RESERVE_DEFAULT, LIVE_RESERVE_BOUNDS = 40.0, (10.0, 60.0)
+# the gate measures a trade's risk against the account's balance (at most the capital), not the capital typed: the
+# limits allow the same dollars per stop down to this share of the capital. Below it, no new basket opens until the
+# owner of the account looks (a loss, fees and funding make the balance a little under the capital at once)
+LIVE_EQUITY_FLOOR = 0.8
 MAX_USERS, MAX_STRATEGIES = 4, 10
 STRATEGIES = ("trend_daily", "vol_breakout", "rsi2_pullback", "trend_breakout", "listing_short", "momentum_ls", "ratio_trend")
 STRATEGY_SLOTS = {s: 1 for s in STRATEGIES}
@@ -63,18 +70,25 @@ def _num(v):
     return None if isinstance(v, bool) or not isinstance(v, (int, float)) or v != v or v in (float("inf"), float("-inf")) else float(v)
 
 
-def live_risk(capital, margin, strategies=LIVE_STRATEGIES):
+def live_risk(capital, margin, strategies=LIVE_STRATEGIES, reserve=LIVE_RESERVE_DEFAULT):
     """What a real-money plan costs at its stops, for the user to see and accept: one stop, every leg at its stop at
-    once (the worst week), as $ and % of the capital, and the level on the admin page's scale. None if not a plan."""
-    capital, margin = _num(capital), _num(margin)
-    if not capital or capital <= 0 or not margin or margin <= 0:
+    once (the worst week), as $ and % of the capital, and the level on the admin page's scale. Also whether the whole
+    basket fits the capital after the reserve (max_open, as risk_manager.capital_plan counts it) and the largest margin
+    that fits. None if not a plan."""
+    capital, margin, reserve = _num(capital), _num(margin), _num(reserve)
+    if not capital or capital <= 0 or not margin or margin <= 0 or reserve is None:
         return None
+    import math
     legs = sum(STRATEGY_SLOTS.get(s, 1) for s in strategies) or 1
     one = margin * LIVE_LEVERAGE * LIVE_STOP
     per = one / capital * 100
     level = "low" if per < 1 else "medium" if per < 2 else "high" if per < 5 else "very_high"
+    usable = capital * (1 - reserve / 100)
+    max_open = int(math.floor(usable / margin + 1e-9)) if usable > 0 else 0
     return {"one_stop_usdt": round(one, 2), "per_trade_pct": round(per, 2), "legs": legs,
-            "worst_usdt": round(one * legs, 2), "aggregate_pct": round(per * legs, 2), "level": level}
+            "worst_usdt": round(one * legs, 2), "aggregate_pct": round(per * legs, 2), "level": level,
+            "reserve_pct": reserve, "max_open": max_open, "fits": max_open >= legs,
+            "max_margin": math.floor(usable / legs * 100) / 100 if usable > 0 else 0.0}
 
 
 def _ceil2(x):
@@ -82,9 +96,11 @@ def _ceil2(x):
     return math.ceil(x * 100 - 1e-9) / 100
 
 
-def _validate_live(env, enabled, strategies, doc):
-    """A real-money desired state: momentum only, the user's capital and margin; the limits are computed here from
-    them (never taken from the request), so the gate allows exactly the plan the user accepted."""
+def _validate_live(env, enabled, strategies, doc, fit=True):
+    """A real-money desired state: momentum only, the user's capital, margin and reserve; the limits are computed here
+    from them (never taken from the request), so the gate allows exactly the dollars the user accepted per stop and
+    for the whole basket, down to LIVE_EQUITY_FLOOR of the capital. `fit`: the whole basket must fit the capital after
+    the reserve (a consent alone doesn't choose the reserve, so it is checked without it)."""
     if any(s not in LIVE_STRATEGIES for s in strategies):
         raise ValueError("real money: momentum_ls only")
     capital, margin = _num(doc.get("capital_usdt")), _num(doc.get("capital_margin_override_usdt"))
@@ -92,12 +108,20 @@ def _validate_live(env, enabled, strategies, doc):
         raise ValueError("capital_usdt out of bounds")
     if margin is None or not LIVE_MIN_MARGIN <= margin <= capital:
         raise ValueError("capital_margin_override_usdt out of bounds")
-    r = live_risk(capital, margin, strategies or LIVE_STRATEGIES)
+    raw = doc.get("capital_reserve_pct")
+    reserve = LIVE_RESERVE_DEFAULT if raw is None else _num(raw)
+    if reserve is None or not LIVE_RESERVE_BOUNDS[0] <= reserve <= LIVE_RESERVE_BOUNDS[1]:
+        raise ValueError(f"capital_reserve_pct out of bounds ({LIVE_RESERVE_BOUNDS[0]:g}–{LIVE_RESERVE_BOUNDS[1]:g}%)")
+    r = live_risk(capital, margin, strategies or LIVE_STRATEGIES, reserve)
     if r["aggregate_pct"] > 100:
         raise ValueError("every stop at once would lose more than the capital: lower the margin")
+    if fit and not r["fits"]:
+        raise ValueError(f"the basket of {r['legs']} doesn't fit: with a {reserve:g}% reserve the margin can be at most "
+                         f"${r['max_margin']:g} (or lower the reserve)")
     return {"env": env, "enabled": enabled, "strategies": list(strategies), "leverage": LIVE_LEVERAGE,
-            "risk_per_trade_pct": _ceil2(r["per_trade_pct"]), "max_aggregate_risk_pct": _ceil2(r["aggregate_pct"]),
-            "capital_usdt": capital, "capital_margin_override_usdt": margin, "level": r["level"]}
+            "risk_per_trade_pct": _ceil2(r["per_trade_pct"] / LIVE_EQUITY_FLOOR),
+            "max_aggregate_risk_pct": _ceil2(r["aggregate_pct"] / LIVE_EQUITY_FLOOR),
+            "capital_usdt": capital, "capital_margin_override_usdt": margin, "capital_reserve_pct": reserve, "level": r["level"]}
 
 
 def validate(uid, doc):

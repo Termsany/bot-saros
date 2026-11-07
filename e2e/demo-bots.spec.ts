@@ -68,3 +68,31 @@ test("real money: the user types an amount and a margin, sees the risk, and the 
   expect([sent.environment, sent.capital_usdt, sent.margin_usdt]).toEqual(["live", 1000, 20])
   await expect(page.getByText("4 · البوت بتاعك (فلوس حقيقية)")).toBeVisible()
 })
+
+test("real money: the reserve decides whether the whole basket fits, and it goes with the bot", async ({ page, api: a }) => {
+  // owner, 2026-11-07: $300 at $24 needs a 20% reserve (300 × 80% ÷ 24 = 10); at the default 40% only 7 fit
+  a.handler = async (c: ApiCall) => {
+    if (c.path === "/api/user/bots/risk") {
+      const q = new URLSearchParams(c.query), cap = Number(q.get("capital")), m = Number(q.get("margin")), res = Number(q.get("reserve"))
+      const one = m * 0.8, maxOpen = Math.floor(cap * (1 - res / 100) / m + 1e-9), maxMargin = Math.floor(cap * (1 - res / 100) / 10 * 100) / 100
+      const fits = maxOpen >= 10
+      return { one_stop_usdt: one, per_trade_pct: +(one / cap * 100).toFixed(2), legs: 10, worst_usdt: one * 10,
+               aggregate_pct: +(one * 10 / cap * 100).toFixed(2), level: "very_high", reserve_pct: res, max_open: maxOpen, fits,
+               max_margin: maxMargin, ok: fits, why: fits ? null : `the basket of 10 doesn't fit: with a ${res}% reserve the margin can be at most $${maxMargin}` }
+    }
+    if (c.path === "/api/user/live/status") return { enabled: true, environment: "live", capital_usdt: 300, margin_usdt: 24 }
+    if (c.path === "/api/user/bots" && c.method === "POST") return { ok: true }
+    return api(c)
+  }
+  await page.goto("/settings/live")
+  await expect(page.getByLabel(/راس المال/).first()).toHaveValue("300")
+  await expect(page.getByText(/at most \$18/).first()).toBeVisible()              // 40%: refused before anything is saved
+  await page.getByTestId("live-reserve").fill("20")
+  await expect(page.getByTestId("live-fits")).toHaveText("بيدخل 10 صفقة من 10 في السلة")
+  await expect(page.getByTestId("live-risk")).toContainText("−$192")              // all 10 stops at $24
+  page.once("dialog", d => { expect(d.message()).toContain("احتياطي 20%"); d.accept() })
+  await page.getByRole("button", { name: "شغّل momentum بفلوس حقيقية" }).click()
+  await expect.poll(() => a.calls.filter(c => c.path === "/api/user/bots" && c.method === "POST").length).toBe(1)
+  const sent = a.calls.find(c => c.path === "/api/user/bots" && c.method === "POST")!.body
+  expect([sent.env, sent.capital_usdt, sent.capital_margin_override_usdt, sent.capital_reserve_pct]).toEqual(["live", 300, 24, 20])
+})

@@ -404,9 +404,12 @@ class System:
 
 
 def _limits(d):
-    return {"risk_per_trade_pct": d["risk_per_trade_pct"], "max_aggregate_risk_pct": d["max_aggregate_risk_pct"],
-            "max_correlated_risk_pct": d["max_aggregate_risk_pct"], "capital_usdt": d["capital_usdt"],
-            "capital_margin_override_usdt": d["capital_margin_override_usdt"]}
+    out = {"risk_per_trade_pct": d["risk_per_trade_pct"], "max_aggregate_risk_pct": d["max_aggregate_risk_pct"],
+           "max_correlated_risk_pct": d["max_aggregate_risk_pct"], "capital_usdt": d["capital_usdt"],
+           "capital_margin_override_usdt": d["capital_margin_override_usdt"]}
+    if d.get("capital_reserve_pct") is not None:      # real money: the user's reserve (the whole basket fits after it)
+        out["capital_reserve_pct"] = d["capital_reserve_pct"]
+    return out
 
 
 def apply(actions, keys, sys_=None, log=print):

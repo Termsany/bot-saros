@@ -27,7 +27,7 @@ const T = {
     saveChanges: "احفظ التغييرات", start: "شغّل البوتات", stop: "وقّف البوتات", running: "شغال", notRunning: "مش شغال", blocked: "الدخول متوقف: ",
     noOpen: "مفيش صفقات مفتوحة", head: ["العملة", "الاتجاه", "الدخول", "الربح", ""], close: "اقفل",
     liveTitle: "4 · البوت بتاعك (فلوس حقيقية)", liveSub: "momentum بس · بالمبلغ والمارجن اللي في الخطوة 2 · بيفتح السلة أول ما يشتغل، والتبديل كل اتنين",
-    liveConfirm: (cap: number, m: number) => `⚠️ فلوس حقيقية على حسابك في Binance:\nmomentum · راس المال ${cap}$ · مارجن ${m}$ للصفقة\nبيفتح السلة أول ما يشتغل.`,
+    liveConfirm: (cap: number, m: number, r: number) => `⚠️ فلوس حقيقية على حسابك في Binance:\nmomentum · راس المال ${cap}$ · مارجن ${m}$ للصفقة · احتياطي ${r}%\nبيفتح السلة أول ما يشتغل.`,
     liveNeedConsent: "وافق على الفلوس الحقيقية بالأرقام دي في الخطوة 3 الأول.", liveStart: "شغّل momentum بفلوس حقيقية" },
   en: { na: "Not available right now", pickOne: "Pick at least one strategy", marginRule: "The margin per trade must be above zero and not more than the capital",
     confirmOn: (names: string, cap: number, m: number) => `Run on Binance Demo (play money):\n${names}\nCapital $${cap} · margin $${m} per trade`, confirmOff: "Stop the bots? Open trades exit on their own rule.",
@@ -37,7 +37,7 @@ const T = {
     saveChanges: "Save changes", start: "Start the bots", stop: "Stop the bots", running: "Running", notRunning: "Not running", blocked: "Entries stopped: ",
     noOpen: "No open trades", head: ["Coin", "Side", "Entry", "P&L", ""], close: "Close",
     liveTitle: "4 · Your bot (real money)", liveSub: "momentum only · with step 2's amount and margin · opens its basket as soon as it starts, rebalances every Monday",
-    liveConfirm: (cap: number, m: number) => `⚠️ Real money on your Binance account:\nmomentum · capital $${cap} · margin $${m} per trade\nIt opens its basket as soon as it starts.`,
+    liveConfirm: (cap: number, m: number, r: number) => `⚠️ Real money on your Binance account:\nmomentum · capital $${cap} · margin $${m} per trade · reserve ${r}%\nIt opens its basket as soon as it starts.`,
     liveNeedConsent: "Agree to real money with these numbers in step 3 first.", liveStart: "Start momentum with real money" },
 }
 const ANSWER: Record<string, [string, Tone, string]> = {
@@ -56,9 +56,9 @@ const money = (v?: number|null) => v == null ? "—" : `${v < 0 ? "−" : ""}$${
 
 /** A user's own strategies on their own Binance Demo account: choose up to the allowed number, capital and margin;
  *  the server's provisioner runs each as the owner's bot does, after the owner approves the account. */
-export function UserBots({ consent, locale = "ar", money: mode = "demo", liveCapital = 0, liveMargin = 0, liveConsented = false }: {
+export function UserBots({ consent, locale = "ar", money: mode = "demo", liveCapital = 0, liveMargin = 0, liveReserve = 40, liveConsented = false }: {
   consent: { enabled: boolean, leverage?: number, risk_per_trade_pct?: number, max_aggregate_risk_pct?: number }, locale?: Locale,
-  money?: "demo" | "live", liveCapital?: number, liveMargin?: number, liveConsented?: boolean }){
+  money?: "demo" | "live", liveCapital?: number, liveMargin?: number, liveReserve?: number, liveConsented?: boolean }){
   const live = mode === "live"
   const t = T[locale], en = locale === "en"
   const LABELS = en ? NAME_EN : NAME_AR
@@ -93,11 +93,11 @@ export function UserBots({ consent, locale = "ar", money: mode = "demo", liveCap
   async function save(on: boolean){
     if(live){                 // real money: momentum, step 2's numbers (the server computes the limits from them)
       if(on && !liveConsented){ setMsg(t.liveNeedConsent); return }
-      if(!confirm(on ? t.liveConfirm(liveCapital, liveMargin) : t.confirmOff)) return
+      if(!confirm(on ? t.liveConfirm(liveCapital, liveMargin, liveReserve) : t.confirmOff)) return
       setBusy(true); setMsg("")
       try{
         await apiSetUserBots({ env: "live", enabled: on, strategies: ["momentum_ls"], leverage: 2, risk_per_trade_pct: 1, max_aggregate_risk_pct: 3,
-          capital_usdt: liveCapital, capital_margin_override_usdt: liveMargin })
+          capital_usdt: liveCapital, capital_margin_override_usdt: liveMargin, capital_reserve_pct: liveReserve })
         setMsg(on ? t.savedOn : t.savedOff); load()
       }catch(e: any){ setMsg(`⚠️ ${e.message}`) }
       finally{ setBusy(false) }

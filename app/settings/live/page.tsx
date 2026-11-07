@@ -34,6 +34,9 @@ const T = {
     mDemo: "Demo · فلوس وهمية", mLive: "فلوس حقيقية", mLiveNote: "بالدعوة بس · momentum بس · على حسابك انت في Binance",
     cAmount: "2 · المبلغ والمارجن", cAmountSub: "انت اللي بتحددهم · السيرفر بيحسب الخطورة ومش بيقبل غير اللي وافقت عليه",
     capital: "راس المال ($) — مش أكتر من رصيدك على Binance", marginL: "المارجن لكل صفقة ($)",
+    reserveL: "الاحتياطي (%) — برّه الصفقات",
+    fits: (n: number, legs: number) => `بيدخل ${n} صفقة من ${legs} في السلة`,
+    floorNote: (pct: number) => `لو رصيدك نزل تحت ${pct}% من راس المال، البوت مش بيفتح سلة جديدة لحد ما تراجع (الوقفات والخروج شغالين)`,
     size: "حجم الصفقة", oneStop: "لو الوقف اتضرب في صفقة", worst: (n: number) => `أسوأ أسبوع (الـ ${n} وقفات)`, ofCapital: "من راس المال",
     levels: { low: "خطورة منخفضة", medium: "خطورة متوسطة", high: "خطورة عالية", very_high: "خطورة عالية جدًا" } as Record<string, string>,
     lCalc: "بيحسب…", lNeed: "اكتب راس المال والمارجن",
@@ -67,6 +70,9 @@ const T = {
     mDemo: "Demo · play money", mLive: "Real money", mLiveNote: "By invitation · momentum only · on your own Binance account",
     cAmount: "2 · Amount and margin", cAmountSub: "You set them · the server computes the risk and holds you to what you accepted",
     capital: "Capital ($) — not more than your Binance balance", marginL: "Margin per trade ($)",
+    reserveL: "Reserve (%) — kept out of trades",
+    fits: (n: number, legs: number) => `${n} of the basket's ${legs} trades fit`,
+    floorNote: (pct: number) => `If your balance falls under ${pct}% of the capital, the bot opens no new basket until you look (stops and exits keep working)`,
     size: "Trade size", oneStop: "If one trade's stop is hit", worst: (n: number) => `Worst week (all ${n} stops)`, ofCapital: "of the capital",
     levels: { low: "Low risk", medium: "Medium risk", high: "High risk", very_high: "Very high risk" } as Record<string, string>,
     lCalc: "Computing…", lNeed: "Enter the capital and the margin",
@@ -117,17 +123,18 @@ export default function UserLiveSettingsPage() {
   const [money, setMoney] = useState<"demo" | "live">("demo")
   const [capital, setCapital] = useState("1000")
   const [margin, setMargin] = useState("20")
+  const [reserve, setReserve] = useState("40")      // user_bots.LIVE_RESERVE_DEFAULT; the whole basket must fit after it
   const [risk, setRisk] = useState<LiveRisk | null>(null)
   const [riskBusy, setRiskBusy] = useState(false)
   const live = money === "live"
   useEffect(() => {           // the risk of the numbers typed, from the server (the same numbers it will hold the user to)
     if (!live) return
-    const cap = Number(capital), mar = Number(margin)
-    if (!(cap > 0 && mar > 0)) { setRisk(null); return }
+    const cap = Number(capital), mar = Number(margin), res = Number(reserve)
+    if (!(cap > 0 && mar > 0) || reserve === "" || !(res >= 0)) { setRisk(null); return }
     setRiskBusy(true)
-    const id = setTimeout(async () => { setRisk(await apiUserBotsRisk(cap, mar)); setRiskBusy(false) }, 300)
+    const id = setTimeout(async () => { setRisk(await apiUserBotsRisk(cap, mar, res)); setRiskBusy(false) }, 300)
     return () => clearTimeout(id)
-  }, [live, capital, margin])
+  }, [live, capital, margin, reserve])
   const usd = (v: number) => `$${v.toLocaleString("en-US", { maximumFractionDigits: 2 })}`
   const liveRiskError = !(Number(capital) > 0 && Number(margin) > 0) ? t.lNeed : riskBusy || !risk ? t.lCalc : !risk.ok ? (risk.why || t.lNeed) : ""
   const demoRiskError = !(leverage >= 1 && leverage <= 5) ? t.rLev
@@ -149,6 +156,10 @@ export default function UserLiveSettingsPage() {
           setMoney("live"); setCapital(String(ls.capital_usdt)); setMargin(String(ls.margin_usdt))
         }
       }
+    } catch {}
+    try {   // the reserve saved with the bots (it isn't part of the consent: it changes how many trades fit, not a stop's cost)
+      const r3 = await fetch(`${API}/api/user/bots`, { headers: await authHeaders() })
+      if (r3.ok) { const b = await r3.json(); if (b?.desired?.env === "live" && b.desired.capital_reserve_pct != null) setReserve(String(b.desired.capital_reserve_pct)) }
     } catch {}
   }
   useEffect(() => { loadStatus() }, [])
@@ -298,11 +309,13 @@ export default function UserLiveSettingsPage() {
           {live ? (
           <Card className="border-loss/30">
             <CardHeader title={t.cAmount} sub={t.cAmountSub} action={risk?.ok && <Pill tone={risk.level === "low" ? "profit" : risk.level === "medium" ? "corona" : "loss"}>{t.levels[risk.level]}</Pill>}/>
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className="grid gap-3 sm:grid-cols-3">
               <label className="block"><span className={label}>{t.capital}</span>
                 <input type="number" min={0} inputMode="decimal" value={capital} onChange={e => setCapital(e.target.value)} className={`${field} font-mono`} dir="ltr"/></label>
               <label className="block"><span className={label}>{t.marginL}</span>
                 <input type="number" min={0} inputMode="decimal" value={margin} onChange={e => setMargin(e.target.value)} className={`${field} font-mono`} dir="ltr"/></label>
+              <label className="block"><span className={label}>{t.reserveL}</span>
+                <input type="number" min={10} max={60} step={5} inputMode="decimal" value={reserve} onChange={e => setReserve(e.target.value)} className={`${field} font-mono`} dir="ltr" data-testid="live-reserve"/></label>
             </div>
             {risk && risk.ok ? (
               <div className="mt-4 grid gap-2 sm:grid-cols-3" data-testid="live-risk">
@@ -316,7 +329,9 @@ export default function UserLiveSettingsPage() {
                 ))}
               </div>
             ) : <div className={`mt-4 rounded-xl px-4 py-3 text-[13px] ${riskError && riskError !== t.lCalc ? "bg-loss/10 text-loss" : "bg-surface2 text-muted"}`}>{riskError}</div>}
-            <p className="mt-3 text-[12px] text-faint">{t.minNote}</p>
+            {risk && risk.ok && <p className="mt-3 text-[12px] text-muted" data-testid="live-fits">{t.fits(Math.min(risk.max_open, risk.legs), risk.legs)}</p>}
+            <p className="mt-2 text-[12px] text-faint">{t.floorNote(80)}</p>
+            <p className="mt-1 text-[12px] text-faint">{t.minNote}</p>
           </Card>
           ) : (
           <Card>
@@ -362,7 +377,7 @@ export default function UserLiveSettingsPage() {
             )}
           </Card>
 
-          <UserBots consent={liveStatus} locale={locale} money={money} liveCapital={Number(capital)} liveMargin={Number(margin)} liveConsented={consented && live} />
+          <UserBots consent={liveStatus} locale={locale} money={money} liveCapital={Number(capital)} liveMargin={Number(margin)} liveReserve={Number(reserve)} liveConsented={consented && live && !!risk?.ok} />
         </div>
 
         <Card>
