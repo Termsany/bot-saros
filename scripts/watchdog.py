@@ -25,6 +25,7 @@ STATE = ROOT / "state" / "watchdog.json"
 HEARTBEAT = IPC / "watchdog_heartbeat.json"   # read by the API's public /api/health/bots, for a check from outside the server
 STALE_S = 300            # the bots write their status every minute
 ENV_NAME = {"demo": "Demo", "live": "فلوس حقيقية"}
+FOREIGN = "صفقات على المنصة البوت مفتحهاش"   # bot.py reconcile_live's entry block for a position it didn't open
 
 
 def unit(env, strategy):
@@ -54,7 +55,13 @@ def check_bot(out, now, key, who, env, active, status_path):
     if st.get("review"):
         out[f"review:{key}"] = (f"{who} محتاج مراجعة: " + " · ".join(f"{k.split(':')[0]} ({(v or {}).get('reason')})" for k, v in st["review"].items()), 1)
     block = st.get("entry_block") or ""
-    if block and "kill switch" not in block:          # the kill switch has its own alert, once per account
+    if block and FOREIGN in block and env == "live":
+        # a position the bot didn't open on a real account (owner, 2026-11-07: a manual EVAA trade stopped every entry
+        # for hours before the alert): at the first check, saying what it blocks and what to do
+        coins = block.split(FOREIGN, 1)[1].strip(" :")
+        out[f"foreign:{key}"] = (f"صفقة على حساب {who} البوت ما فتحهاش: {coins} — البوت وقف أي دخول جديد، والتبديل الجاي "
+                                 f"هيقفل السلة القديمة ومش هيفتح الجديدة. اقفلها وامسح أي أمر مفتوح عليها (الحساب ده للبوت لوحده)", 1)
+    elif block and "kill switch" not in block:        # the kill switch has its own alert, once per account
         out[f"block:{key}"] = (f"الدخول متوقف في {who}: {block}", 2)
     return st
 

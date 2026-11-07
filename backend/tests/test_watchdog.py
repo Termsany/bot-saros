@@ -28,6 +28,23 @@ class WatchdogTests(unittest.TestCase):
     def seen(self):
         return wd.problems(NOW, unit=lambda env, s: self.units.get((env, s), (False, False)), ipc=self.ipc, ledgers=self.ledgers)
 
+    def test_a_position_the_bot_didnt_open_on_real_money_is_alerted_at_once_with_what_to_do(self):
+        # owner, 2026-11-07: a manual EVAA trade on the real account stopped every entry for hours before the alert
+        rm.save_risk_state(self.ledgers["live"] / "risk_state.json", rm._default_state())
+        self.units[("live", "momentum_ls")] = (True, True)
+        self.status("momentum_ls", env="live", entry_block="صفقات على المنصة البوت مفتحهاش: EVAA/USDT")
+        out = self.seen()
+        self.assertIn("foreign:live:momentum_ls", out); self.assertNotIn("block:live:momentum_ls", out)
+        text, need = out["foreign:live:momentum_ls"]
+        self.assertEqual(need, 1)                                                   # the first check, not the second
+        self.assertIn("EVAA/USDT", text); self.assertIn("مش هيفتح الجديدة", text); self.assertIn("امسح أي أمر مفتوح", text)
+        _, msgs = wd.step({}, out)
+        self.assertTrue(any("EVAA/USDT" in m for m in msgs))                        # sent on this very run
+        self.status("momentum_ls", env="demo", entry_block="صفقات على المنصة البوت مفتحهاش: X/USDT")
+        self.units[("live", "momentum_ls")] = (False, False); self.units[("demo", "momentum_ls")] = (True, True)
+        out = self.seen()
+        self.assertNotIn("foreign:demo:momentum_ls", out); self.assertEqual(out["block:demo:momentum_ls"][1], 2)   # Demo: as before
+
     def test_healthy_bots_send_nothing(self):
         self.assertEqual(self.seen(), {})
 
