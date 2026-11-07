@@ -159,10 +159,10 @@ export async function apiUserBots(): Promise<any|null>{
 export type LiveRisk = { one_stop_usdt: number, per_trade_pct: number, legs: number, worst_usdt: number, aggregate_pct: number,
   level: "low" | "medium" | "high" | "very_high", ok: boolean, why: string | null,
   reserve_pct: number, max_open: number, fits: boolean, max_margin: number }   // the whole basket after the reserve
-export async function apiUserBotsRisk(capital: number, margin: number, reserve = 40): Promise<LiveRisk | null>{
+export async function apiUserBotsRisk(capital: number, margin: number, reserve = 40, strategies: string[] = ["momentum_ls"]): Promise<LiveRisk | null>{
   try{
     const headers = await signedInHeaders(); if(!headers) return null
-    const q = new URLSearchParams({ capital: String(capital), margin: String(margin), reserve: String(reserve) })
+    const q = new URLSearchParams({ capital: String(capital), margin: String(margin), reserve: String(reserve), strategies: strategies.join(",") })
     const r = await fetch(`${API}/api/user/bots/risk?${q}`, { headers, cache: "no-store" })
     return r.ok ? r.json() : null
   }catch{ return null }

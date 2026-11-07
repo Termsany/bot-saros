@@ -71,7 +71,8 @@ class UserBotsApiTests(ApiAuthTests):
         r = self.c.get("/api/user/bots", headers=self.h("u1-token")).json()
         self.assertEqual(r["provision"]["state"], "waiting_approval")
         self.assertTrue(r["bots"]["trend_daily"]["running"]); self.assertEqual(r["rules"]["envs"], ["demo", "live"])
-        self.assertEqual(r["rules"]["live"]["strategies"], ["momentum_ls"])          # real money: momentum only
+        self.assertEqual(r["rules"]["live"]["strategies"], ["momentum_ls", "rsi2_pullback"])   # real money: momentum, RSI-2
+        self.assertEqual(r["rules"]["live"]["slots"], {"momentum_ls": 10, "rsi2_pullback": 10})
         self.assertEqual(self.c.get("/api/user/bots", headers=self.h("u2-token")).json()["bots"], {})
 
     def test_close_only_an_open_position_of_a_running_bot_of_ones_own(self):
@@ -216,6 +217,31 @@ class UserBotsApiTests(ApiAuthTests):
         with mock.patch.object(self.m, "live_trading_allowed", return_value=True), \
              mock.patch("app.routes.users.live_trading_allowed", return_value=True, create=True):
             self.assertEqual(self.c.post("/api/user/live/enable", headers=self.h("u1-token"), json=body).status_code, 200)
+
+    def test_rsi2_with_momentum_doubles_the_worst_case_and_the_consent_keeps_the_choice(self):
+        # owner, 2026-11-07: RSI-2 + the BTC filter for real money next to momentum, one or both (research §28)
+        from app.user_keys_vault import save_user_keys
+        from app.user_live_activation import CONSENT_TEXT
+        q = lambda s: self.c.get("/api/user/bots/risk", params={"capital": 2000, "margin": 20, "strategies": s}, headers=self.h("u1-token"))
+        both, rsi2 = q("rsi2_pullback,momentum_ls").json(), q("rsi2_pullback").json()
+        self.assertEqual((both["legs"], both["worst_usdt"], both["ok"]), (20, 320.0, True))
+        self.assertEqual((rsi2["legs"], rsi2["worst_usdt"]), (10, 160.0))
+        self.assertEqual(q("trend_daily").status_code, 400); self.assertEqual(q("").status_code, 400)
+        save_user_keys(U1, "binance", "k", "s")
+        body = {"exchange": "binance", "confirm": CONSENT_TEXT, "environment": "live", "capital_usdt": 2000, "margin_usdt": 20}
+        with mock.patch.object(self.m, "live_trading_allowed", return_value=True),              mock.patch("app.routes.users.live_trading_allowed", return_value=True, create=True):
+            self.assertEqual(self.c.post("/api/user/live/enable", headers=self.h("u1-token"), json={**body, "strategies": ["vol_breakout"]}).status_code, 400)
+            self.assertEqual(self.c.post("/api/user/live/enable", headers=self.h("u1-token"), json=body).status_code, 200)
+            self.assertEqual(self.c.get("/api/user/live/status", headers=self.h("u1-token")).json()["strategies"], ["momentum_ls"])   # none named: momentum
+            self.assertEqual(self.c.post("/api/user/live/enable", headers=self.h("u1-token"),
+                                         json={**body, "strategies": ["rsi2_pullback", "momentum_ls"]}).status_code, 200)
+        self.assertEqual(self.c.get("/api/user/live/status", headers=self.h("u1-token")).json()["strategies"], ["momentum_ls", "rsi2_pullback"])
+        plan = {"env": "live", "enabled": True, "leverage": 2, "risk_per_trade_pct": 1, "max_aggregate_risk_pct": 3,
+                "strategies": ["rsi2_pullback", "momentum_ls"], "capital_usdt": 2000, "capital_margin_override_usdt": 20}
+        r = self.c.post("/api/user/bots", headers=self.h("u1-token"), json=plan)
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual((r.json()["desired"]["strategies"], r.json()["desired"]["max_aggregate_risk_pct"]), (["momentum_ls", "rsi2_pullback"], 20.0))
+        self.assertEqual(self.c.post("/api/user/bots", headers=self.h("u1-token"), json={**plan, "strategies": ["trend_daily"]}).status_code, 400)
 
     def test_a_real_money_consent_stores_the_accepted_capital_and_margin(self):
         from app.user_keys_vault import save_user_keys

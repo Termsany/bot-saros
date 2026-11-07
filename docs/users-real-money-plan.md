@@ -4,6 +4,16 @@
 each on their **own Binance account**, **momentum_ls only**, **each user's own capital, margin and accepted risk level** (§3), and a
 bot that **starts on its own** once the keys and the consent are in (no per-account approval click).
 
+**2026-11-07 — RSI-2 with the BTC filter next to momentum (owner's decision):** a user picks momentum, RSI-2 + the
+BTC filter (research §28: new RSI-2 entries only while BTC closes above its 200-day average), or both, in step 2 of
+`/settings/live`. Each runs as its own `raqm-user@<uid>--<strategy>` service on the user's account (RSI-2's gets
+`--rsi2-btc-ma 200`), the shared ledger keeps them off each other's coins, and the open-risk budget is split by
+trades (10 each). The worst case the user sees and accepts is every stop of the chosen strategies at once (20 for
+both); the consent records the strategies it covers, and a plan with a strategy the consent doesn't name asks
+again (a consent from before the choice covers momentum only). **Before anyone's RSI-2 can start, the owner's
+readiness evidence (`/opt/raqm-api/app/readiness_evidence.json`) must cover `rsi2_pullback`** — without it the
+activation record refuses the whole plan and no real bot starts (fail closed).
+
 This changes `docs/development-plan.md` 4.5 ("real money for users", marked 🔒) by the owner's decision. The parts
 of that gate that protect the users' money stay, below, as things the code checks — not as reviews to wait for.
 

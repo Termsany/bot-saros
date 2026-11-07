@@ -208,13 +208,13 @@ class ReadTests(unittest.TestCase):
             con = sqlite3.connect(d / "c.sqlite3")
             con.execute("CREATE TABLE user_live_activation (user_id TEXT, exchange TEXT, enabled INTEGER)")
             con.executemany("INSERT INTO user_live_activation VALUES (?,?,?)", [(U1, "binance", 1), (U2, "binance", 0)]); con.commit(); con.close()
-            self.assertEqual(pu.read_consent(d / "c.sqlite3"), {U1: {"env": "live", "capital": None, "margin": None}})   # before the environment was kept
+            self.assertEqual(pu.read_consent(d / "c.sqlite3"), {U1: {"env": "live", "capital": None, "margin": None, "strategies": ("momentum_ls",)}})   # before the environment was kept
             from backend.app import user_live_activation as ula
             ula.enable_user_live(d / "n.sqlite3", user_id=U2, exchange="binance", confirm=ula.CONSENT_TEXT, actor="t", environment="demo")
-            self.assertEqual(pu.read_consent(d / "n.sqlite3"), {U2: {"env": "demo", "capital": None, "margin": None}})
+            self.assertEqual(pu.read_consent(d / "n.sqlite3"), {U2: {"env": "demo", "capital": None, "margin": None, "strategies": ("momentum_ls",)}})
             ula.enable_user_live(d / "n.sqlite3", user_id=U1, exchange="binance", confirm=ula.CONSENT_TEXT, actor="t", environment="live",
                                  capital_usdt=1000, margin_usdt=20)
-            self.assertEqual(pu.read_consent(d / "n.sqlite3")[U1], {"env": "live", "capital": 1000.0, "margin": 20.0})
+            self.assertEqual(pu.read_consent(d / "n.sqlite3")[U1], {"env": "live", "capital": 1000.0, "margin": 20.0, "strategies": ("momentum_ls",)})
             (d / ".env").write_text(f"OTHER=1\nVAULT_MASTER_KEY={key.decode()}\n", encoding="utf-8")
             vault = {U1: {"binance": {"apiKey": "a", "secret": "b"}}, U2: {"binance": {"apiKey": "a"}}}
             (d / "v.json").write_bytes(Fernet(key).encrypt(json.dumps(vault).encode()))
@@ -351,6 +351,48 @@ class RealMoneyTests(unittest.TestCase):
             self.assertIn(want, t)
         demo = pu.dropin(U1, "trend_daily", pu.validate(U1, doc(U1)))
         self.assertNotIn("ALLOW_LIVE_TRADING", demo); self.assertNotIn("RAQM_CAP_", demo)
+
+    def test_rsi2_runs_with_the_btc_filter_for_real_money_only(self):
+        live = pu.dropin(U1, "rsi2_pullback", pu.validate(U1, doc(U1, **{**self.LIVE, "strategies": ["rsi2_pullback"]})))
+        self.assertIn("--strategy rsi2_pullback", live); self.assertIn("--rsi2-btc-ma 200", live)
+        demo = pu.dropin(U1, "rsi2_pullback", pu.validate(U1, doc(U1, strategies=["rsi2_pullback"])))
+        self.assertNotIn("--rsi2-btc-ma", demo)
+        self.assertNotIn("--rsi2-btc-ma", pu.dropin(U1, "momentum_ls", pu.validate(U1, doc(U1, **self.LIVE))))
+
+    def test_a_consent_covers_only_the_strategies_it_names(self):
+        both = pu.validate(U1, doc(U1, **{**self.LIVE, "capital_usdt": 2000, "strategies": ["momentum_ls", "rsi2_pullback"]}))
+        old = {U1: {"env": "live", "capital": 2000.0, "margin": 20.0}}                         # from before the choice: momentum
+        acts = self.plan(consent=old, desired={U1: both})
+        self.assertNotIn("ensure", [a[0] for a in acts]); self.assertEqual(self.state(acts)["state"], "no_consent")
+        ok = {U1: {**old[U1], "strategies": ("momentum_ls", "rsi2_pullback")}}
+        acts = self.plan(consent=ok, desired={U1: both})
+        self.assertEqual({a[2] for a in acts if a[0] == "ensure"}, {"momentum_ls", "rsi2_pullback"})
+        only = pu.validate(U1, doc(U1, **{**self.LIVE, "capital_usdt": 2000, "strategies": ["rsi2_pullback"]}))
+        self.assertIn(("ensure", U1, "rsi2_pullback"), [a[:3] for a in self.plan(consent=ok, desired={U1: only})])   # less than accepted
+        self.assertEqual(self.state(self.plan(consent={U1: {**old[U1], "strategies": ()}}, desired={U1: only}))["state"], "no_consent")
+
+    def test_both_strategies_share_the_risk_budget_by_their_trades(self):
+        from app import user_bots as ub
+        self.assertEqual(ub.live_allocation(["momentum_ls", "rsi2_pullback"]), {"momentum_ls": 0.5, "rsi2_pullback": 0.5})
+        self.assertEqual(ub.live_allocation(["momentum_ls"]), {"momentum_ls": 1.0})
+        self.assertEqual(ub.live_strategies("rsi2_pullback, momentum_ls"), ("momentum_ls", "rsi2_pullback"))
+        for bad in ([], "", ["momentum_ls", "momentum_ls"], ["trend_daily"], [1]):
+            with self.assertRaises(ValueError): ub.live_strategies(bad)
+        r = ub.live_risk(300, 24, ["momentum_ls", "rsi2_pullback"], reserve=20)
+        self.assertEqual((r["legs"], r["fits"], r["max_margin"]), (20, False, 12.0))           # $300 at $24 fits one strategy, not two
+
+    def test_a_consent_record_names_its_strategies(self):
+        from backend.app import user_live_activation as ula
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
+            db = Path(d) / "n.sqlite3"
+            ula.enable_user_live(db, user_id=U1, exchange="binance", confirm=ula.CONSENT_TEXT, actor="t", environment="live",
+                                 capital_usdt=2000, margin_usdt=20, strategies=["rsi2_pullback"])
+            self.assertEqual(pu.read_consent(db)[U1]["strategies"], ("rsi2_pullback",))
+            with self.assertRaises(ValueError):
+                ula.enable_user_live(db, user_id=U1, exchange="binance", confirm=ula.CONSENT_TEXT, actor="t", environment="live",
+                                     capital_usdt=2000, margin_usdt=20, strategies=["listing_short"])
+        self.assertEqual(ula.consent_strategies({"strategies": None}), ("momentum_ls",))
+        self.assertEqual(ula.consent_strategies({"strategies": "not json"}), ())
 
     def test_the_switch_is_roots_regular_file_only(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
