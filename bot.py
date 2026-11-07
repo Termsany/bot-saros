@@ -308,6 +308,7 @@ def notify(text):
     connection waits out the IPv6 attempt first) never holds up the trading cycle."""
     tok, chat = os.getenv("TELEGRAM_BOT_TOKEN", ""), os.getenv("TELEGRAM_CHAT_ID", "")
     if not (CONFIG.get("notify") and tok and chat): return
+    if CONFIG.get("label"): text = f"[{CONFIG['label']}] {text}"     # a second bot of the same strategy says which
     _tg_put((tok, chat, text))
 
 def _tg_put(item):
@@ -325,7 +326,7 @@ def notify_trade(h):
     try:
         import trade_card
         env = "paper" if CONFIG.get("paper_trading") else ("live" if binance_env() == "live" else "demo")
-        card = trade_card.build(h, strategy=_current_strategy_name(), env=env, leverage=CONFIG.get("leverage", 2))
+        card = trade_card.build(h, strategy=CONFIG.get("label") or _current_strategy_name(), env=env, leverage=CONFIG.get("leverage", 2))
     except Exception as e:
         log(f"trade card: {e}")
         notify(f"🔒 قفل {h.get('symbol')} — {h.get('reason', '')}\nPnL {float(h.get('pnl') or 0):+.2f}$"); return
@@ -671,7 +672,11 @@ def write_momentum_status(state, prices):
         tmp.write_text(json.dumps(data, ensure_ascii=False, default=str), encoding="utf-8"); tmp.replace(d / "momentum.json")
     except Exception as e: log(f"public momentum status: {e}")
 
-RATIO = {"top": 7, "sma": 50, "min_days": 120, "every_days": 7}
+RATIO = {"top": 7, "sma": 50, "min_days": 120, "every_days": 7, "exclude": []}   # exclude: --ratio-exclude (research §25)
+
+def ratio_public_name():
+    """The ratio bot's public file and paper close-request folder: "ratio", or --public-name for a second one."""
+    return CONFIG.get("public_name") or "ratio"
 
 def ratio_mode():
     """HIGH RISK paper experiment: ratio trend on every pair among the top 7 Binance crypto perpetuals by 30-day volume
@@ -687,7 +692,8 @@ def _daily_closed(ex, sym, cache):
 _ratio_rank = {}
 
 def ratio_members(ex, cache):
-    syms = [x for x, _, _ in listing_markets(ex)]
+    skip = {c.upper() for c in RATIO.get("exclude") or []}
+    syms = [x for x, _, _ in listing_markets(ex) if x.split("/")[0].upper() not in skip]   # the next ones in line come in
     tick = ex.fetch_tickers()
     cands = sorted(syms, key=lambda x: -float((tick.get(x) or {}).get("quoteVolume") or 0))[:RATIO["top"] * 3]
     rows = []
@@ -730,7 +736,7 @@ def run_once_ratio(ex):
         reconcile_live(state, ex)
         if _ENTRY_BLOCK.get("reason"): log(f"⛔ دخول جديد متوقف، الخروج شغّال — {_ENTRY_BLOCK['reason']}")
         process_manual_closes(state, ex, {})   # the site's close button (it waited unanswered for the basket bots)
-    process_paper_closes(state, ex, "ratio")
+    process_paper_closes(state, ex, ratio_public_name())
     # every cycle: a leg the exchange closed (its stop, or by hand) leaves the other one unhedged until handled
     if not CONFIG["paper_trading"]:
         # reconcile_live books a leg the exchange closed but leaves the pair: the other leg is then an unhedged
@@ -864,8 +870,8 @@ def write_ratio_status(state, prices):
                          "pnl": _r4(h.get("pnl")), "reason": h.get("reason", ""),
                          "time": h.get("time"), "opened": h.get("opened"), "ranks": h.get("ranks")} for h in state.get("history", [])[-300:]][::-1]}
     try:
-        d = Path(out_dir); tmp = d / "ratio.json.tmp"
-        tmp.write_text(json.dumps(data, ensure_ascii=False, default=str), encoding="utf-8"); tmp.replace(d / "ratio.json")
+        name = ratio_public_name(); d = Path(out_dir); tmp = d / f"{name}.json.tmp"
+        tmp.write_text(json.dumps(data, ensure_ascii=False, default=str), encoding="utf-8"); tmp.replace(d / f"{name}.json")
     except Exception as e: log(f"public ratio status: {e}")
 
 def trend_mode():
@@ -4119,6 +4125,9 @@ if __name__=="__main__":
     p.add_argument("--public", default=None, help="مجلد يتكتب فيه status.json لصفحة البوت العامة (صفقات ونتايج بس)")
     p.add_argument("--expect-env", default=None, choices=["live", "demo", "testnet"],
                    help="refuse to start unless BINANCE_ENV is exactly this (the testnet service passes testnet)")
+    p.add_argument("--ratio-exclude", default="", help="ratio trend: coins left out of the weekly pick, e.g. BTC,ETH (research §25)")
+    p.add_argument("--public-name", default=None, help="a second bot of the same strategy: its public file name (e.g. ratio_nobtc)")
+    p.add_argument("--label", default=None, help="a second bot of the same strategy: its name on Telegram")
     p.add_argument("--state", default=None, help="ملف الحالة (لتشغيل أكتر من بوت في نفس المجلد) — اللوج بيبقى بنفس الاسم .log")
     args=p.parse_args()
     if args.strategy: CONFIG["enabled_strategies"]=[s.strip() for s in args.strategy.split(",") if s.strip()]
@@ -4133,6 +4142,11 @@ if __name__=="__main__":
         CONFIG["max_open_positions"]=max(int(CONFIG["max_open_positions"]), args.universe)
     CONFIG["notify"]=args.notify
     if args.public: CONFIG["public_dir"]=args.public
+    if args.ratio_exclude: RATIO["exclude"]=[c.strip().upper() for c in args.ratio_exclude.split(",") if c.strip()]
+    if args.public_name:
+        if not re.fullmatch(r"[a-z][a-z0-9_]{1,30}", args.public_name): p.error("--public-name: lowercase letters, digits, _")
+        CONFIG["public_name"]=args.public_name
+    if args.label: CONFIG["label"]=args.label[:40]
     if args.state:
         STATE_PATH=Path(__file__).parent / args.state
         LOG_PATH=STATE_PATH.with_suffix(".log")   # next to the state (the live bot keeps both in state/, its code folder is read-only)
