@@ -1,0 +1,28 @@
+[Unit]
+Description=Raqm bot — against the crowd: weekly long/short by Binance's accounts long/short ratio, top 20 by volume (paper experiment, research §29)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=raqm
+Group=raqm
+WorkingDirectory=/opt/raqm-retail-fade
+EnvironmentFile=-/opt/raqm-bot/.env
+Environment=PYTHONUNBUFFERED=1
+# owner, 2026-11-07: a paper bot for the one open-interest idea that held in both periods (research §29) — every
+# Wednesday, among the top 20 by 30-day volume, long the 3 with the lowest all-accounts long/short ratio (last 3 days,
+# hourly), short the 3 with the highest; a week's hold, 40% stop, $20 margin x2 a leg as the study. Own state
+# (state_retail_fade.json / .log), page data -> retail_fade.json, Telegram messages marked [against the crowd].
+# Paper only (bot.py refuses --momentum-retail otherwise): no order reaches an exchange. Its own code folder
+# (deploy/vps/install-retail-fade.sh); it shares the other paper bots' venv and Telegram settings only.
+ExecStart=/opt/raqm-bot/venv/bin/python -E -s bot.py --paper --strategy momentum_ls --momentum-retail --public-name retail_fade --label "against the crowd" --amount 20 --leverage 2 --poll 60 --notify --public /var/www/bot.da3m.io --state state_retail_fade.json
+Restart=always
+RestartSec=30
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/raqm-retail-fade /var/www/bot.da3m.io
+
+[Install]
+WantedBy=multi-user.target

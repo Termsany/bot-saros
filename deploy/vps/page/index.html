@@ -194,6 +194,26 @@
     </table></div>
   </section>
 
+  <section id="rfSec" style="margin-top:44px;border-top:1px solid var(--line);padding-top:26px;display:none">
+    <div class="head"><h2>عكس الأغلبية (نسبة لونج/شورت) — تجربة Paper</h2><span class="count" id="rfUpdated"></span></div>
+    <p class="sub" style="font-size:13px">بوت منفصل من بحث الـ Open Interest (research §29): كل أربع على أعلى 20 عملة فوليوم على Binance، بيعمل لونج على أقل 3 عملات في نسبة لونج/شورت الحسابات (الأغلبية شورت) وشورت على أعلى 3 (الأغلبية لونج)، ويقفلهم ويبدّل بعد أسبوع (وقف 40%). في الاختبار كانت الفكرة الوحيدة اللي كسبت قبل 2024 وبعدها، ومش مرتبطة بالمومنتم — بس اتلقت بعد ما شفنا النتايج، فشغالة Paper عشان نتابعها بس.</p>
+    <div class="kpis" style="margin-top:14px">
+      <div class="card kpi"><div class="label">ربح محقق</div><div class="value mono" id="rfRealized">—</div><div class="note" id="rfWl">—</div></div>
+      <div class="card kpi"><div class="label">ربح الصفقات المفتوحة</div><div class="value mono" id="rfUnreal">—</div><div class="note">بالسعر اللحظي من Binance</div></div>
+      <div class="card kpi"><div class="label">مفتوحة</div><div class="value mono" id="rfOpen" style="font-size:18px">—</div><div class="note" id="rfMargin">—</div></div>
+      <div class="card kpi"><div class="label">التبديل الجاي</div><div class="value mono" id="rfNext" style="font-size:18px">—</div><div class="note" id="rfTotal">—</div></div>
+    </div>
+    <div class="table" style="margin-top:14px"><table>
+      <thead><tr><th>العملة</th><th>الاتجاه</th><th>نسبة لونج/شورت</th><th>الدخول</th><th>السعر الحالي</th><th>الوقف</th><th>الربح $</th><th>على الهامش</th></tr></thead>
+      <tbody id="rfPositions"><tr><td colspan="8" class="empty">بيحمّل…</td></tr></tbody>
+    </table></div>
+    <div class="head" style="margin-top:16px"><h2 style="font-size:14px">اتقفلت</h2><span class="count" id="rfHistCount"></span></div>
+    <div class="table"><table>
+      <thead><tr><th>العملة</th><th>الاتجاه</th><th>الدخول</th><th>الخروج</th><th>الربح $</th><th>السبب</th><th>الوقت</th></tr></thead>
+      <tbody id="rfHistory"><tr><td colspan="7" class="empty">لسه مفيش صفقات اتقفلت</td></tr></tbody>
+    </table></div>
+  </section>
+
   <section id="ratioSec" style="margin-top:44px;border-top:1px solid var(--line);padding-top:26px">
     <div class="head"><h2>Ratio trend بين أكبر العملات <span style="margin-inline-start:8px;font-size:11px;font-weight:700;color:var(--loss);border:1px solid rgba(255,84,112,.45);background:rgba(255,84,112,.1);border-radius:999px;padding:2px 9px">⚠️ HIGH RISK</span></h2><span class="count" id="rsUpdated"></span></div>
     <p class="sub" style="font-size:13px">بوت رابع تجريبي: كل الأزواج بين أعلى 7 عملات فوليوم على Binance (21 زوج). لو نسبة سعر العملتين فوق متوسط 50 يوم: لونج الأولى وشورت التانية، والعكس. <b style="color:var(--loss)">مخاطرته عالية:</b> في الاختبار العادل كان أقصى تراجع 795$ وقلّل نتيجة البوتات التلاتة لما اتضاف ليها — شغال Paper عشان نتابع أداءه بس.</p>
@@ -356,6 +376,9 @@ const EN = {
   "بريك أوت التذبذب (Larry Williams) — تجربة Paper": "Volatility breakout (Larry Williams) — Paper test",
   "بوت خامس منفصل: كل يوم على أعلى 10 عملات فوليوم على Binance اللي قفلت فوق متوسط 20 يوم، بيشتري لو السعر طلع فوق افتتاح اليوم بـ 0.7 من مدى امبارح، ويقفل على افتتاح اليوم اللي بعده. من غير وقف خلال اليوم (اختبار الساعة بيّن إنه بيقلل الربح) — بس وقف أمان 40% قبل التصفية.": "A fifth, separate bot: every day, on the top 10 Binance coins by volume that closed above their 20-day average, it buys if the price rises above the day's open by 0.7 of yesterday's range, and closes at the next day's open. No intraday stop (the hourly test showed it lowers profit) — only a 40% safety stop before liquidation.",
   "مستني اختراق النهارده": "Waiting for today's breakout",
+  "عكس الأغلبية (نسبة لونج/شورت) — تجربة Paper": "Against the crowd (long/short ratio) — Paper test",
+  "بوت منفصل من بحث الـ Open Interest (research §29): كل أربع على أعلى 20 عملة فوليوم على Binance، بيعمل لونج على أقل 3 عملات في نسبة لونج/شورت الحسابات (الأغلبية شورت) وشورت على أعلى 3 (الأغلبية لونج)، ويقفلهم ويبدّل بعد أسبوع (وقف 40%). في الاختبار كانت الفكرة الوحيدة اللي كسبت قبل 2024 وبعدها، ومش مرتبطة بالمومنتم — بس اتلقت بعد ما شفنا النتايج، فشغالة Paper عشان نتابعها بس.": "A separate bot from the open-interest research (research §29): every Wednesday, on the top 20 Binance coins by volume, it goes long the 3 with the lowest accounts' long/short ratio (the crowd is short) and short the 3 with the highest (the crowd is long), and rebalances after a week (40% stop). In the test it was the only idea that made money both before and after 2024, and it doesn't move with momentum — but it was found after looking at the results, so it runs on paper only, to watch it.",
+  "نسبة لونج/شورت": "Long/short ratio",
   "RSI-2 شراء الهبوط (Larry Connors) — تجربة Paper": "RSI-2 buy the dip (Larry Connors) — Paper test",
   "بوت سادس منفصل: كل يوم على أعلى 10 عملات فوليوم فوق متوسط 200 يوم، بيشتري لما RSI-2 ينزل تحت 5 (هبوط حاد في ترند صاعد)، ويقفل أول ما يقفل يومي فوق متوسط 5 أيام أو بعد 10 أيام. وقف 40%.": "A sixth, separate bot: every day, on the top 10 coins by volume above their 200-day average, it buys when RSI-2 drops below 5 (a sharp dip in an uptrend), and closes at the first daily close above the 5-day average or after 10 days. 40% stop.",
   "أقرب عملات لإشارة": "Closest coins to a signal",
@@ -554,7 +577,7 @@ async function loadListing(){
 }
 function bsubscribe(){
   if(!bws || bws.readyState !== 1) return
-  const ids = [...(LS ? LS.positions : []), ...(typeof MS !== "undefined" && MS ? MS.positions : []),
+  const ids = [...(LS ? LS.positions : []), ...(typeof MS !== "undefined" && MS ? MS.positions : []), ...(typeof RF !== "undefined" && RF ? RF.positions : []),
                ...(typeof RS !== "undefined" && RS ? RS.pairs.flatMap(p => [p.long, p.short]) : []),
                ...(typeof RN !== "undefined" && RN ? RN.pairs.flatMap(p => [p.long, p.short]) : []),
                ...(typeof BO !== "undefined" && BO ? BO.positions : []), ...(typeof R2 !== "undefined" && R2 ? R2.positions : []),
@@ -622,6 +645,53 @@ async function loadMomentum(){
 loadMomentum()
 setInterval(loadMomentum, 15000)
 setInterval(() => { if(MS) renderMomentum() }, 1000)
+// ── against the crowd (research §29): retail_fade.json every 15 s, legs priced on the same Binance stream ──
+let RF = null
+function renderRetail(){
+  const sec = $("rfSec")
+  if(!RF){ sec.style.display = "none"; return }
+  sec.style.display = ""
+  const d = RF
+  $("rfUpdated").textContent = `${tx("آخر دورة", "last cycle")} ${ago(d.updated)}`
+  const pos = d.positions.map(p => {
+    const price = blive[p.id] ?? p.price, sg = p.side === "long" ? 1 : -1, pnl = sg * (price - p.entry) * p.qty
+    return { ...p, price, pnl, pnl_pct: p.margin ? pnl / p.margin * 100 : 0 }
+  })
+  const s = d.stats, unreal = pos.reduce((a, p) => a + p.pnl, 0), total = s.realized + unreal
+  $("rfRealized").innerHTML = `<span class="${tone(s.realized)}">${usd(s.realized)}</span>`
+  $("rfWl").textContent = tx(`${s.closed} اتقفلت · ${s.wins} كسبانة / ${s.losses} خسرانة`, `${s.closed} closed · ${s.wins} won / ${s.losses} lost`)
+  $("rfUnreal").innerHTML = `<span class="${tone(unreal)}">${usd(unreal)}</span>`
+  $("rfOpen").textContent = tx(`${pos.filter(p => p.side === "long").length} لونج · ${pos.filter(p => p.side === "short").length} شورت`, `${pos.filter(p => p.side === "long").length} long · ${pos.filter(p => p.side === "short").length} short`)
+  $("rfMargin").textContent = `${tx("هامش مستخدم", "margin in use")} $${pos.reduce((a, p) => a + p.margin, 0).toFixed(0)}`
+  $("rfNext").textContent = d.next_rebalance ? new Date(d.next_rebalance).toLocaleDateString(L === "en" ? "en-GB" : "ar-EG", {weekday: "long", day: "numeric", month: "short", timeZone: "UTC"}) : "—"
+  $("rfTotal").innerHTML = `${tx("الإجمالي", "Total")} <b class="mono ${tone(total)}">${usd(total)}</b>`
+  $("rfPositions").innerHTML = pos.length ? pos.map(p => `<tr>
+      <td class="coin">${esc(p.symbol.replace("/USDT", ""))}</td>
+      <td>${sideTag(p.side)}</td>
+      <td class="num mono">${p.ratio != null ? Number(p.ratio).toFixed(2) : "—"}</td>
+      <td class="num mono">${px(p.entry)}</td>
+      <td class="num mono">${px(p.price)}</td>
+      <td class="num mono" style="color:var(--faint)">${px(p.sl)}</td>
+      <td class="num mono ${tone(p.pnl)}">${usd(p.pnl)}</td>
+      <td class="num mono ${tone(p.pnl_pct)}">${p.pnl_pct > 0 ? "+" : ""}${p.pnl_pct.toFixed(1)}%</td></tr>`).join("")
+    : `<tr><td colspan="8" class="empty">${tx("مفيش صفقات مفتوحة — مستني التبديل الأسبوعي", "No open trades — waiting for the weekly rebalance")}</td></tr>`
+  $("rfHistCount").textContent = d.history.length ? `${tx("آخر", "last")} ${d.history.length}` : ""
+  if(d.history.length) $("rfHistory").innerHTML = d.history.slice(0, 100).map(h => `<tr>
+      <td class="coin">${esc(h.symbol.replace("/USDT", ""))}</td>
+      <td>${sideTag(h.side)}</td>
+      <td class="num mono">${px(h.entry)}</td>
+      <td class="num mono">${px(h.exit)}</td>
+      <td class="num mono ${tone(h.pnl)}">${usd(h.pnl)}</td>
+      <td style="color:var(--muted)">${esc(rsn(h.reason))}</td>
+      <td class="mono" style="color:var(--muted)">${day(h.time)}</td></tr>`).join("")
+}
+async function loadRetail(){
+  try{ const r = await fetch(`retail_fade.json?t=${Date.now()}`, {cache: "no-store"}); if(!r.ok) throw 0; RF = await r.json(); renderRetail(); bsubscribe() }
+  catch{ if(!RF) renderRetail() }
+}
+loadRetail()
+setInterval(loadRetail, 15000)
+setInterval(() => { if(RF) renderRetail() }, 1000)
 // ── HIGH RISK ratio trend (fourth paper bot): ratio.json every 15 s, legs priced on the same Binance stream ──
 let RS = null, RN = null
 function renderRatioInto(k, secId, d){
@@ -735,7 +805,7 @@ setInterval(loadSimple, 15000)
 function renderAll(){
   applyWords()
   if(D){ renderSettings(D); render() }
-  renderListing(); renderMomentum(); renderRatio(); renderBreakout(); renderRsi2(); renderRsi2Btc(); renderTbreak()
+  renderListing(); renderMomentum(); renderRetail(); renderRatio(); renderBreakout(); renderRsi2(); renderRsi2Btc(); renderTbreak()
 }
 $("langBtn").onclick = () => {
   L = L === "ar" ? "en" : "ar"
