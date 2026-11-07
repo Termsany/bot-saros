@@ -25,7 +25,7 @@ readiness evidence. Without any of it nothing real starts. Capacity cap: MAX_USE
 
   /opt/raqm-live/venv/bin/python -E -s /opt/raqm-live/scripts/provision_users.py [--dry-run]
 """
-import json, os, re, sqlite3, stat, subprocess, sys
+import json, os, re, sqlite3, stat, subprocess, sys, time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -181,16 +181,90 @@ def real_money_on(path=LIVE_SWITCH, folder=DESIRED):
     return live_switch_on(path) and site_switch_on(folder)
 
 
-def key_checks(keys):
-    """(ok, why) for a user's real-money key, on Binance itself — the owner's preflight rows (scripts/live_preflight.py):
-    withdrawals off, this server's IP only, futures on, one-way, a balance, no position the bot didn't open."""
-    import live_preflight
-    try:
-        rows = live_preflight.check_binance({"BINANCE_API_KEY": keys[0], "BINANCE_SECRET": keys[1]}, "momentum_ls", None, None, "")
-    except Exception as e:
-        return False, f"key check failed: {type(e).__name__}"
+# A user's key may do only what the bot does: read and trade futures (owner, 2026-11-07). Any of these on = refused.
+EXTRA_PERMISSIONS_OFF = (
+    ("enableInternalTransfer", "key: internal transfer OFF"),
+    ("permitsUniversalTransfer", "key: universal transfer OFF"),
+    ("enableSpotAndMarginTrading", "key: spot & margin trading OFF"),
+    ("enableMargin", "key: margin OFF"),
+    ("enableVanillaOptions", "key: options OFF"),
+    ("enablePortfolioMarginTrading", "key: portfolio margin OFF"),
+)
+KEY_CHECKS = APPLIED / "key-checks.json"   # root's record of each running user's last key check
+RECHECK_S = 24 * 3600                       # a running bot's key is checked again once a day
+RECHECK_REFUSED_S = 600                     # one already refused, every 10 minutes (until it is fixed or stops)
+
+
+def permission_rows(restrictions):
+    """The key's own permissions on Binance (sapi apiRestrictions): withdrawals off, this server's IP only, futures on,
+    and nothing else the bot doesn't use. A field Binance doesn't send is a permission the key can't have."""
+    r = restrictions or {}
+    rows = [("key: withdrawals OFF", r.get("enableWithdrawals") is False, f"enableWithdrawals={r.get('enableWithdrawals')}"),
+            ("key: restricted to this server's IP", r.get("ipRestrict") is True, f"ipRestrict={r.get('ipRestrict')}"),
+            ("key: futures trading on", r.get("enableFutures") is True, f"enableFutures={r.get('enableFutures')}")]
+    rows += [(name, r.get(field) is not True, f"{field}={r.get(field)}") for field, name in EXTRA_PERMISSIONS_OFF]
+    return rows
+
+
+def _restrictions(keys, client=None):
+    if client is None:
+        import ccxt
+        client = ccxt.binance({"apiKey": keys[0], "secret": keys[1], "enableRateLimit": True})
+    return client.sapi_get_account_apirestrictions()
+
+
+def _verdict(rows):
     bad = [name for name, ok, _ in rows if not ok]
     return (not bad and bool(rows)), (", ".join(bad) if bad else None)
+
+
+def key_checks(keys, client=None):
+    """(ok, why) for a user's real-money key, on Binance itself, before its bot starts: the owner's preflight rows
+    (scripts/live_preflight.py: withdrawals off, this server's IP only, futures on, one-way, a balance, no position
+    the bot didn't open) and no permission the bot doesn't use (permission_rows)."""
+    import live_preflight
+    try:
+        rows = list(live_preflight.check_binance({"BINANCE_API_KEY": keys[0], "BINANCE_SECRET": keys[1]}, "momentum_ls", None, None, ""))
+        rows += [r for r in permission_rows(_restrictions(keys, client)) if r[0] not in {x[0] for x in rows}]
+    except Exception as e:
+        return False, f"key check failed: {type(e).__name__}"
+    return _verdict(rows)
+
+
+def recheck_running(uid, keys, checks, now, client=None):
+    """(ok, why) for a running bot's key: its permissions only (its own positions are the bot's), once a day, or every
+    10 minutes once refused. A check that can't reach Binance keeps the last answer and is tried on the next run: a
+    network blip never stops a bot. `checks` (uid -> {at, ok, why}) is updated in place."""
+    last = checks.get(uid) or {}
+    wait = RECHECK_S if last.get("ok", True) else RECHECK_REFUSED_S
+    if last and now - float(last.get("at") or 0) < wait:
+        return bool(last.get("ok", True)), last.get("why")
+    try:
+        ok, why = _verdict(permission_rows(_restrictions(keys, client)))
+    except Exception as e:
+        print(f"key re-check for {uid[:8]}: Binance unreachable ({type(e).__name__}) — keeping the last answer")
+        return bool(last.get("ok", True)), last.get("why")
+    if not ok:
+        print(f"key re-check for {uid[:8]}: refused ({why}) — entries stop; open trades exit on their rules")
+    checks[uid] = {"at": now, "ok": ok, "why": why}
+    return ok, why
+
+
+def read_key_checks(path=None):
+    try:
+        d = json.loads(_read_small(path or KEY_CHECKS, 1 << 20))
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def write_key_checks(checks, path=None):
+    path = path or KEY_CHECKS
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(checks, sort_keys=True), encoding="utf-8")
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
 
 
 def read_keys(uids, vault=VAULT, api_env=API_ENV):
@@ -499,7 +573,7 @@ def main(argv=None):
     sys_ = System()
     running = sys_.running()
     live_on = real_money_on()
-    key_ok = {}
+    key_ok, checks = {}, read_key_checks()
     if live_on:
         try:
             sys_.readiness = (json.loads(_read_small(READINESS, 1 << 20)), _read_small(CODE / "DEPLOYED_COMMIT", 128).strip())
@@ -509,8 +583,8 @@ def main(argv=None):
             if d["env"] != "live" or uid not in keys or uid in owner_key or not consent_ok(consent, uid, "live", d):
                 continue
             d["_commit"] = sys_.readiness[1]          # a new deployment writes the activation record again
-            # a running bot was checked when it started; a new one is checked on Binance now, before anything is written
-            key_ok[uid] = (True, None) if uid in running else key_checks(keys[uid])
+            # a new bot is checked on Binance now, before anything is written; a running one again once a day
+            key_ok[uid] = recheck_running(uid, keys[uid], checks, time.time()) if uid in running else key_checks(keys[uid])
     actions = plan(desired, allow, consent, keys, running, lambda u, s: is_flat(DATA_ROOT / u / "state" / f"{s}.json"), owner_key,
                    live_on=live_on, key_ok=key_ok)
     actions += [("answer", name[:-5], {"state": "refused", "why": why, "strategies": []})
@@ -519,6 +593,8 @@ def main(argv=None):
         for a in actions: print(a[:3])
         return
     apply(actions, keys, sys_)
+    if live_on:
+        write_key_checks({u: c for u, c in checks.items() if u in running})
 
 
 if __name__ == "__main__":

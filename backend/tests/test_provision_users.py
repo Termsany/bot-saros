@@ -1,5 +1,5 @@
 """P2.2 (docs/phase2-design.md): the provisioner that runs users' strategies on the owner's order path, Demo only."""
-import json, os, sqlite3, sys, tempfile, unittest
+import json, os, sqlite3, stat, sys, tempfile, unittest
 from pathlib import Path
 from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent.parent
@@ -15,6 +15,18 @@ def doc(uid, **kw):
          "risk_per_trade_pct": 1.0, "max_aggregate_risk_pct": 3.0, "capital_usdt": 1000, "capital_margin_override_usdt": 20}
     d.update(kw); return d
 
+
+
+class Restrictions:
+    """A fake ccxt client answering Binance's apiRestrictions: a futures-only key by default."""
+    def __init__(self, **over):
+        self.r = {"ipRestrict": True, "enableWithdrawals": False, "enableFutures": True, "enableReading": True,
+                  "enableInternalTransfer": False, "permitsUniversalTransfer": False, "enableSpotAndMarginTrading": False,
+                  "enableMargin": False, "enableVanillaOptions": False, "enablePortfolioMarginTrading": False, **over}
+        self.fail = False
+    def sapi_get_account_apirestrictions(self):
+        if self.fail: raise ConnectionError("down")
+        return dict(self.r)
 
 class ValidateTests(unittest.TestCase):
     def test_real_money_is_momentum_only_on_the_users_own_capital(self):
@@ -367,13 +379,48 @@ class RealMoneyTests(unittest.TestCase):
                 self.assertFalse(pu.real_money_on(folder=d))                          # root's lock alone isn't enough
 
     def test_a_key_failing_any_preflight_row_is_refused_and_says_which(self):
+        good = Restrictions()
         rows = [("key: withdrawals OFF", False, "x"), ("key: restricted to this server's IP", True, "y")]
         with mock.patch("live_preflight.check_binance", return_value=rows):
-            self.assertEqual(pu.key_checks(("k", "s")), (False, "key: withdrawals OFF"))
+            self.assertEqual(pu.key_checks(("k", "s"), good), (False, "key: withdrawals OFF"))
         with mock.patch("live_preflight.check_binance", return_value=[("a", True, ""), ("b", True, "")]):
-            self.assertEqual(pu.key_checks(("k", "s")), (True, None))
+            self.assertEqual(pu.key_checks(("k", "s"), good), (True, None))
         with mock.patch("live_preflight.check_binance", side_effect=RuntimeError("network")):
-            self.assertEqual(pu.key_checks(("k", "s")), (False, "key check failed: RuntimeError"))
+            self.assertEqual(pu.key_checks(("k", "s"), good), (False, "key check failed: RuntimeError"))
+
+    def test_a_key_with_any_permission_the_bot_doesnt_use_is_refused(self):
+        with mock.patch("live_preflight.check_binance", return_value=[("a", True, "")]):
+            for field, name in pu.EXTRA_PERMISSIONS_OFF:
+                self.assertEqual(pu.key_checks(("k", "s"), Restrictions(**{field: True})), (False, name), field)
+            self.assertEqual(pu.key_checks(("k", "s"), Restrictions(enableReading=True)), (True, None))
+            self.assertEqual(pu.key_checks(("k", "s"), Restrictions(enableInternalTransfer=True, enableMargin=True))[1],
+                             "key: internal transfer OFF, key: margin OFF")
+        # a field Binance doesn't send is a permission the key can't have; the three basics must be there and right
+        self.assertTrue(pu._verdict(pu.permission_rows({"enableWithdrawals": False, "ipRestrict": True, "enableFutures": True}))[0])
+        self.assertFalse(pu._verdict(pu.permission_rows({}))[0])
+
+    def test_a_running_bots_key_is_checked_again_once_a_day_and_a_blip_never_stops_it(self):
+        checks, t0 = {}, 1_000_000.0
+        self.assertEqual(pu.recheck_running("u1", ("k", "s"), checks, t0, Restrictions()), (True, None))
+        self.assertEqual(checks["u1"], {"at": t0, "ok": True, "why": None})
+        bad = Restrictions(enableWithdrawals=True)
+        self.assertEqual(pu.recheck_running("u1", ("k", "s"), checks, t0 + 3600, bad), (True, None))      # not due yet
+        self.assertEqual(pu.recheck_running("u1", ("k", "s"), checks, t0 + 86400, bad), (False, "key: withdrawals OFF"))
+        self.assertEqual(pu.recheck_running("u1", ("k", "s"), checks, t0 + 86400 + 60, Restrictions()), (False, "key: withdrawals OFF"))
+        self.assertEqual(pu.recheck_running("u1", ("k", "s"), checks, t0 + 86400 + 601, Restrictions()), (True, None))   # fixed
+        down = Restrictions(); down.fail = True
+        checks["u1"]["at"] = 0
+        self.assertEqual(pu.recheck_running("u1", ("k", "s"), checks, t0 + 999999, down), (True, None))   # Binance down
+        self.assertEqual(checks["u1"]["at"], 0)                                                           # tried again next run
+
+    def test_the_key_check_record_is_roots_alone(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "applied" / "key-checks.json"
+            self.assertEqual(pu.read_key_checks(p), {})
+            pu.write_key_checks({"u1": {"at": 1.0, "ok": True, "why": None}}, p)
+            self.assertEqual(pu.read_key_checks(p), {"u1": {"at": 1.0, "ok": True, "why": None}})
+            if os.name == "posix":
+                self.assertEqual(stat.S_IMODE(p.stat().st_mode), 0o600)
 
     def test_the_activation_record_is_written_with_the_evidence_and_switched_off_is_revoked(self):
         class Recording(pu.System):
