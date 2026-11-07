@@ -17,12 +17,15 @@ ROOT = Path(__file__).resolve().parent.parent
 SOURCES = {"state": ROOT / "state", "risk-demo": Path("/opt/raqm-risk-demo"), "risk-live": Path("/opt/raqm-risk")}
 
 
-def all_sources(base=SOURCES, accounts=None, risk_root=None):
-    """SOURCES plus the ledger of every live strategy's own Binance account (backend/app/live_accounts.py)."""
+def all_sources(base=SOURCES, accounts=None, risk_root=None, copies=None):
+    """SOURCES plus the ledger of every live strategy's own Binance account and every copy account
+    (backend/app/live_accounts.py). A copy's state is in state/ already."""
     sys.path.insert(0, str(ROOT))
     from backend.app import live_accounts
     accounts = live_accounts.load() if accounts is None else accounts
-    extra = {f"risk-live-{n}": live_accounts.paths(n, risk_root=risk_root or live_accounts.RISK_ROOT)["risk"] for n in sorted(accounts)}
+    copies = live_accounts.load_copies() if copies is None else copies
+    extra = {f"risk-live-{n}": live_accounts.paths(n, risk_root=risk_root or live_accounts.RISK_ROOT)["risk"]
+             for n in sorted(set(accounts) | set(copies))}
     return {**base, **extra}
 SKIP = (".tmp", "-journal", "-wal", "-shm")
 LIMIT = 45 * 1024 * 1024     # Telegram takes files up to 50 MB from a bot
