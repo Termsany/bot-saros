@@ -119,6 +119,16 @@ def mfa_state(user: dict) -> dict:
     return {"enrolled": bool(user.get("mfa_enrolled")), "aal": user.get("aal") or "aal1", "required": _mfa_required()}
 
 
+def check_real_money_mfa(user: dict) -> None:
+    """A user's real-money changes (owner, 2026-11-07): their keys while they trade real money, the consent, turning a
+    real-money bot on or changing its numbers. Turning it off never needs the code (someone who lost their phone can
+    still stop)."""
+    if not user.get("mfa_enrolled"):
+        raise HTTPException(403, "mfa_setup_required: real money needs 2FA — set up an authenticator app on this page first")
+    if user.get("aal") != "aal2":
+        raise HTTPException(403, "mfa_required: enter the code from your authenticator app")
+
+
 def check_admin_mfa(user: dict) -> None:
     if user.get("mfa_enrolled") and user.get("aal") != "aal2":
         raise HTTPException(403, "mfa_required: enter the code from your authenticator app")

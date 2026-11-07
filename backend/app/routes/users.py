@@ -7,6 +7,7 @@ app.main are read as M.<name> at call time.
 from fastapi import APIRouter
 
 from app import main as M
+from app.auth import check_real_money_mfa
 from app.main import (  # noqa: F401
     AdminModel,
     Depends,
@@ -79,9 +80,20 @@ async def user_keys_status(user: dict = Depends(require_user)):
     from app.user_keys_vault import user_key_status
     return user_key_status(user["id"])
 
+def _trades_real_money(uid: str) -> bool:
+    """A real-money consent that is on, or a real-money bot asked for."""
+    from app.user_live_activation import get_user_live_record
+    rec = get_user_live_record(M.USER_LIVE_ACTIVATION_PATH, user_id=uid) or {}
+    d = user_bots.read_desired(uid) or {}
+    return bool(rec.get("enabled") and (rec.get("environment") or "live") == "live") or bool(d.get("enabled") and d.get("env") == "live")
+
+
 @router.post("/api/user/keys/save")
 async def user_keys_save(req: UserSaveKeyReq, user: dict = Depends(require_user)):
     _require_confirmed(user)
+    rate_limit(user["id"], "user_keys", 10, 60)
+    if _trades_real_money(user["id"]):          # replacing the key of a real-money bot needs the code
+        check_real_money_mfa(user)
     from app.user_keys_vault import save_user_keys
     try:
         save_user_keys(user["id"], req.exchange.lower().strip(), req.apiKey.strip(), req.secret.strip(), req.passphrase.strip())
@@ -91,6 +103,7 @@ async def user_keys_save(req: UserSaveKeyReq, user: dict = Depends(require_user)
 
 @router.post("/api/user/keys/delete")
 async def user_keys_delete(body: dict, user: dict = Depends(require_user)):
+    rate_limit(user["id"], "user_keys", 10, 60)
     from app.user_keys_vault import delete_user_keys
     ex = str((body or {}).get("exchange", "")).lower().strip()
     if not ex:
@@ -114,6 +127,9 @@ async def user_live_enable(req: UserLiveEnableReq, request: Request, user: dict 
     _require_confirmed(user)
     if req.environment not in ("demo", "live"):
         raise HTTPException(400, "environment must be demo or live")
+    rate_limit(user["id"], "user_live", 10, 60)
+    if req.environment == "live":
+        check_real_money_mfa(user)
     # real money obeys the server's switch like everything else; a Demo consent trades play money only
     if req.environment == "live" and not live_trading_allowed():
         raise HTTPException(403, "live trading is off on this server")
@@ -137,6 +153,7 @@ async def user_live_enable(req: UserLiveEnableReq, request: Request, user: dict 
 
 @router.post("/api/user/live/disable")
 async def user_live_disable(user: dict = Depends(require_user)):
+    rate_limit(user["id"], "user_live", 10, 60)
     from app.user_live_activation import disable_user_live
     disable_user_live(M.USER_LIVE_ACTIVATION_PATH, user_id=user["id"], reason="user disabled")
     return {"ok": True}
@@ -179,6 +196,8 @@ async def user_bots_risk(capital: float, margin: float, reserve: float = user_bo
 async def user_bots_set(req: UserBotsReq, user: dict = Depends(require_user)):
     _require_confirmed(user)
     rate_limit(user["id"], "user_bots", 10, 60)
+    if req.env == "live" and req.enabled:      # turning a real-money bot on or changing its numbers; off never asks
+        check_real_money_mfa(user)
     try:
         return {"ok": True, "desired": user_bots.write_desired(user["id"], req.model_dump())}
     except ValueError as e:

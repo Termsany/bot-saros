@@ -6,6 +6,7 @@ import { ShieldCheck, Eye, EyeOff, Power, CheckCircle2 } from "lucide-react"
 import { authHeaders } from "@/lib/supabase"
 import { CONSENT_TEXT } from "@/lib/liveConsent"
 import { UserBots } from "@/components/UserBots"
+import { UserMfa } from "@/components/UserMfa"
 import { apiUserBotsRisk, type LiveRisk } from "@/lib/api"
 import { useLocale, useT } from "@/lib/i18n/locale"
 
@@ -281,6 +282,7 @@ export default function UserLiveSettingsPage() {
 
       <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
         <div className="min-w-0 space-y-5">
+          {live && <UserMfa locale={locale} />}
           {/* Save/update own key — write-only form, never re-displayed */}
           <Card>
             <CardHeader title={t.c1} sub={t.c1Sub}/>
