@@ -24,7 +24,20 @@ class ValidateTests(unittest.TestCase):
         with self.assertRaises(ValueError): pu.validate(U1, doc(U1, env="live"))                    # trend_daily: no
         d = pu.validate(U1, doc(U1, env="live", strategies=["momentum_ls"], capital_usdt=1000, capital_margin_override_usdt=20,
                                 risk_per_trade_pct=0.01, max_aggregate_risk_pct=0.01, leverage=5))   # the request's limits ignored
-        self.assertEqual((d["leverage"], d["risk_per_trade_pct"], d["max_aggregate_risk_pct"], d["level"]), (2, 1.6, 16.0, "medium"))
+        # one stop 1.6% and the basket 16% of the capital, allowed down to 80% of it (user_bots.LIVE_EQUITY_FLOOR)
+        self.assertEqual((d["leverage"], d["risk_per_trade_pct"], d["max_aggregate_risk_pct"], d["level"]), (2, 2.0, 20.0, "medium"))
+        self.assertEqual(d["capital_reserve_pct"], 40.0)
+        self.assertNotIn("capital_reserve_pct", pu._limits({**d, "capital_reserve_pct": None}))
+        self.assertEqual(pu._limits(d)["capital_reserve_pct"], 40.0)     # into the user's ledger: the capital plan reads it
+        d = pu.validate(U1, doc(U1, env="live", strategies=["momentum_ls"], capital_usdt=300, capital_margin_override_usdt=24,
+                                capital_reserve_pct=20))
+        self.assertEqual((d["capital_reserve_pct"], d["risk_per_trade_pct"], d["max_aggregate_risk_pct"]), (20.0, 8.0, 80.0))
+        for reserve in (5, 70, "20", True):
+            with self.assertRaises(ValueError, msg=reserve):
+                pu.validate(U1, doc(U1, env="live", strategies=["momentum_ls"], capital_usdt=300, capital_margin_override_usdt=24,
+                                    capital_reserve_pct=reserve))
+        with self.assertRaises(ValueError):                              # 40% reserve: only 7 of the 10 legs fit
+            pu.validate(U1, doc(U1, env="live", strategies=["momentum_ls"], capital_usdt=300, capital_margin_override_usdt=24))
         for capital, margin in ((1000, 2), (100, 20), (0, 5), (1000, 2000)):     # below Binance's minimum, past the capital
             with self.assertRaises(ValueError, msg=(capital, margin)):
                 pu.validate(U1, doc(U1, env="live", strategies=["momentum_ls"], capital_usdt=capital, capital_margin_override_usdt=margin))
@@ -321,7 +334,7 @@ class RealMoneyTests(unittest.TestCase):
     def test_the_service_gets_the_switch_the_account_and_ceilings_from_the_accepted_plan(self):
         t = pu.dropin(U1, "momentum_ls", pu.validate(U1, doc(U1, **self.LIVE)))
         for want in ("Environment=BINANCE_ENV=live", "Environment=ALLOW_LIVE_TRADING=true", f"Environment=BINANCE_LIVE_ACCOUNT={U1}",
-                     "Environment=RAQM_CAP_RISK_PER_TRADE_PCT=1.6", "Environment=RAQM_CAP_AGGREGATE_RISK_PCT=16",
+                     "Environment=RAQM_CAP_RISK_PER_TRADE_PCT=2", "Environment=RAQM_CAP_AGGREGATE_RISK_PCT=20",
                      "Environment=RAQM_CAP_DAILY_LOSS_PCT=20", "Environment=RAQM_CAP_DRAWDOWN_PCT=45", "--expect-env live"):
             self.assertIn(want, t)
         demo = pu.dropin(U1, "trend_daily", pu.validate(U1, doc(U1)))

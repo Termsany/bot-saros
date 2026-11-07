@@ -81,7 +81,8 @@ def enable_user_live(path, *, user_id, exchange, confirm, actor, ip=None,
     cap = mar = None
     if environment == "live":
         from .user_bots import _validate_live
-        clean = _validate_live("live", True, ["momentum_ls"], {"capital_usdt": capital_usdt, "capital_margin_override_usdt": margin_usdt})
+        # the reserve is the bots' setting (it changes how many trades fit, not what a stop costs): not checked here
+        clean = _validate_live("live", True, ["momentum_ls"], {"capital_usdt": capital_usdt, "capital_margin_override_usdt": margin_usdt}, fit=False)
         lev, rpt, agg = clean["leverage"], clean["risk_per_trade_pct"], clean["max_aggregate_risk_pct"]
         cap, mar = clean["capital_usdt"], clean["capital_margin_override_usdt"]
     else:

@@ -162,6 +162,34 @@ class UserBotsApiTests(ApiAuthTests):
         self.assertEqual(self.c.get("/api/user/bots/risk?capital=0&margin=20", headers=self.h("u1-token")).status_code, 400)
         self.assertEqual(self.c.get("/api/user/bots/risk?capital=1000&margin=20").status_code, 401)
 
+    def test_the_reserve_decides_whether_the_whole_basket_fits(self):
+        # owner, 2026-11-07: $300 at $24 needs a 20% reserve (300 × 80% ÷ 24 = 10 trades); at the default 40%, 7 fit
+        q = lambda **p: self.c.get("/api/user/bots/risk", params={"capital": 300, "margin": 24, **p}, headers=self.h("u1-token")).json()
+        r = q()
+        self.assertEqual((r["ok"], r["fits"], r["max_open"], r["max_margin"]), (False, False, 7, 18.0))
+        self.assertIn("at most $18", r["why"])
+        r = q(reserve=20)
+        self.assertEqual((r["ok"], r["fits"], r["max_open"], r["level"]), (True, True, 10, "very_high"))
+        self.assertFalse(q(reserve=5)["ok"]); self.assertFalse(q(reserve=70)["ok"])
+        base = {"env": "live", "enabled": True, "leverage": 2, "risk_per_trade_pct": 1, "max_aggregate_risk_pct": 3,
+                "strategies": ["momentum_ls"], "capital_usdt": 300, "capital_margin_override_usdt": 24}
+        self.assertEqual(self.c.post("/api/user/bots", headers=self.h("u1-token"), json=base).status_code, 400)
+        r = self.c.post("/api/user/bots", headers=self.h("u1-token"), json={**base, "capital_reserve_pct": 20})
+        self.assertEqual(r.status_code, 200, r.text)
+        d = r.json()["desired"]
+        self.assertEqual((d["capital_reserve_pct"], d["risk_per_trade_pct"], d["max_aggregate_risk_pct"]), (20.0, 8.0, 80.0))
+        self.assertEqual(self.c.get("/api/user/bots", headers=self.h("u1-token")).json()["rules"]["live"]["reserve"],
+                         {"default": 40.0, "min": 10.0, "max": 60.0})
+
+    def test_a_consent_for_a_plan_that_needs_a_lower_reserve_is_accepted(self):
+        from app.user_keys_vault import save_user_keys
+        from app.user_live_activation import CONSENT_TEXT
+        save_user_keys(U1, "binance", "k", "s")
+        body = {"exchange": "binance", "confirm": CONSENT_TEXT, "environment": "live", "capital_usdt": 300, "margin_usdt": 24}
+        with mock.patch.object(self.m, "live_trading_allowed", return_value=True), \
+             mock.patch("app.routes.users.live_trading_allowed", return_value=True, create=True):
+            self.assertEqual(self.c.post("/api/user/live/enable", headers=self.h("u1-token"), json=body).status_code, 200)
+
     def test_a_real_money_consent_stores_the_accepted_capital_and_margin(self):
         from app.user_keys_vault import save_user_keys
         from app.user_live_activation import CONSENT_TEXT, get_user_live_record
@@ -172,14 +200,14 @@ class UserBotsApiTests(ApiAuthTests):
             self.assertEqual(self.c.post("/api/user/live/enable", headers=self.h("u1-token"), json={**body, "margin_usdt": 1}).status_code, 400)
             self.assertEqual(self.c.post("/api/user/live/enable", headers=self.h("u1-token"), json=body).status_code, 200)
         rec = get_user_live_record(self.m.USER_LIVE_ACTIVATION_PATH, user_id=U1)
-        self.assertEqual((rec["environment"], rec["capital_usdt"], rec["margin_usdt"], rec["risk_per_trade_pct"]), ("live", 1000.0, 20.0, 1.6))
+        self.assertEqual((rec["environment"], rec["capital_usdt"], rec["margin_usdt"], rec["risk_per_trade_pct"]), ("live", 1000.0, 20.0, 2.0))   # 1.6% ÷ the 80% floor
 
     def test_a_real_money_desired_state_is_momentum_only(self):
         base = {"env": "live", "enabled": True, "leverage": 2, "risk_per_trade_pct": 1, "max_aggregate_risk_pct": 3,
                 "capital_usdt": 1000, "capital_margin_override_usdt": 20}
         self.assertEqual(self.c.post("/api/user/bots", headers=self.h("u1-token"), json={**base, "strategies": ["trend_daily"]}).status_code, 400)
         r = self.c.post("/api/user/bots", headers=self.h("u1-token"), json={**base, "strategies": ["momentum_ls"]})
-        self.assertEqual(r.status_code, 200); self.assertEqual(r.json()["desired"]["max_aggregate_risk_pct"], 16.0)
+        self.assertEqual(r.status_code, 200); self.assertEqual(r.json()["desired"]["max_aggregate_risk_pct"], 20.0)
 
 
 if __name__ == "__main__":

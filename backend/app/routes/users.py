@@ -68,6 +68,7 @@ class UserBotsReq(_BM2):
     max_aggregate_risk_pct: float
     capital_usdt: float = 0
     capital_margin_override_usdt: float = 0
+    capital_reserve_pct: Optional[float] = None   # real money: the share kept out of trades (user_bots.LIVE_RESERVE_BOUNDS)
 
 class UserBotCloseReq(_BM2):
     strategy: str = Field(pattern=r"^[a-z0-9_]{1,30}$")
@@ -153,16 +154,22 @@ async def user_bots_get(user: dict = Depends(require_user)):
                       # real money (docs/users-real-money-plan.md): the page shows live_risk() for the numbers typed
                       "live": {"strategies": list(user_bots.LIVE_STRATEGIES), "leverage": user_bots.LIVE_LEVERAGE,
                                "stop": user_bots.LIVE_STOP, "min_margin": user_bots.LIVE_MIN_MARGIN,
-                               "legs": user_bots.STRATEGY_SLOTS["momentum_ls"]}}}
+                               "legs": user_bots.STRATEGY_SLOTS["momentum_ls"],
+                               "reserve": {"default": user_bots.LIVE_RESERVE_DEFAULT, "min": user_bots.LIVE_RESERVE_BOUNDS[0],
+                                           "max": user_bots.LIVE_RESERVE_BOUNDS[1]},
+                               "equity_floor": user_bots.LIVE_EQUITY_FLOOR}}}
 
 @router.get("/api/user/bots/risk")
-async def user_bots_risk(capital: float, margin: float, user: dict = Depends(require_user)):
-    """The risk of a real-money plan before the user accepts it — the same numbers the server will hold them to."""
-    r = user_bots.live_risk(capital, margin)
+async def user_bots_risk(capital: float, margin: float, reserve: float = user_bots.LIVE_RESERVE_DEFAULT,
+                         user: dict = Depends(require_user)):
+    """The risk of a real-money plan before the user accepts it — the same numbers the server will hold them to, and
+    whether the whole basket fits the capital after the reserve."""
+    r = user_bots.live_risk(capital, margin, reserve=reserve)
     if r is None:
         raise HTTPException(400, "capital and margin must be positive numbers")
     try:
-        user_bots._validate_live("live", True, list(user_bots.LIVE_STRATEGIES), {"capital_usdt": capital, "capital_margin_override_usdt": margin})
+        user_bots._validate_live("live", True, list(user_bots.LIVE_STRATEGIES),
+                                 {"capital_usdt": capital, "capital_margin_override_usdt": margin, "capital_reserve_pct": reserve})
         r["ok"], r["why"] = True, None
     except ValueError as e:
         r["ok"], r["why"] = False, str(e)
