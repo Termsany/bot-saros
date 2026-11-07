@@ -12,11 +12,17 @@ from pathlib import Path
 DESIRED = Path(os.getenv("RAQM_USERS_DESIRED", "/opt/raqm-users/desired"))
 IPC_ROOT = Path(os.getenv("RAQM_USERS_IPC", "/opt/raqm-users/ipc"))
 
-# Real money for invited users (owner, 2026-11-05 — docs/users-real-money-plan.md): momentum_ls only, each user's own
-# capital and margin, the risk level computed here and accepted by the user. The provisioner starts nothing real
-# unless root's switch /etc/raqm-users/live.enabled exists and the user's key passes the preflight's checks.
+# Real money for invited users (owner, 2026-11-05 — docs/users-real-money-plan.md): momentum_ls, and since 2026-11-07
+# RSI-2 with the BTC filter (research §28), one or both, each user's own capital and margin, the risk level computed
+# here and accepted by the user. The provisioner starts nothing real unless root's switch /etc/raqm-users/live.enabled
+# exists, the user's key passes the preflight's checks and the owner's readiness evidence covers every chosen strategy.
 ENVS_ALLOWED = ("demo", "live")
-LIVE_STRATEGIES = ("momentum_ls",)
+LIVE_STRATEGIES = ("momentum_ls", "rsi2_pullback")
+LIVE_DEFAULT = ("momentum_ls",)             # a consent or plan from before the choice: momentum
+# trades each can hold at once: a momentum basket is 5 long + 5 short; RSI-2 picks from the top 10, one trade a coin
+LIVE_SLOTS = {"momentum_ls": 10, "rsi2_pullback": 10}
+# the real-money bot's own settings per strategy (the provisioner adds them): RSI-2 runs with the BTC filter
+LIVE_ARGS = {"rsi2_pullback": "--rsi2-btc-ma 200"}
 LIVE_LEVERAGE, LIVE_STOP = 2, 0.40          # the strategy's, not the user's (risk_manager.PLAN_LEVERAGE / PLAN_STOP_LOSS)
 LIVE_MIN_MARGIN = 2.5                       # Binance's smallest order is $5: at x2 a margin below $2.5 buys nothing
 # the share of the capital kept out of trades (risk_manager.capital_plan): the user's choice within these bounds; the
@@ -70,7 +76,23 @@ def _num(v):
     return None if isinstance(v, bool) or not isinstance(v, (int, float)) or v != v or v in (float("inf"), float("-inf")) else float(v)
 
 
-def live_risk(capital, margin, strategies=LIVE_STRATEGIES, reserve=LIVE_RESERVE_DEFAULT):
+def live_strategies(raw):
+    """The real-money strategies asked for — a list, or a comma-separated string — in LIVE_STRATEGIES' order, at least
+    one. ValueError on anything else."""
+    items = [x.strip() for x in raw.split(",")] if isinstance(raw, str) else raw
+    if (not isinstance(items, (list, tuple)) or not items or not all(isinstance(x, str) for x in items)
+            or len(set(items)) != len(items) or any(x not in LIVE_STRATEGIES for x in items)):
+        raise ValueError(f"real money: choose from {', '.join(LIVE_STRATEGIES)}")
+    return tuple(s for s in LIVE_STRATEGIES if s in items)
+
+
+def live_allocation(strategies):
+    """Each chosen strategy's share of the account's open-risk budget: its trades' share of the whole plan's."""
+    total = sum(LIVE_SLOTS[s] for s in strategies)
+    return {s: LIVE_SLOTS[s] / total for s in strategies}
+
+
+def live_risk(capital, margin, strategies=LIVE_DEFAULT, reserve=LIVE_RESERVE_DEFAULT):
     """What a real-money plan costs at its stops, for the user to see and accept: one stop, every leg at its stop at
     once (the worst week), as $ and % of the capital, and the level on the admin page's scale. Also whether the whole
     basket fits the capital after the reserve (max_open, as risk_manager.capital_plan counts it) and the largest margin
@@ -79,7 +101,7 @@ def live_risk(capital, margin, strategies=LIVE_STRATEGIES, reserve=LIVE_RESERVE_
     if not capital or capital <= 0 or not margin or margin <= 0 or reserve is None:
         return None
     import math
-    legs = sum(STRATEGY_SLOTS.get(s, 1) for s in strategies) or 1
+    legs = sum(LIVE_SLOTS.get(s, 1) for s in strategies) or 1
     one = margin * LIVE_LEVERAGE * LIVE_STOP
     per = one / capital * 100
     level = "low" if per < 1 else "medium" if per < 2 else "high" if per < 5 else "very_high"
@@ -97,12 +119,13 @@ def _ceil2(x):
 
 
 def _validate_live(env, enabled, strategies, doc, fit=True):
-    """A real-money desired state: momentum only, the user's capital, margin and reserve; the limits are computed here
+    """A real-money desired state: momentum and/or RSI-2, the user's capital, margin and reserve; the limits are computed here
     from them (never taken from the request), so the gate allows exactly the dollars the user accepted per stop and
     for the whole basket, down to LIVE_EQUITY_FLOOR of the capital. `fit`: the whole basket must fit the capital after
     the reserve (a consent alone doesn't choose the reserve, so it is checked without it)."""
     if any(s not in LIVE_STRATEGIES for s in strategies):
-        raise ValueError("real money: momentum_ls only")
+        raise ValueError(f"real money: {', '.join(LIVE_STRATEGIES)} only")
+    strategies = [s for s in LIVE_STRATEGIES if s in strategies]           # one order, whatever order was asked
     capital, margin = _num(doc.get("capital_usdt")), _num(doc.get("capital_margin_override_usdt"))
     if capital is None or not 0 < capital <= BOUNDS["capital_usdt"][1]:
         raise ValueError("capital_usdt out of bounds")
@@ -112,7 +135,7 @@ def _validate_live(env, enabled, strategies, doc, fit=True):
     reserve = LIVE_RESERVE_DEFAULT if raw is None else _num(raw)
     if reserve is None or not LIVE_RESERVE_BOUNDS[0] <= reserve <= LIVE_RESERVE_BOUNDS[1]:
         raise ValueError(f"capital_reserve_pct out of bounds ({LIVE_RESERVE_BOUNDS[0]:g}–{LIVE_RESERVE_BOUNDS[1]:g}%)")
-    r = live_risk(capital, margin, strategies or LIVE_STRATEGIES, reserve)
+    r = live_risk(capital, margin, strategies or LIVE_DEFAULT, reserve)
     if r["aggregate_pct"] > 100:
         raise ValueError("every stop at once would lose more than the capital: lower the margin")
     if fit and not r["fits"]:

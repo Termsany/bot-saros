@@ -49,6 +49,8 @@ USER_DAILY_LOSS_PCT, USER_DRAWDOWN_PCT = 20.0, 45.0              # each user's k
 sys.path.insert(0, str(ROOT / "backend"))
 # the rules shared with the API (the same checks on both sides): environments, the cap, the strategies, the bounds
 from app.user_bots import ENVS_ALLOWED, MAX_USERS, MAX_STRATEGIES, STRATEGIES, UID_RE, BOUNDS, SITE_LIVE_SWITCH, validate, strategy_policy  # noqa: E402,F401
+from app.user_bots import LIVE_ARGS, LIVE_DEFAULT, live_allocation  # noqa: E402
+from app.user_live_activation import consent_strategies  # noqa: E402
 
 EXTRA_ARGS = {"trend_daily": "--universe 10"}      # as the owner's /opt/raqm-live/strategies/*.env
 NO_ENTRIES = '"no entries"'   # the applied record while a user is wound down
@@ -123,8 +125,9 @@ def owner_keys(files=OWNER_ENV_FILES):
 
 
 def read_consent(path=CONSENT_DB):
-    """{uid: {"env", "capital", "margin"}} for an enabled consent on binance (the existing audited record; records from
-    before the environment was recorded are real-money ones; capital and margin are those of a real-money consent).
+    """{uid: {"env", "capital", "margin", "strategies"}} for an enabled consent on binance (the existing audited record;
+    records from before the environment was recorded are real-money ones; capital, margin and strategies are those of a
+    real-money consent — no strategies recorded = momentum, the only choice then).
     No record yet = nobody. A record that can't be read now (locked while the API writes) raises: the run is skipped,
     never read as "nobody consents" — that winds everyone down."""
     if not path.exists():
@@ -135,15 +138,17 @@ def read_consent(path=CONSENT_DB):
         env = "environment" if "environment" in cols else "'live'"
         cap = "capital_usdt" if "capital_usdt" in cols else "NULL"
         mar = "margin_usdt" if "margin_usdt" in cols else "NULL"
-        return {r[0]: {"env": r[1], "capital": r[2], "margin": r[3]} for r in
-                con.execute(f"SELECT user_id, {env}, {cap}, {mar} FROM user_live_activation WHERE enabled=1 AND exchange='binance'")}
+        sts = "strategies" if "strategies" in cols else "NULL"
+        return {r[0]: {"env": r[1], "capital": r[2], "margin": r[3], "strategies": consent_strategies({"strategies": r[4]})} for r in
+                con.execute(f"SELECT user_id, {env}, {cap}, {mar}, {sts} FROM user_live_activation WHERE enabled=1 AND exchange='binance'")}
     finally:
         con.close()
 
 
 def consent_ok(consent, uid, env, d=None):
     """A Demo bot needs a consent for Demo or real money. A real-money bot needs a real-money consent for exactly the
-    capital and margin it now asks for (the risk the user saw and accepted); a change of either asks again."""
+    capital and margin it now asks for, and for every strategy it runs (the risk the user saw and accepted); a change
+    of either number, or a strategy the consent doesn't cover, asks again."""
     c = consent.get(uid)
     c = {"env": c} if isinstance(c, str) else (c or {})
     if env == "demo":
@@ -151,8 +156,10 @@ def consent_ok(consent, uid, env, d=None):
     if c.get("env") != "live" or d is None:
         return False
     try:
+        covered = set(c.get("strategies") or LIVE_DEFAULT)
         return (abs(float(c["capital"]) - float(d["capital_usdt"])) < 0.005
-                and abs(float(c["margin"]) - float(d["capital_margin_override_usdt"])) < 0.005)
+                and abs(float(c["margin"]) - float(d["capital_margin_override_usdt"])) < 0.005
+                and set(d.get("strategies") or ()) <= covered)
     except (KeyError, TypeError, ValueError):
         return False
 
@@ -356,7 +363,8 @@ def dropin(uid, s, d):
     data = DATA_ROOT / uid
     ipc = ipc_instance(uid, s)
     # --amount is the bot's fallback only: with the capital plan in the ledger the margin comes from the plan
-    args = f"--leverage {d['leverage']} --amount {d['capital_margin_override_usdt']:.2f} {EXTRA_ARGS.get(s, '')} --poll 60".split()
+    extra = f"{EXTRA_ARGS.get(s, '')} {LIVE_ARGS.get(s, '') if d['env'] == 'live' else ''}"
+    args = f"--leverage {d['leverage']} --amount {d['capital_margin_override_usdt']:.2f} {extra} --poll 60".split()
     live = []
     if d["env"] == "live":
         # the server's switch for this service, the account its activation record names, and root's ceilings — the
@@ -463,7 +471,7 @@ class System:
             code += ("; import os, json; os.environ['ALLOW_LIVE_TRADING'] = 'true';"
                      f"a.activate(p / 'live_activation.sqlite3', environment='live', account={uid!r},"
                      f" approved_by='provisioner: the owner invitation', strategies={d['strategies']!r},"
-                     f" risk_allocation={json.dumps({s: 1.0 / len(d['strategies']) for s in d['strategies']})},"
+                     f" risk_allocation={json.dumps(live_allocation(d['strategies']))},"
                      f" readiness_evidence=json.loads({json.dumps(evidence)!r}), expected_reviewed_commit_sha={commit!r})")
         self.as_user(uid, code)
 

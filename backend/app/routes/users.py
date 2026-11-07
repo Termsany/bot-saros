@@ -59,6 +59,7 @@ class UserLiveEnableReq(_BM2):
     environment: str = "demo"      # "demo": Binance Demo (play money); "live" (real money) only when asked for explicitly
     capital_usdt: Optional[float] = None    # real money: the capital and margin whose risk the user saw and accepts
     margin_usdt: Optional[float] = None
+    strategies: Optional[List[str]] = Field(default=None, max_length=2)   # real money: the strategies whose worst case is accepted
 
 class UserBotsReq(_BM2):
     """A user's desired bots (Phase 2): checked again by app/user_bots.validate here and by the root provisioner."""
@@ -117,14 +118,15 @@ async def user_keys_delete(body: dict, user: dict = Depends(require_user)):
 
 @router.get("/api/user/live/status")
 async def user_live_status(user: dict = Depends(require_user)):
-    from app.user_live_activation import get_user_live_record
+    from app.user_live_activation import get_user_live_record, consent_strategies
     rec = get_user_live_record(M.USER_LIVE_ACTIVATION_PATH, user_id=user["id"])
     if not rec:
         return {"enabled": False}
     return {"enabled": bool(rec["enabled"]), "exchange": rec["exchange"], "leverage": rec["leverage"],
             "risk_per_trade_pct": rec["risk_per_trade_pct"], "max_aggregate_risk_pct": rec["max_aggregate_risk_pct"],
             "consented_at": rec["consented_at"], "environment": rec.get("environment") or "live",
-            "capital_usdt": rec.get("capital_usdt"), "margin_usdt": rec.get("margin_usdt")}
+            "capital_usdt": rec.get("capital_usdt"), "margin_usdt": rec.get("margin_usdt"),
+            "strategies": list(consent_strategies(rec)) if (rec.get("environment") or "live") == "live" else None}
 
 @router.post("/api/user/live/enable")
 async def user_live_enable(req: UserLiveEnableReq, request: Request, user: dict = Depends(require_user)):
@@ -147,13 +149,15 @@ async def user_live_enable(req: UserLiveEnableReq, request: Request, user: dict 
                           actor=str(user.get("email") or user["id"]), ip=(request.client.host if request.client else None),
                           leverage=req.leverage, risk_per_trade_pct=req.risk_per_trade_pct,
                           max_aggregate_risk_pct=req.max_aggregate_risk_pct, environment=req.environment,
-                          capital_usdt=req.capital_usdt, margin_usdt=req.margin_usdt)
+                          capital_usdt=req.capital_usdt, margin_usdt=req.margin_usdt,
+                          strategies=req.strategies if req.environment == "live" else None)
     except (PermissionError, ValueError) as e:
         raise HTTPException(400, str(e))
     if req.environment == "live":          # a Demo consent leaves the keys marked as they were
         from app.user_keys_vault import set_user_paper
         set_user_paper(user["id"], ex, False)  # the per-user vault entry itself switches to LIVE too
-        security_alerts.user_real_money(user, "وافق على فلوس حقيقية", {"capital": req.capital_usdt, "margin": req.margin_usdt})
+        security_alerts.user_real_money(user, "وافق على فلوس حقيقية", {"capital": req.capital_usdt, "margin": req.margin_usdt,
+                                                                       "strategies": req.strategies or list(user_bots.LIVE_DEFAULT)})
     return {"ok": True}
 
 @router.post("/api/user/live/disable")
@@ -176,21 +180,25 @@ async def user_bots_get(user: dict = Depends(require_user)):
                       # real money (docs/users-real-money-plan.md): the page shows live_risk() for the numbers typed
                       "live": {"strategies": list(user_bots.LIVE_STRATEGIES), "leverage": user_bots.LIVE_LEVERAGE,
                                "stop": user_bots.LIVE_STOP, "min_margin": user_bots.LIVE_MIN_MARGIN,
-                               "legs": user_bots.STRATEGY_SLOTS["momentum_ls"],
+                               "legs": user_bots.LIVE_SLOTS["momentum_ls"], "slots": user_bots.LIVE_SLOTS,
                                "reserve": {"default": user_bots.LIVE_RESERVE_DEFAULT, "min": user_bots.LIVE_RESERVE_BOUNDS[0],
                                            "max": user_bots.LIVE_RESERVE_BOUNDS[1]},
                                "equity_floor": user_bots.LIVE_EQUITY_FLOOR}}}
 
 @router.get("/api/user/bots/risk")
 async def user_bots_risk(capital: float, margin: float, reserve: float = user_bots.LIVE_RESERVE_DEFAULT,
-                         user: dict = Depends(require_user)):
+                         strategies: str = "momentum_ls", user: dict = Depends(require_user)):
     """The risk of a real-money plan before the user accepts it — the same numbers the server will hold them to, and
-    whether the whole basket fits the capital after the reserve."""
-    r = user_bots.live_risk(capital, margin, reserve=reserve)
+    whether the whole basket fits the capital after the reserve. `strategies`: comma-separated, momentum by default."""
+    try:
+        chosen = list(user_bots.live_strategies(strategies[:80]))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    r = user_bots.live_risk(capital, margin, chosen, reserve=reserve)
     if r is None:
         raise HTTPException(400, "capital and margin must be positive numbers")
     try:
-        user_bots._validate_live("live", True, list(user_bots.LIVE_STRATEGIES),
+        user_bots._validate_live("live", True, chosen,
                                  {"capital_usdt": capital, "capital_margin_override_usdt": margin, "capital_reserve_pct": reserve})
         r["ok"], r["why"] = True, None
     except ValueError as e:
@@ -210,7 +218,7 @@ async def user_bots_set(req: UserBotsReq, user: dict = Depends(require_user)):
     if req.env == "live":
         security_alerts.user_real_money(user, "شغّل/غيّر بوت فلوس حقيقية" if req.enabled else "وقّف بوت فلوس حقيقية",
                                         {"capital": desired.get("capital_usdt"), "margin": desired.get("capital_margin_override_usdt"),
-                                         "reserve": desired.get("capital_reserve_pct")} if req.enabled else None)
+                                         "reserve": desired.get("capital_reserve_pct"), "strategies": desired.get("strategies")} if req.enabled else None)
     return {"ok": True, "desired": desired}
 
 @router.post("/api/user/bots/close")

@@ -61,7 +61,7 @@ test("real money: the user types an amount and a margin, sees the risk, and the 
   await expect(risk).toContainText("−$160")                                      // the worst week: all 10 legs at their stops
   await page.getByPlaceholder("اكتب نص الموافقة بالكامل هنا").fill(CONSENT_TEXT)
   await expect(page.getByText(/بوافق على خطورة متوسطة: أسوأ أسبوع ممكن يخسّرني \$160/)).toBeVisible()
-  await page.getByRole("checkbox").check()
+  await page.getByRole("checkbox", { name: /بوافق على/ }).check()
   await page.getByRole("button", { name: "وافق على الفلوس الحقيقية" }).click()
   await expect.poll(() => a.calls.filter(c => c.path === "/api/user/live/enable").length).toBe(1)
   const sent = a.calls.find(c => c.path === "/api/user/live/enable")!.body
@@ -95,4 +95,45 @@ test("real money: the reserve decides whether the whole basket fits, and it goes
   await expect.poll(() => a.calls.filter(c => c.path === "/api/user/bots" && c.method === "POST").length).toBe(1)
   const sent = a.calls.find(c => c.path === "/api/user/bots" && c.method === "POST")!.body
   expect([sent.env, sent.capital_usdt, sent.capital_margin_override_usdt, sent.capital_reserve_pct]).toEqual(["live", 300, 24, 20])
+})
+
+test("real money: momentum, RSI-2 + the BTC filter or both — the risk, the consent and the bot carry the choice", async ({ page, api: a }) => {
+  // owner, 2026-11-07: RSI-2 with the BTC filter next to momentum for real money (research §28)
+  let status: any = { enabled: false }
+  a.handler = async (c: ApiCall) => {
+    if (c.path === "/api/user/bots/risk") {
+      const q = new URLSearchParams(c.query), cap = Number(q.get("capital")), m = Number(q.get("margin"))
+      const legs = 10 * (q.get("strategies") || "momentum_ls").split(",").length, one = m * 0.8
+      return { one_stop_usdt: one, per_trade_pct: +(one / cap * 100).toFixed(2), legs, worst_usdt: one * legs,
+               aggregate_pct: +(one * legs / cap * 100).toFixed(2), level: "high", reserve_pct: 40, max_open: legs, fits: true, max_margin: 60, ok: true, why: null }
+    }
+    if (c.path === "/api/user/live/status") return status
+    if (c.path === "/api/user/live/enable") { status = { enabled: true, environment: "live", capital_usdt: 2000, margin_usdt: 20, strategies: c.body.strategies }; return { ok: true } }
+    if (c.path === "/api/user/bots" && c.method === "POST") return { ok: true }
+    return api(c)
+  }
+  await page.goto("/settings/live")
+  await page.getByRole("tab", { name: "فلوس حقيقية" }).click()
+  const strats = page.getByTestId("live-strategies")
+  await expect(strats.getByRole("checkbox", { name: /Momentum/ })).toHaveAttribute("aria-checked", "true")
+  await page.getByLabel(/راس المال/).first().fill("2000")
+  await page.getByLabel("المارجن لكل صفقة ($)").first().fill("20")
+  await expect(page.getByTestId("live-risk")).toContainText("−$160")                // momentum alone: 10 stops
+  await strats.getByRole("checkbox", { name: /RSI-2 \+ فلتر BTC/ }).click()
+  await expect(page.getByTestId("live-risk")).toContainText("−$320")                // both: 20 stops
+  expect(a.calls.filter(c => c.path === "/api/user/bots/risk").at(-1)!.query).toContain("strategies=momentum_ls%2Crsi2_pullback")
+  await strats.getByRole("checkbox", { name: /Momentum/ }).click()                  // RSI-2 alone
+  await expect(page.getByTestId("live-risk")).toContainText("−$160")
+  await strats.getByRole("checkbox", { name: /RSI-2/ }).click()                     // the last one stays: at least one
+  await expect(strats.getByRole("checkbox", { name: /RSI-2/ })).toHaveAttribute("aria-checked", "true")
+  await strats.getByRole("checkbox", { name: /Momentum/ }).click()
+  await page.getByPlaceholder("اكتب نص الموافقة بالكامل هنا").fill(CONSENT_TEXT)
+  await page.getByRole("checkbox", { name: /بوافق على/ }).check()
+  await page.getByRole("button", { name: "وافق على الفلوس الحقيقية" }).click()
+  await expect.poll(() => a.calls.filter(c => c.path === "/api/user/live/enable").length).toBe(1)
+  expect(a.calls.find(c => c.path === "/api/user/live/enable")!.body.strategies).toEqual(["momentum_ls", "rsi2_pullback"])
+  page.once("dialog", d => { expect(d.message()).toContain("momentum + RSI-2"); d.accept() })
+  await page.getByRole("button", { name: "شغّل momentum + RSI-2 بفلوس حقيقية" }).click()
+  await expect.poll(() => a.calls.filter(c => c.path === "/api/user/bots" && c.method === "POST").length).toBe(1)
+  expect(a.calls.find(c => c.path === "/api/user/bots" && c.method === "POST")!.body.strategies).toEqual(["momentum_ls", "rsi2_pullback"])
 })
