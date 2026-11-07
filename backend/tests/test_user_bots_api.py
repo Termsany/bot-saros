@@ -19,11 +19,14 @@ class UserBotsApiTests(ApiAuthTests):
         import app.main as m
         from app import user_bots as ub
         self.m, self.ub = m, ub
+        m._rate_hits.clear()                      # each test starts with its own request budget
         d = Path(self.tmp.name)
         self.desired, self.ipc = d / "desired", d / "ipc"; self.desired.mkdir(); self.ipc.mkdir()
         self.tokens = mock.patch.dict(ts.TOKENS, {
-            "u1-token": {"id": U1, "email": "u1@example.com", "email_confirmed": True},
-            "u2-token": {"id": U2, "email": "u2@example.com", "email_confirmed": True},
+            "u1-token": {"id": U1, "email": "u1@example.com", "email_confirmed": True, "mfa_enrolled": True, "aal": "aal2"},
+            "u2-token": {"id": U2, "email": "u2@example.com", "email_confirmed": True, "mfa_enrolled": True, "aal": "aal2"},
+            "u1-password": {"id": U1, "email": "u1@example.com", "email_confirmed": True, "mfa_enrolled": True, "aal": "aal1"},
+            "u1-no2fa": {"id": U1, "email": "u1@example.com", "email_confirmed": True, "mfa_enrolled": False, "aal": "aal1"},
             "new-token": {"id": U2, "email": "u2@example.com", "email_confirmed": False}})
         from app import user_keys_vault as ukv
         self.paths = [mock.patch.object(ub, "DESIRED", self.desired), mock.patch.object(ub, "IPC_ROOT", self.ipc),
@@ -232,6 +235,36 @@ class UserBotsApiTests(ApiAuthTests):
         self.assertEqual(self.c.post("/api/user/bots", headers=self.h("u1-token"), json={**base, "strategies": ["trend_daily"]}).status_code, 400)
         r = self.c.post("/api/user/bots", headers=self.h("u1-token"), json={**base, "strategies": ["momentum_ls"]})
         self.assertEqual(r.status_code, 200); self.assertEqual(r.json()["desired"]["max_aggregate_risk_pct"], 20.0)
+
+    def test_real_money_changes_need_a_session_that_passed_2fa_and_turning_off_never_does(self):
+        from app.user_keys_vault import save_user_keys
+        from app.user_live_activation import CONSENT_TEXT
+        save_user_keys(U1, "binance", "k", "s")
+        consent = {"exchange": "binance", "confirm": CONSENT_TEXT, "environment": "live", "capital_usdt": 1000, "margin_usdt": 20}
+        live = {"env": "live", "enabled": True, "strategies": ["momentum_ls"], "leverage": 2, "risk_per_trade_pct": 1,
+                "max_aggregate_risk_pct": 3, "capital_usdt": 1000, "capital_margin_override_usdt": 20}
+        with mock.patch("app.routes.users.live_trading_allowed", return_value=True, create=True):
+            for tok, why in (("u1-no2fa", "mfa_setup_required"), ("u1-password", "mfa_required")):
+                r = self.c.post("/api/user/live/enable", headers=self.h(tok), json=consent)
+                self.assertEqual(r.status_code, 403); self.assertTrue(r.json()["detail"].startswith(why), r.json())
+                self.assertEqual(self.c.post("/api/user/bots", headers=self.h(tok), json=live).status_code, 403)
+            self.assertEqual(self.c.post("/api/user/live/enable", headers=self.h("u1-token"), json=consent).status_code, 200)
+            self.assertEqual(self.c.post("/api/user/bots", headers=self.h("u1-token"), json=live).status_code, 200)
+            # now trading real money: replacing the key needs the code too; stopping never does
+            self.assertEqual(self.c.post("/api/user/keys/save", headers=self.h("u1-password"),
+                                         json={"exchange": "binance", "apiKey": "k2", "secret": "s2"}).status_code, 403)
+            self.assertEqual(self.c.post("/api/user/bots", headers=self.h("u1-password"), json={**live, "enabled": False}).status_code, 200)
+            self.assertEqual(self.c.post("/api/user/live/disable", headers=self.h("u1-no2fa")).status_code, 200)
+
+    def test_demo_needs_no_2fa(self):
+        from app.user_keys_vault import save_user_keys
+        from app.user_live_activation import CONSENT_TEXT
+        self.assertEqual(self.c.post("/api/user/keys/save", headers=self.h("u1-no2fa"),
+                                     json={"exchange": "binance", "apiKey": "k", "secret": "s"}).status_code, 200)
+        r = self.c.post("/api/user/live/enable", headers=self.h("u1-no2fa"),
+                        json={"exchange": "binance", "confirm": CONSENT_TEXT, "environment": "demo"})
+        self.assertEqual(r.status_code, 200, r.json())
+        self.assertEqual(self.ask("u1-no2fa").status_code, 200)
 
 
 if __name__ == "__main__":
