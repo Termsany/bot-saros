@@ -155,6 +155,8 @@ export async function apiUserActivity(): Promise<{ items: ActivityItem[], keep_d
   try{
     const headers = await signedInHeaders(); if(!headers) return null
     const r=await fetch(`${API}/api/user/activity`, { headers, cache: "no-store" }); return r.ok ? r.json() : null
+  }catch{ return null }
+}
 /** A user's monthly statement (GET /api/user/statement): their own bots' closed trades in one month. */
 export type StatementSummary = { trades: number, wins: number, losses: number, unknown: number, net_usdt: number,
   funding_usdt: number | null, best_usdt: number | null, worst_usdt: number | null }
