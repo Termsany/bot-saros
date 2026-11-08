@@ -1,8 +1,9 @@
 """The weekly Demo check against the backtest baseline, to Telegram (roadmap B5, development-plan 6.1).
 
 The same measurement as the admin page (backend/app/demo_measure.py, rules agreed on 2026-11-01): each strategy's own
-closed Demo trades since the start, against lib/demo-baseline.json, its sample and its status. Read only: the bots'
-closed.json files and the baseline.
+closed Demo trades since the start, against lib/demo-baseline.json, its sample and its status; then the real
+momentum account, and the paper candidates against lib/paper-baseline.json. Read only: the bots' closed.json files,
+the paper bots' public JSON and the baselines.
 
   python scripts/demo_weekly.py [--telegram]      # from the API's folder, as raqmapi (raqm-demo-weekly.timer, Sundays)
 """
@@ -36,6 +37,54 @@ LIVE_START = datetime(2026, 11, 3, 15, 23, tzinfo=timezone.utc)   # momentum_ls 
 LIVE_SAMPLE = 30                    # its first 3 real rebalances, 10 legs each, before any size change
 EXPERIMENT = "momentum_wed"         # docs/momentum-wed-demo.md: Wednesday open, 6 days held, on Demo
 EXPERIMENT_SAMPLE = 80              # 8 weeks of 10 legs before any conclusion
+
+# The paper candidates against their own backtest (owner, 2026-11-08; lib/paper-baseline.json from
+# research/paper_baseline.py), with demo_measure's rules. Samples fixed before any of their trades closed.
+PUBLIC = Path(os.getenv("BOT_PUBLIC_DIR", "/var/www/bot.da3m.io"))   # the paper bots' public JSON
+PAPER_BASELINE = ROOT / "lib" / "paper-baseline.json"
+PAPER = {"rsi2_btc": ("RSI-2 + فلتر BTC (ورقي)", 15),          # as slow as RSI-2: 3 trades a month
+         "retail_fade": ("ضد الجمهور، OI (ورقي)", 36)}          # 6 weekly baskets of 3 + 3
+
+
+def paper_rows(doc):
+    """A paper bot's public history as demo_measure rows: each trade's PnL in % of its margin."""
+    try:
+        margin = float(doc.get("margin") or 0)
+    except (TypeError, ValueError):
+        margin = 0.0
+    if margin <= 0:
+        return []
+    out = []
+    for h in doc.get("history") or []:
+        try:
+            out.append({**h, "pnl_pct": float(h["pnl"]) / margin * 100})
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out
+
+
+def paper_lines(now, public=PUBLIC, baseline_path=PAPER_BASELINE):
+    from app import demo_measure as dm
+    lines = ["", "📄 البوتات الورقية الجديدة قصاد الباكتست بتاعها"]
+    try:
+        base = json.loads(baseline_path.read_text(encoding="utf-8")).get("strategies") or {}
+    except (OSError, ValueError):
+        return lines + ["   ملف الباكتست (lib/paper-baseline.json) مش موجود"]
+    for name, (label, sample) in PAPER.items():
+        try:
+            doc = json.loads((public / f"{name}.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            lines.append(f"• {label}: ملفه مش موجود"); continue
+        start = dm._when(doc.get("started")) or now
+        st = dm.stats(dm.counted(paper_rows(doc), start), now, start)
+        status, reasons = dm.verdict(st, base.get(name), sample)
+        b = (base.get(name) or {}).get("all") or {}
+        lines.append(f"{ICON.get(status, '•')} {label}: {WORD.get(status, status)} — {st['trades']}/{sample} صفقة")
+        if st["trades"]:
+            lines.append(f"   {_line(st)}")
+            lines.append(f"   الباكتست: PF {b.get('profit_factor')} · كسب {b.get('win_rate')}% · تراجع {b.get('max_dd_margins')} مارجن")
+        lines += [f"   ↳ {why}" for why in reasons]
+    return lines
 
 
 def _read(ipc, folder, env):
@@ -126,6 +175,7 @@ def main(argv=None):
         now = datetime.now(timezone.utc)
         text, far = report(demo_measure.measure(load_closed(), baseline, now), labels)
         text += "\n" + "\n".join(real_and_experiment(IPC, baseline, now))
+        text += "\n" + "\n".join(paper_lines(now))
     print(text)
     if "--telegram" in argv:
         sys.path.insert(0, str(ROOT / "scripts")); import watchdog
