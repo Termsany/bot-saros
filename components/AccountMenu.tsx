@@ -1,6 +1,6 @@
 "use client"
 import { useEffect, useRef, useState } from "react"
-import { Bot, ChevronDown, LayoutDashboard, LogOut, ShieldCheck } from "lucide-react"
+import { Bot, ChevronDown, LayoutDashboard, LogOut, MonitorX, ShieldCheck } from "lucide-react"
 import { Pill } from "@/components/ui"
 import { apiIsAdmin } from "@/lib/api"
 import { getMyTier, supabase } from "@/lib/supabase"
@@ -28,6 +28,14 @@ export function useAccount(): Account {
 
 export async function signOut(){
   try { await supabase?.auth.signOut() } finally { window.location.href = "/" }
+}
+
+/** Security plan item 9 (owner, 2026-11-08): every session of this account ends — on this device and all others.
+ *  Supabase revokes all of the account's refresh tokens; the API checks each token with Supabase (cached 60 s), so a
+ *  stolen session stops working within about a minute. */
+export async function signOutEverywhere(){
+  if (!confirm("تخرج من حسابك على كل الأجهزة (الموبايل والكمبيوتر وأي مكان تاني)؟\nهتحتاج تدخل تاني بالإيميل والباسورد والـ 2FA.")) return
+  try { await supabase?.auth.signOut({ scope: "global" }) } finally { window.location.href = "/" }
 }
 
 /** Avatar button + menu: the account's email and plan, the main account pages, and sign out. */
@@ -74,6 +82,9 @@ export function AccountMenu({ email, tier, isAdmin, compact = false }: { email: 
           <div className="border-t border-line pt-1.5">
             <button onClick={signOut} role="menuitem" className="flex w-full items-center gap-2.5 rounded-[10px] px-3 py-2 text-[14px] text-loss transition hover:bg-loss/10">
               <LogOut size={17} strokeWidth={1.8} />تسجيل الخروج
+            </button>
+            <button onClick={signOutEverywhere} role="menuitem" data-testid="sign-out-everywhere" className="flex w-full items-center gap-2.5 rounded-[10px] px-3 py-2 text-[13px] text-muted transition hover:bg-loss/10 hover:text-loss">
+              <MonitorX size={17} strokeWidth={1.8} />اخرج من كل الأجهزة
             </button>
           </div>
         </div>
