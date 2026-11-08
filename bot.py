@@ -2477,6 +2477,7 @@ def reconcile_live(state, ex):
                 state["recovery_required"][sym] = {"reason": f"الكمية على المنصة {q} مش {pos['qty']}", "at": datetime.now(timezone.utc).isoformat()}
                 notify(f"🚨 {sym}: الكمية على المنصة {q} مختلفة عن البوت {pos['qty']} — راجعها. البوت وقف أي دخول جديد.")
     _protect_pending(ex, state, live)
+    _audit_stops(ex, state, live)
     mine = {k.split(":")[0] for k in state["positions"]}
     unknown = sorted(set(live) - mine - _held_by_other_strategies())
     if unknown:
@@ -2486,6 +2487,59 @@ def reconcile_live(state, ex):
         state["_unknown_seen"] = unknown
     else:
         state.pop("_unknown_seen", None)
+    save_state(state)
+
+STOP_AUDIT_S = 3600
+AUDIT_REASON = "stop missing on the exchange (hourly stop check)"
+
+def _audit_stops(ex, state, live, now=None):
+    """reconcile_live, hourly (owner, 2026-11-08): every open position's recorded stop must still be on the exchange.
+    A stop cancelled by hand in the Binance app, or dropped by the exchange, used to leave the position open with no
+    protection while the bot's book still said "protected". Missing on two readings in a row (one read can lag; the
+    second runs on the next cycle) = the position is marked sl_unverified, which stops new entries and makes the
+    watchdog alert, plus a recovery_required entry and one Telegram message. Read only: it places and cancels nothing,
+    a person decides. When the stop is seen again, its own mark is cleared (and nobody else's)."""
+    now = now or datetime.now(timezone.utc)
+    audit = state.setdefault("_stop_audit", {})
+    pending = audit.get("missing") or {}
+    try:
+        recent = audit.get("at") and (now - datetime.fromisoformat(audit["at"])).total_seconds() < STOP_AUDIT_S
+    except (TypeError, ValueError):
+        recent = False
+    if recent and not pending:
+        return
+    from backend.app.oco import _owned_orders, _oco_id
+    missing = {}
+    for sym, pos in state["positions"].items():
+        ids = pos.get("oco_ids") or {}
+        want = {x for x in (ids.get("sl"), _oco_id(ids["pos_id"], "sl") if ids.get("pos_id") else None) if x}
+        if not want or not live.get(sym.split(":")[0]) or pos.get("unprotected"):
+            continue                                            # no stop of its own, flat, or already flagged
+        if pos.get("sl_unverified") and not pos.get("stop_audit_missing"):
+            continue                                            # the stop machinery is already handling this one
+        try:
+            found, complete = _owned_orders(ex, sym, want)
+        except Exception:
+            found, complete = {}, False
+        if not complete:
+            if sym in pending: missing[sym] = pending[sym]      # inconclusive: neither a miss nor a clear
+            continue
+        if found:
+            if pos.pop("stop_audit_missing", None):
+                pos.pop("sl_unverified", None)
+                if (state.get("recovery_required") or {}).get(sym, {}).get("reason") == AUDIT_REASON:
+                    state["recovery_required"].pop(sym, None)
+                notify(f"✅ {sym}: وقف الخسارة رجع ظاهر على المنصة")
+            continue
+        missing[sym] = pending.get(sym, 0) + 1
+        if missing[sym] >= 2 and not pos.get("stop_audit_missing"):
+            pos["stop_audit_missing"] = now.isoformat(); pos["sl_unverified"] = True
+            state.setdefault("recovery_required", {}).setdefault(sym, {"reason": AUDIT_REASON, "at": now.isoformat()})
+            notify(f"🚨 {sym}: وقف الخسارة مش موجود على Binance (اتلغى؟). الصفقة مفتوحة من غير حماية، والبوت وقف أي دخول "
+                   f"جديد. حط وقف بإيدك عند {pos.get('sl')} أو اقفل الصفقة.")
+    audit["missing"] = {k: v for k, v in missing.items() if v < 2}
+    if not audit["missing"]:
+        audit["at"] = now.isoformat()
     save_state(state)
 
 def _expect_stop(state, symbol, side, sl, cid):
