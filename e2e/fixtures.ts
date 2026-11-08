@@ -58,6 +58,10 @@ async function offline(page: Page, api?: { handler: ApiHandler, calls: ApiCall[]
     }
     // the signed-in user, for Supabase's /auth/v1/user (the session itself comes from storage: signInAsAdmin)
     if (api && url.pathname === "/auth/v1/user") return route.fulfill(json(ADMIN_USER))
+    if (api && url.pathname === "/auth/v1/logout") {          // sign out: recorded, answered as Supabase does (204)
+      api.calls.push({ method: req.method(), path: url.pathname, query: url.search, body: null })
+      return route.fulfill({ status: 204, headers: CORS, body: "" })
+    }
     if (api && url.pathname.startsWith("/api/")) {
       if (req.method() === "OPTIONS") return route.fulfill({ status: 204, headers: CORS })
       const call = { method: req.method(), path: url.pathname, query: url.search, body: req.postDataJSON?.() ?? null }
