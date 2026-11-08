@@ -14,7 +14,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SOURCES = {"state": ROOT / "state", "risk-demo": Path("/opt/raqm-risk-demo"), "risk-live": Path("/opt/raqm-risk")}
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import backup_crypto  # noqa: E402
+SOURCES ={"state": ROOT / "state", "risk-demo": Path("/opt/raqm-risk-demo"), "risk-live": Path("/opt/raqm-risk")}
 
 
 def all_sources(base=SOURCES, accounts=None, risk_root=None, copies=None):
@@ -127,9 +129,17 @@ def main():
         if len(data) > LIMIT:
             raise RuntimeError(f"archive {len(data) // 1048576} MB is over Telegram's limit")
         what = "بوتات المستخدمين" if users else "يومية"
+        # security plan item 11: locked with the owner's public key (scripts/backup_crypto.py) once it is installed;
+        # without it the backup still goes, and says so. With it, a failure to encrypt sends nothing in the clear.
+        pub = backup_crypto.public_key()
+        name = f"raqm-{'users-' if users else ''}backup-{now:%Y%m%d}.tar.gz"
+        if pub:
+            data, name, lock = backup_crypto.encrypt(data, pub), name + ".enc", "🔒 متشفّرة"
+        else:
+            lock = "⚠️ مش متشفّرة (مفتاح التشفير لسه مش على السيرفر)"
         _post("sendDocument", {"chat_id": chat, "disable_notification": "true",
-                               "caption": f"💾 نسخة احتياطية {what} — {n} {'مستخدم' if users else 'ملف'} · {len(data) / 1048576:.1f} MB"},
-              {"document": (f"raqm-{'users-' if users else ''}backup-{now:%Y%m%d}.tar.gz", data)})
+                               "caption": f"💾 نسخة احتياطية {what} — {n} {'مستخدم' if users else 'ملف'} · {len(data) / 1048576:.1f} MB · {lock}"},
+              {"document": (name, data)})
         if partial:
             _post("sendMessage", {"chat_id": chat, "text": f"🚨 نسخة بعض المستخدمين ما اتعملتش: {partial}"})
     except Exception as e:
