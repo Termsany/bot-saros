@@ -148,6 +148,15 @@ export async function apiLiveCloseResult(strategy: string, id: string): Promise<
   const r=await fetch(`${API}/api/live/close/${strategy}/${id}`, { headers: await authHeaders(), cache: "no-store" })
   return r.ok ? r.json() : { done: false }
 }
+/** The signed-in account's own activity (security plan item 10): sign-in sessions and sensitive changes, newest first. */
+export type ActivityItem = { at: string, kind: "session" | "account" | "real_money" | "admin", what: string,
+  ip: string | null, device: string | null, details: Record<string, unknown> | null }
+export async function apiUserActivity(): Promise<{ items: ActivityItem[], keep_days: number }|null>{
+  try{
+    const headers = await signedInHeaders(); if(!headers) return null
+    const r=await fetch(`${API}/api/user/activity`, { headers, cache: "no-store" }); return r.ok ? r.json() : null
+  }catch{ return null }
+}
 // ── a user's own bots (Phase 2): what they ask for, their bots' status, closing — always the signed-in user's own
 export async function apiUserBots(): Promise<any|null>{
   try{

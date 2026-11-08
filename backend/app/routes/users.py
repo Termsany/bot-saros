@@ -77,6 +77,20 @@ class UserBotCloseReq(_BM2):
     strategy: str = Field(pattern=r"^[a-z0-9_]{1,30}$")
     symbol: str
 
+def _activity(user: dict, request, what: str, details=None):
+    """A change to the account's keys or consent, on its own activity page (security plan item 10). Real-money changes
+    get there through security_alerts.user_real_money; this is everything else (Demo included)."""
+    from app import account_activity
+    account_activity.record("account", what, uid=user.get("id"), email=user.get("email"),
+                            ip=(request.client.host if request is not None and request.client else None),
+                            ua=(request.headers.get("user-agent", "") if request is not None else None), details=details)
+
+@router.get("/api/user/activity")
+async def user_activity(user: dict = Depends(require_user)):
+    """The signed-in account's own activity, newest first: its sign-in sessions and sensitive changes."""
+    from app import account_activity
+    return {"items": account_activity.list_for(user, 100), "keep_days": account_activity.KEEP_DAYS}
+
 @router.get("/api/user/keys/status")
 async def user_keys_status(user: dict = Depends(require_user)):
     from app.user_keys_vault import user_key_status
@@ -91,7 +105,7 @@ def _trades_real_money(uid: str) -> bool:
 
 
 @router.post("/api/user/keys/save")
-async def user_keys_save(req: UserSaveKeyReq, user: dict = Depends(require_user)):
+async def user_keys_save(req: UserSaveKeyReq, request: Request, user: dict = Depends(require_user)):
     _require_confirmed(user)
     rate_limit(user["id"], "user_keys", 10, 60)
     real = _trades_real_money(user["id"])
@@ -102,18 +116,22 @@ async def user_keys_save(req: UserSaveKeyReq, user: dict = Depends(require_user)
         save_user_keys(user["id"], req.exchange.lower().strip(), req.apiKey.strip(), req.secret.strip(), req.passphrase.strip())
         if real:
             security_alerts.user_real_money(user, "غيّر مفتاح حساب بفلوس حقيقية", {"exchange": req.exchange.lower().strip()})
+        else:
+            _activity(user, request, "حفظ مفتاح API", {"exchange": req.exchange.lower().strip()})
         return {"ok": True}
     except ValueError as e:
         raise HTTPException(400, str(e))
 
 @router.post("/api/user/keys/delete")
-async def user_keys_delete(body: dict, user: dict = Depends(require_user)):
+async def user_keys_delete(body: dict, request: Request, user: dict = Depends(require_user)):
     rate_limit(user["id"], "user_keys", 10, 60)
     from app.user_keys_vault import delete_user_keys
     ex = str((body or {}).get("exchange", "")).lower().strip()
     if not ex:
         raise HTTPException(400, "exchange required")
     ok = delete_user_keys(user["id"], ex)
+    if ok:
+        _activity(user, request, "مسح مفتاح API", {"exchange": ex})
     return {"ok": bool(ok)}
 
 @router.get("/api/user/live/status")
@@ -158,13 +176,16 @@ async def user_live_enable(req: UserLiveEnableReq, request: Request, user: dict 
         set_user_paper(user["id"], ex, False)  # the per-user vault entry itself switches to LIVE too
         security_alerts.user_real_money(user, "وافق على فلوس حقيقية", {"capital": req.capital_usdt, "margin": req.margin_usdt,
                                                                        "strategies": req.strategies or list(user_bots.LIVE_DEFAULT)})
+    else:
+        _activity(user, request, "وافق على Demo", {"exchange": ex})
     return {"ok": True}
 
 @router.post("/api/user/live/disable")
-async def user_live_disable(user: dict = Depends(require_user)):
+async def user_live_disable(request: Request, user: dict = Depends(require_user)):
     rate_limit(user["id"], "user_live", 10, 60)
     from app.user_live_activation import disable_user_live
     disable_user_live(M.USER_LIVE_ACTIVATION_PATH, user_id=user["id"], reason="user disabled")
+    _activity(user, request, "شال الموافقة")
     return {"ok": True}
 
 # ── A user's own bots (Phase 2, docs/phase2-design.md): the API writes what the user asks for and reads their bots'

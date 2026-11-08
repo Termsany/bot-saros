@@ -8,12 +8,12 @@ import { THEME_INIT, ThemeToggle } from "@/components/landing/ThemeToggle"
 import { apiIsAdmin } from "@/lib/api"
 import { authHeaders, getMyPlan, getUser, type MyPlan } from "@/lib/supabase"
 import { setLanguage, useLocale, useT } from "@/lib/i18n/locale"
-import { Activity, Bot, CandlestickChart, House, LayoutDashboard, LogOut, MonitorX, ShieldCheck, Sparkles } from "lucide-react"
+import { Activity, Bot, CandlestickChart, History, House, LayoutDashboard, LogOut, MonitorX, ShieldCheck, Sparkles } from "lucide-react"
 
 const T = {
   ar: {
     trading: "التداول", account: "الحساب", dashboard: "لوحة التحكم", live: "البوتات مباشر", backtest: "Backtest", lab: "مختبر AI",
-    demo: "بوتاتي على Binance (Demo)", admin: "الإدارة", home: "الرئيسية", signOut: "تسجيل الخروج", signOutAll: "اخرج من كل الأجهزة", you: "حسابك",
+    demo: "بوتاتي على Binance (Demo)", activity: "نشاط الحساب", admin: "الإدارة", home: "الرئيسية", signOut: "تسجيل الخروج", signOutAll: "اخرج من كل الأجهزة", you: "حسابك",
     plan: { free: "Backtest الترند اليومي · 7 أيام", starter: "Backtest الترند + المومنتم · 30 يوم", pro: "Backtest 3 استراتيجيات · 90 يوم", elite: "Backtest الـ 4 استراتيجيات · بلا حدود" } as Record<string, string>,
     gift: (t: string, d: number) => <>باقة {t} هدية · فاضل <b className="font-mono">{d}</b> يوم</>,
     upgrade: "رقّي باقتك", beforeGift: "اشترك قبل ما الهدية تخلص", manage: "إدارة الاشتراك / الإلغاء", opening: "بيفتح…", unavailable: "مش متاحة دلوقتي",
@@ -21,7 +21,7 @@ const T = {
   },
   en: {
     trading: "Trading", account: "Account", dashboard: "Dashboard", live: "Live bots", backtest: "Backtest", lab: "AI lab",
-    demo: "My Binance Demo bots", admin: "Admin", home: "Home", signOut: "Sign out", signOutAll: "Sign out of every device", you: "Your account",
+    demo: "My Binance Demo bots", activity: "Account activity", admin: "Admin", home: "Home", signOut: "Sign out", signOutAll: "Sign out of every device", you: "Your account",
     plan: { free: "Daily Trend backtest · 7 days", starter: "Trend + Momentum backtests · 30 days", pro: "3 strategies' backtests · 90 days", elite: "All 4 strategies' backtests · unlimited" } as Record<string, string>,
     gift: (t: string, d: number) => <>{t} plan, a gift · <b className="font-mono">{d}</b> days left</>,
     upgrade: "Upgrade your plan", beforeGift: "Subscribe before the gift ends", manage: "Manage / cancel subscription", opening: "Opening…", unavailable: "Not available right now",
@@ -96,6 +96,7 @@ export function AppShell({ active, tier: tierProp, engine, nextIn, themed = fals
     ] },
     { label: t.account, items: [
       { href: "/settings/live", label: t.demo, icon: Bot },
+      { href: "/settings/activity", label: t.activity, icon: History },
       { href: "/admin", label: t.admin, icon: ShieldCheck, adminOnly: true },
     ] },
   ].map(g => ({ ...g, items: g.items.filter(i => !i.adminOnly || isAdmin) }))
