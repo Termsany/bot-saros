@@ -6,6 +6,7 @@ someone in the Telegram chat can read the backups. The PRIVATE key, protected by
 
   python scripts/backup_crypto.py keygen <folder>          # on your own computer: backup-private.pem + backup-public.pem
   python scripts/backup_crypto.py decrypt <file.enc> [out]  # on your own computer: asks the passphrase, writes the .tar.gz
+  python scripts/backup_crypto.py verify <file.enc>         # the monthly restore test: opens and checks it, writes nothing
 
 File format: b"RAQMBK1\\n" + 2-byte length + the RSA-locked key + 12-byte nonce + AES-GCM(archive).
 """
@@ -77,7 +78,44 @@ def main(argv):
         out.write_bytes(decrypt(src.read_bytes(), key, getpass.getpass("passphrase: ").encode()))
         print(f"✅ {out}")
         return None
+    if argv[:1] == ["verify"] and len(argv) == 2:
+        key = Path(os.getenv("RAQM_BACKUP_PRIVATE", "backup-private.pem")).read_bytes()
+        res = verify_backup(Path(argv[1]), key, getpass.getpass("passphrase: ").encode())
+        for ok, line in res: print(f"{'✅' if ok else '❌'} {line}")
+        bad = sum(1 for ok, _ in res if not ok)
+        print("✅ النسخة بتتفك وسليمة" if not bad else f"🚨 {bad} مشكلة")
+        return 1 if bad else None
     return __doc__
+
+
+def verify_backup(src: Path, private_pem: bytes, passphrase: bytes):
+    """[(ok, line)] for an encrypted backup (owner, 2026-11-08, the monthly restore test): opened in memory with the
+    private key, unpacked into a temporary folder that is deleted afterwards, and checked like a restore
+    (restore_check.py). A users' backup is a tar of each user's own .tar.gz: each one must open."""
+    import io, tarfile, tempfile
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import restore_check
+    try:
+        plain = decrypt(src.read_bytes(), private_pem, passphrase)
+    except Exception as e:
+        return [(False, f"مقدرناش نفك التشفير ({type(e).__name__}): الـ passphrase أو المفتاح غلط، أو الملف اتغيّر")]
+    out = [(True, f"التشفير اتفك: {len(plain) / 1048576:.1f} MB")]
+    if src.name.startswith("raqm-users-backup"):
+        try:
+            with tarfile.open(fileobj=io.BytesIO(plain), mode="r:") as tar:
+                parts = [m for m in tar.getmembers() if m.isfile()]
+                for m in parts:
+                    with tarfile.open(fileobj=tar.extractfile(m), mode="r:gz") as inner:
+                        inner.getmembers()
+            return out + [(True, f"{len(parts)} مستخدم، كل نسخة بتتفتح")]
+        except Exception as e:
+            return out + [(False, f"نسخة مستخدم مش بتتفتح: {type(e).__name__}: {e}")]
+    with tempfile.TemporaryDirectory() as td:
+        arc = Path(td) / "a.tar.gz"; arc.write_bytes(plain)
+        try:
+            return out + restore_check.verify(restore_check.unpack(arc, Path(td) / "out"))
+        except Exception as e:
+            return out + [(False, f"الأرشيف مش بيتفك: {type(e).__name__}: {e}")]
 
 
 if __name__ == "__main__":

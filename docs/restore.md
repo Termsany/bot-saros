@@ -25,6 +25,15 @@ Then copy the `.tar.gz` it writes to the server as below. The private key never 
 copy) and the old backups can't be opened: keep it on your computer and on a USB stick. A new key pair: run
 `python scripts/backup_crypto.py keygen <folder>` and replace the public key on the server; backups from then on use it.
 
+**Restore tests (from 2026-11-08).** Every day, before sending, the server unpacks the archive into a temporary folder
+and runs the checks of step 1 on it; the caption says `✅ اتجربت تتفك`, or `❌` plus an alert message (the backup is
+still sent). The server can't open the encrypted file, so once a month (the caption of the 1st reminds you) download
+one and check it on your own computer. It opens it in memory, checks it, and writes nothing:
+
+```bash
+RAQM_BACKUP_PRIVATE=backup-private.pem python scripts/backup_crypto.py verify raqm-backup-YYYYMMDD.tar.gz.enc
+```
+
 ## 1. Check the archive (any time, changes nothing)
 
 Download the day's file from the Telegram chat, copy it to the server (`scp raqm-backup-YYYYMMDD.tar.gz root@…:/tmp/`):
