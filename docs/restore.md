@@ -11,6 +11,20 @@ server loss the key files are made again by the owner (`.env.real`, `.env.live` 
 | `risk-live/` | `/opt/raqm-risk/` | raqmlive:raqmrisk, files 660 |
 | `risk-demo/` | `/opt/raqm-risk-demo/` | raqmlive:raqmrisk, files 660 |
 
+## 0. Encrypted backups (security plan item 11, from 2026-11-08)
+
+Once the owner's public key is at `/etc/raqm-backup/public.pem`, the chat gets `raqm-backup-YYYYMMDD.tar.gz.enc`
+(caption 🔒): the server can lock a backup but never open it. Open it **on your own computer**, where the private key
+is, before step 1 (it asks the private key's passphrase):
+
+```bash
+RAQM_BACKUP_PRIVATE=backup-private.pem python scripts/backup_crypto.py decrypt raqm-backup-YYYYMMDD.tar.gz.enc
+```
+
+Then copy the `.tar.gz` it writes to the server as below. The private key never goes to the server. Lose it (and its
+copy) and the old backups can't be opened: keep it on your computer and on a USB stick. A new key pair: run
+`python scripts/backup_crypto.py keygen <folder>` and replace the public key on the server; backups from then on use it.
+
 ## 1. Check the archive (any time, changes nothing)
 
 Download the day's file from the Telegram chat, copy it to the server (`scp raqm-backup-YYYYMMDD.tar.gz root@…:/tmp/`):
