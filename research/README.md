@@ -584,6 +584,9 @@ before any result.
   (14 variants); the liquidation flush made money only after 2024.
 - **Decision:** not for real money. X3 L3 is the candidate for a paper bot next to momentum, to see whether it holds
   live.
+- **Measured live (2026-11-08):** `research/paper_baseline.py` writes both paper candidates' backtest (RSI-2 + BTC
+  filter, X3 L3) to `lib/paper-baseline.json` in the Demo baseline's units, and the Sunday report
+  (`scripts/demo_weekly.py`) puts each paper bot next to it with `demo_measure`'s rules: samples 15 and 36 trades.
 
 ## The site now shows only the four paper bots
 
