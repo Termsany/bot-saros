@@ -1,6 +1,6 @@
 "use client"
-// Live data of the four paper bots on the VPS — the same files https://bot.da3m.io reads.
-// nginx sends Access-Control-Allow-Origin for these files (deploy/vps/nginx-bot.da3m.io.conf).
+// Live data of the four paper bots on the VPS — the same files https://demo.da3m.io reads.
+// nginx sends Access-Control-Allow-Origin for these files (deploy/vps/nginx-demo.da3m.io.conf).
 import { useEffect, useState } from "react"
 import { BOT_PAGE, LIVE_BOTS, type LiveStrategy } from "./strategies"
 import { useLocale } from "./i18n/locale"

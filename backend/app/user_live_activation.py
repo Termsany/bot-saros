@@ -53,7 +53,21 @@ def _connect(path):
     for c in ("capital_usdt", "margin_usdt"):
         if c not in cols:
             con.execute(f"ALTER TABLE user_live_activation ADD COLUMN {c} REAL")
+    # the real-money strategies whose worst case the user accepted (owner, 2026-11-07); NULL = momentum (before the choice)
+    if "strategies" not in cols:
+        con.execute("ALTER TABLE user_live_activation ADD COLUMN strategies TEXT")
     return con
+
+
+def consent_strategies(rec):
+    """The real-money strategies a consent record covers: what it lists, or momentum for a record from before the
+    choice; () for a record that can't be read (it covers nothing)."""
+    import json
+    from .user_bots import LIVE_DEFAULT, live_strategies
+    try:
+        return live_strategies(json.loads(rec.get("strategies"))) if rec and rec.get("strategies") else LIVE_DEFAULT
+    except (TypeError, ValueError):
+        return ()
 
 
 ENVIRONMENTS = ("demo", "live")
@@ -61,7 +75,7 @@ ENVIRONMENTS = ("demo", "live")
 
 def enable_user_live(path, *, user_id, exchange, confirm, actor, ip=None,
                       leverage=None, risk_per_trade_pct=None, max_aggregate_risk_pct=None, environment="demo",
-                      capital_usdt=None, margin_usdt=None):
+                      capital_usdt=None, margin_usdt=None, strategies=None):
     """Record an audited per-user consent to trade on `exchange` with their own keys — on Binance Demo (play money)
     or real money (`environment`). A Demo consent never counts for real money.
 
@@ -78,10 +92,14 @@ def enable_user_live(path, *, user_id, exchange, confirm, actor, ip=None,
         raise ValueError("environment must be demo or live")
     if confirm != CONSENT_TEXT:
         raise PermissionError("explicit consent text does not match — live trading was not enabled")
-    cap = mar = None
+    cap = mar = chosen = None
     if environment == "live":
-        from .user_bots import _validate_live
-        clean = _validate_live("live", True, ["momentum_ls"], {"capital_usdt": capital_usdt, "capital_margin_override_usdt": margin_usdt})
+        import json
+        from .user_bots import _validate_live, live_strategies, LIVE_DEFAULT
+        picked = live_strategies(strategies if strategies is not None else list(LIVE_DEFAULT))
+        chosen = json.dumps(list(picked))
+        # the reserve is the bots' setting (it changes how many trades fit, not what a stop costs): not checked here
+        clean = _validate_live("live", True, list(picked), {"capital_usdt": capital_usdt, "capital_margin_override_usdt": margin_usdt}, fit=False)
         lev, rpt, agg = clean["leverage"], clean["risk_per_trade_pct"], clean["max_aggregate_risk_pct"]
         cap, mar = clean["capital_usdt"], clean["capital_margin_override_usdt"]
     else:
@@ -101,15 +119,15 @@ def enable_user_live(path, *, user_id, exchange, confirm, actor, ip=None,
         con.execute("BEGIN IMMEDIATE")
         con.execute("""INSERT INTO user_live_activation
             (user_id, exchange, enabled, leverage, risk_per_trade_pct, max_aggregate_risk_pct,
-             consent_text, consented_at, actor, ip, disabled_at, disabled_reason, environment, capital_usdt, margin_usdt)
-            VALUES(?,?,1,?,?,?,?,?,?,?,NULL,NULL,?,?,?)
+             consent_text, consented_at, actor, ip, disabled_at, disabled_reason, environment, capital_usdt, margin_usdt, strategies)
+            VALUES(?,?,1,?,?,?,?,?,?,?,NULL,NULL,?,?,?,?)
             ON CONFLICT(user_id) DO UPDATE SET
               exchange=excluded.exchange, enabled=1, leverage=excluded.leverage,
               risk_per_trade_pct=excluded.risk_per_trade_pct, max_aggregate_risk_pct=excluded.max_aggregate_risk_pct,
               consent_text=excluded.consent_text, consented_at=excluded.consented_at,
               actor=excluded.actor, ip=excluded.ip, disabled_at=NULL, disabled_reason=NULL, environment=excluded.environment,
-              capital_usdt=excluded.capital_usdt, margin_usdt=excluded.margin_usdt
-            """, (user_id, exchange, lev, rpt, agg, confirm, _now(), actor, ip, environment, cap, mar))
+              capital_usdt=excluded.capital_usdt, margin_usdt=excluded.margin_usdt, strategies=excluded.strategies
+            """, (user_id, exchange, lev, rpt, agg, confirm, _now(), actor, ip, environment, cap, mar, chosen))
         con.execute("COMMIT")
     except Exception:
         con.execute("ROLLBACK")

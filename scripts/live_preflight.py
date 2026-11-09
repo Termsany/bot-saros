@@ -100,10 +100,17 @@ def trading_code_diff(src, reviewed, live, deployed):
         return f"{type(e).__name__}: {e}"
 
 
-def account(paths, strategy):
-    """Where `strategy` trades (backend/app/live_accounts.py): the main account's files, or its own account's. Raises
-    live_accounts.RegistryError on a registry that can't be trusted (run() turns it into a failed check)."""
-    accounts = live_accounts.load(paths.get("registry", live_accounts.REGISTRY))
+def account(paths, strategy, copy=None):
+    """Where `strategy` trades (backend/app/live_accounts.py): the main account's files, or its own account's; with
+    `copy`, its copy on that copy account. Raises live_accounts.RegistryError on a registry that can't be trusted, or a
+    copy that isn't registered (run() turns it into a failed check)."""
+    reg = paths.get("registry", live_accounts.REGISTRY)
+    if copy is not None:
+        if strategy not in live_accounts.load_copies(reg).get(copy, []):
+            raise live_accounts.RegistryError(f"{strategy} has no copy on '{copy}' (live_account.py add-copy {copy} {strategy})")
+        p = live_accounts.paths(copy, paths.get("accounts_dir", live_accounts.ACCOUNTS_DIR), paths.get("risk_root", live_accounts.RISK_ROOT))
+        return {"name": copy, "copy": True, "keys": p["keys"], "keys_owner": "root", "allow": p["allow"], "ledger": p["risk"] / "risk_state.json"}
+    accounts = live_accounts.load(reg)
     name = live_accounts.account_of(strategy, accounts)
     if name is None:
         return {"name": None, "keys": paths["live"] / ".env.real", "keys_owner": "raqmlive", "allow": paths["live"] / "allow-live.env",
@@ -117,13 +124,17 @@ def check_account(paths, strategy, acct):
     account's (two strategies on one Binance account block each other's coins — the reason it has its own)."""
     if acct["name"] is None:
         return [("account", True, "main (/opt/raqm-live/.env.real)")]
-    rows = [("account", True, f"'{acct['name']}' ({acct['keys'].parent})")]
-    d = Path(paths.get("units", "/etc/systemd/system")) / f"raqm-live@{strategy}.service.d" / "account.conf"
-    want = live_accounts.dropin_text(acct["name"], strategy, paths.get("accounts_dir", live_accounts.ACCOUNTS_DIR),
-                                     paths.get("risk_root", live_accounts.RISK_ROOT))
+    rows = [("account", True, f"'{acct['name']}'{' (a copy)' if acct.get('copy') else ''} ({acct['keys'].parent})")]
+    units = Path(paths.get("units", "/etc/systemd/system"))
+    adir, rroot = paths.get("accounts_dir", live_accounts.ACCOUNTS_DIR), paths.get("risk_root", live_accounts.RISK_ROOT)
+    if acct.get("copy"):
+        d, what = units / f"raqm-live-{acct['name']}@.service", f"raqm-live-{acct['name']}@ unit"
+        want, fix = live_accounts.copy_unit_text(acct["name"], adir, rroot), f"live_account.py add-copy {acct['name']} {strategy}"
+    else:
+        d, what = units / f"raqm-live@{strategy}.service.d" / "account.conf", f"raqm-live@{strategy} drop-in for '{acct['name']}'"
+        want, fix = live_accounts.dropin_text(acct["name"], strategy, adir, rroot), f"live_account.py add {acct['name']} {strategy}"
     have = d.read_text(encoding="utf-8") if d.is_file() else None
-    rows.append((f"raqm-live@{strategy} drop-in for '{acct['name']}'", have == want,
-                 "as live_account.py writes it" if have == want else f"{d} {'missing' if have is None else 'changed'}: run live_account.py add {acct['name']} {strategy}"))
+    rows.append((what, have == want, "as live_account.py writes it" if have == want else f"{d} {'missing' if have is None else 'changed'}: run {fix}"))
     mine, main = parse_env(acct["keys"]).get("BINANCE_API_KEY"), parse_env(paths["live"] / ".env.real").get("BINANCE_API_KEY")
     rows.append(("its key is not the main account's", bool(mine) and mine != main,
                  "different keys (not shown)" if mine and mine != main else "the same key as .env.real: give this bot its own sub-account" if mine else "no key yet"))
@@ -277,9 +288,9 @@ def _arg(line, name, default):
     return float(m.group(1)) if m else float(default)
 
 
-def run(paths, strategy, clients=None):
+def run(paths, strategy, clients=None, copy=None):
     try:
-        acct = account(paths, strategy)
+        acct = account(paths, strategy, copy)
     except live_accounts.RegistryError as e:
         return [("accounts registry", False, f"{e} — fix it with deploy/vps/tools/live_account.py")]
     rows = check_account(paths, strategy, acct)
@@ -287,7 +298,8 @@ def run(paths, strategy, clients=None):
     rows += file_rows
     ledger_rows, ledger_state = check_ledger(paths, acct["ledger"])
     rows += ledger_rows
-    args_line = parse_env(paths["live"] / "strategies" / f"{strategy}.env").get("RAQM_ARGS", "--leverage 2 --amount 100")
+    opts = f"{copy}-{strategy}.env" if copy else f"{strategy}.env"          # a copy's options are its own (its unit)
+    args_line = parse_env(paths["live"] / "strategies" / opts).get("RAQM_ARGS", "--leverage 2 --amount 100")
     rows += check_binance(parse_env(acct["keys"]), strategy, caps, ledger_state, args_line, clients)
     return rows
 
@@ -295,8 +307,9 @@ def run(paths, strategy, clients=None):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--strategy", default="momentum_ls")
+    ap.add_argument("--account", default=None, help="a copy account (live_account.py add-copy): check that copy")
     a = ap.parse_args()
-    rows = run(PATHS, a.strategy)
+    rows = run(PATHS, a.strategy, copy=a.account)
     for name, ok, why in rows:
         print(f"{'✅' if ok else '❌'} {name} — {why}")
     bad = sum(1 for _, ok, _ in rows if not ok)

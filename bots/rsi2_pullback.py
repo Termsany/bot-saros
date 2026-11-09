@@ -7,7 +7,27 @@ import pandas as pd
 from datetime import datetime, timezone
 
 
-RSI2 = {"top": 10, "below": 5, "trend_ma": 200, "exit_ma": 5, "max_days": 10, "stop": 0.40}
+RSI2 = {"top": 10, "below": 5, "trend_ma": 200, "exit_ma": 5, "max_days": 10, "stop": 0.40,
+        "btc_ma": 0}   # btc_ma: --rsi2-btc-ma, new entries only while BTC closes above that average (research §28)
+
+
+def rsi2_public_name():
+    """The RSI-2 bot's public file and paper close-request folder: "rsi2", or --public-name for a second one."""
+    return bot.CONFIG.get("public_name") or "rsi2"
+
+
+def rsi2_btc_ok(ex, R):
+    """(ok, detail): True without the filter; with it, BTC's last closed daily close above its btc_ma-day average.
+    No data -> no new entries (exits are never blocked)."""
+    n = int(R.get("btc_ma") or 0)
+    if not n: return True, None
+    try:
+        c = [r[4] for r in ex.fetch_ohlcv("BTC/USDT:USDT", "1d", limit=n + 15)[:-1]]
+        if len(c) < n: return False, {"ma": n, "error": "short history"}
+        ma = sum(c[-n:]) / n
+        return c[-1] > ma, {"ma": n, "close": c[-1], "avg": round(ma, 2), "above": c[-1] > ma}
+    except Exception as e:
+        return False, {"ma": n, "error": type(e).__name__}
 
 def rsi2_mode():
     """Paper RSI-2 pullback (Larry Connors): at each daily close, among the top 10 by 30-day volume above their 200-day
@@ -26,13 +46,15 @@ def run_once_rsi2(ex):
         # strategy's own exits still run: returning here left open positions without their signal exits
         bot.reconcile_live(state, ex)
         if bot._ENTRY_BLOCK.get("reason"): bot.log(f"⛔ دخول جديد متوقف، الخروج شغّال — {bot._ENTRY_BLOCK['reason']}")
-    bot.process_paper_closes(state, ex, "rsi2")
+    bot.process_paper_closes(state, ex, rsi2_public_name())
     if not bot.CONFIG["paper_trading"]:
         bot.process_manual_closes(state, ex, prices); bot._retry_due_exits(ex, state, "RSI-2")
     bot._guard_stops(ex, state, prices, "RSI-2")
     if state.get("rsi2_day") != day.isoformat():
         # once per closed daily candle: exits first, then new entries at about today's open
         universe = bot.volume_universe(ex, R["top"]); watch = []
+        btc_ok, btc = rsi2_btc_ok(ex, R)
+        if not btc_ok: bot.log(f"RSI-2: BTC filter {btc} — no new entries today")
         for sym in sorted(set(universe) | set(state["positions"])):
             try:
                 k = ex.fetch_ohlcv(sym, "1d", limit=R["trend_ma"] + 15)[:-1]   # closed candles only
@@ -55,7 +77,7 @@ def run_once_rsi2(ex):
                 if sym not in universe or len(c) < R["trend_ma"]: continue
                 r2 = bot.rsi_wilder(c, 2); ma = sum(c[-R["trend_ma"]:]) / R["trend_ma"]
                 watch.append({"symbol": sym.split(":")[0], "rsi2": round(r2, 1), "above_200": c[-1] > ma, "price": price})
-                if r2 < R["below"] and c[-1] > ma:
+                if r2 < R["below"] and c[-1] > ma and btc_ok:
                     sl = price * (1 - R["stop"])
                     if bot.CONFIG.get("paper_trading"):
                         bot._paper_open(state, sym, price, now, {"sl": sl, "rsi2": round(r2, 1),
@@ -65,12 +87,13 @@ def run_once_rsi2(ex):
                             "exit_at": (day + pd.Timedelta(days=R["max_days"])).isoformat()}):
                         continue
                     bot.log(f"✅ 🟢 RSI-2 {sym} @ {price} (RSI-2 {r2:.1f} في ترند صاعد)")
-                    bot.notify(f"🟢 RSI-2 {sym.split(':')[0]} (Paper)\nRSI-2 {r2:.1f} وفوق متوسط 200 يوم — دخول {price:.6g}\nخروج: أول قفل يومي فوق متوسط 5 أيام (أقصى {R['max_days']} أيام) · وقف {price * (1 - R['stop']):.6g}")
+                    bot.notify(f"🟢 RSI-2 {sym.split(':')[0]} (Paper)\nRSI-2 {r2:.1f} وفوق متوسط 200 يوم{' · BTC فوق متوسط ' + str(R['btc_ma']) + ' يوم' if R.get('btc_ma') else ''} — دخول {price:.6g}\nخروج: أول قفل يومي فوق متوسط 5 أيام (أقصى {R['max_days']} أيام) · وقف {price * (1 - R['stop']):.6g}")
             except Exception as e: bot.log(f"RSI-2 {sym}: {e}")
-        state.update(rsi2_day=day.isoformat(), rsi2_watch=watch); bot.save_state(state)
+        state.update(rsi2_day=day.isoformat(), rsi2_watch=watch, rsi2_btc=btc); bot.save_state(state)
     for sym in state["positions"]:
         if sym not in prices:
             try: prices[sym] = float(ex.fetch_ticker(sym)["last"])
             except Exception: pass
-    bot.write_simple_status("rsi2", state, prices, R, {"day": state.get("rsi2_day"), "watch": state.get("rsi2_watch", [])})
+    bot.write_simple_status(rsi2_public_name(), state, prices, R, {"day": state.get("rsi2_day"), "watch": state.get("rsi2_watch", []),
+                                                           "btc_filter": state.get("rsi2_btc")})
     bot.log(f"📊 RSI-2: {len(state['positions'])} مفتوحة | PnL محقق {state['stats']['pnl']:+.4f}")

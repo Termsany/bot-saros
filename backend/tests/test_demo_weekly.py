@@ -60,5 +60,58 @@ class DemoWeeklyTests(unittest.TestCase):
         self.assertIn("raqm-demo-weekly.timer", s)
 
 
+def leg(t, pct, pnl=0.0, **kw):
+    return dict({"symbol": "X/USDT:USDT", "side": "long", "opened": (t - timedelta(days=3)).isoformat(), "time": t.isoformat(),
+                 "pnl": pnl, "pnl_pct": pct, "reason": "تبديل أسبوعي", "by": None}, **kw)
+
+
+class RealAndExperimentTests(unittest.TestCase):
+    """The real momentum_ls next to its backtest, and the Wednesday experiment next to it over the same weeks."""
+    def setUp(self):
+        self.td = tempfile.TemporaryDirectory(); self.ipc = Path(self.td.name)
+    def tearDown(self): self.td.cleanup()
+
+    def write(self, folder, rows, env):
+        (self.ipc / folder).mkdir(parents=True, exist_ok=True)
+        (self.ipc / folder / "closed.json").write_text(json.dumps({"env": env, "closed": rows}), encoding="utf-8")
+
+    def text(self, now=NOW):
+        return "\n".join(dw.real_and_experiment(self.ipc, BASE, now))
+
+    def test_the_real_account_counts_from_the_go_live_in_margins_and_dollars(self):
+        ain = leg(datetime(2026, 11, 6, 0, 40, tzinfo=timezone.utc), -79.97, -20.79, reason="وقف المنصة",
+                  opened="2026-11-03T15:24:53.669402+00:00")                                   # the real AIN leg
+        self.write("momentum_ls", [ain, leg(datetime(2026, 11, 2, tzinfo=timezone.utc), 50.0, 13.0)], "live")   # before go-live
+        t = self.text()
+        self.assertIn("لسه بتجمع — 1/30 رجل", t)
+        self.assertIn("صافي -0.8 مارجن", t); self.assertIn("بالدولار: -20.79$", t)
+        self.assertIn("الباكتست: PF 1.19", t)
+        self.assertIn("لسه ما بدأتش", t)
+
+    def test_a_demo_file_in_the_real_folder_is_not_the_real_account(self):
+        self.write("momentum_ls", [leg(datetime(2026, 11, 6, tzinfo=timezone.utc), 10.0)], "demo")
+        self.assertIn("ملف الصفقات المقفولة مش موجود", self.text())
+
+    def test_the_experiment_is_compared_with_the_real_bot_over_its_own_weeks(self):
+        start = datetime(2026, 11, 11, tzinfo=timezone.utc)
+        self.write("momentum_ls", [leg(datetime(2026, 11, 9, tzinfo=timezone.utc), 30.0),        # before the experiment
+                                   leg(datetime(2026, 11, 16, tzinfo=timezone.utc), -10.0)], "live")
+        self.write("momentum_wed", [leg(start + timedelta(days=6), 20.0, opened=start.isoformat()),
+                                    leg(start + timedelta(days=6), -5.0, opened=start.isoformat(), reason="قفل يدوي من Binance")], "demo")
+        t = self.text(datetime(2026, 11, 20, tzinfo=timezone.utc))
+        self.assertIn("الأربع: 1/80 رجل", t)                      # the manual close isn't counted
+        self.assertIn("الاتنين: 1 رجل", t)                        # only the real legs since the experiment began
+        self.assertIn("لسه بتجمع: القرار بعد 80 رجل", t)
+
+    def test_after_eight_weeks_it_says_which_one_did_better(self):
+        start = datetime(2026, 11, 11, tzinfo=timezone.utc)
+        exp = [leg(start + timedelta(days=6 + 7 * (i // 10)), 2.0, opened=(start + timedelta(days=7 * (i // 10))).isoformat()) for i in range(80)]
+        self.write("momentum_wed", exp, "demo")
+        self.write("momentum_ls", [leg(start + timedelta(days=5 + 7 * w), 1.0) for w in range(8)], "live")
+        self.assertIn("✅ الأربع مش أسوأ", self.text(datetime(2027, 1, 15, tzinfo=timezone.utc)))
+        self.write("momentum_wed", [dict(r, pnl_pct=-2.0) for r in exp], "demo")
+        self.assertIn("❌ الأربع أسوأ", self.text(datetime(2027, 1, 15, tzinfo=timezone.utc)))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useState } from "react"
 import { apiSetUserBots, apiUserBotClose, apiUserBots } from "@/lib/api"
 import { NAME_AR, NAME_EN } from "@/lib/strategies"
+import { liveShort } from "@/lib/liveStrategies"
 import type { Locale } from "@/lib/i18n/landing"
 import { Card, CardHeader, Pill, btn, field, label, type Tone } from "@/components/ui"
 
@@ -26,9 +27,9 @@ const T = {
     needConsent: "محتاج الموافقة (الخطوة 3) قبل ما البوتات تشتغل.", capital: "راس المال ($) — مش أكتر من رصيد الـ Demo", margin: "المارجن لكل صفقة ($)",
     saveChanges: "احفظ التغييرات", start: "شغّل البوتات", stop: "وقّف البوتات", running: "شغال", notRunning: "مش شغال", blocked: "الدخول متوقف: ",
     noOpen: "مفيش صفقات مفتوحة", head: ["العملة", "الاتجاه", "الدخول", "الربح", ""], close: "اقفل",
-    liveTitle: "4 · البوت بتاعك (فلوس حقيقية)", liveSub: "momentum بس · بالمبلغ والمارجن اللي في الخطوة 2 · بيفتح السلة أول ما يشتغل، والتبديل كل اتنين",
-    liveConfirm: (cap: number, m: number) => `⚠️ فلوس حقيقية على حسابك في Binance:\nmomentum · راس المال ${cap}$ · مارجن ${m}$ للصفقة\nبيفتح السلة أول ما يشتغل.`,
-    liveNeedConsent: "وافق على الفلوس الحقيقية بالأرقام دي في الخطوة 3 الأول.", liveStart: "شغّل momentum بفلوس حقيقية" },
+    liveTitle: "4 · البوت بتاعك (فلوس حقيقية)", liveSub: (n: string) => `${n} · بالمبلغ والمارجن والاستراتيجيات اللي في الخطوة 2`,
+    liveConfirm: (n: string, cap: number, m: number, r: number) => `⚠️ فلوس حقيقية على حسابك في Binance:\n${n} · راس المال ${cap}$ · مارجن ${m}$ للصفقة · احتياطي ${r}%\nبيبدأ يدخل أول ما يشتغل.`,
+    liveNeedConsent: "وافق على الفلوس الحقيقية بالأرقام والاستراتيجيات دي في الخطوة 3 الأول.", liveStart: (n: string) => `شغّل ${n} بفلوس حقيقية` },
   en: { na: "Not available right now", pickOne: "Pick at least one strategy", marginRule: "The margin per trade must be above zero and not more than the capital",
     confirmOn: (names: string, cap: number, m: number) => `Run on Binance Demo (play money):\n${names}\nCapital $${cap} · margin $${m} per trade`, confirmOff: "Stop the bots? Open trades exit on their own rule.",
     savedOn: "✅ Saved — the server applies it within a minute", savedOff: "✅ Stopped", confirmClose: (s: string) => `Close ${s} now at the market price?`, closeSent: "✅ Close request sent — it runs within a minute",
@@ -36,9 +37,9 @@ const T = {
     needConsent: "Needs your consent (step 3) before the bots can run.", capital: "Capital ($) — not more than your Demo balance", margin: "Margin per trade ($)",
     saveChanges: "Save changes", start: "Start the bots", stop: "Stop the bots", running: "Running", notRunning: "Not running", blocked: "Entries stopped: ",
     noOpen: "No open trades", head: ["Coin", "Side", "Entry", "P&L", ""], close: "Close",
-    liveTitle: "4 · Your bot (real money)", liveSub: "momentum only · with step 2's amount and margin · opens its basket as soon as it starts, rebalances every Monday",
-    liveConfirm: (cap: number, m: number) => `⚠️ Real money on your Binance account:\nmomentum · capital $${cap} · margin $${m} per trade\nIt opens its basket as soon as it starts.`,
-    liveNeedConsent: "Agree to real money with these numbers in step 3 first.", liveStart: "Start momentum with real money" },
+    liveTitle: "4 · Your bot (real money)", liveSub: (n: string) => `${n} · with step 2's amount, margin and strategies`,
+    liveConfirm: (n: string, cap: number, m: number, r: number) => `⚠️ Real money on your Binance account:\n${n} · capital $${cap} · margin $${m} per trade · reserve ${r}%\nIt starts entering as soon as it runs.`,
+    liveNeedConsent: "Agree to real money with these numbers and strategies in step 3 first.", liveStart: (n: string) => `Start ${n} with real money` },
 }
 const ANSWER: Record<string, [string, Tone, string]> = {
   running: ["شغّالة", "profit", "البوتات بتاعتك شغالة على حساب Binance Demo بتاعك."],
@@ -56,9 +57,10 @@ const money = (v?: number|null) => v == null ? "—" : `${v < 0 ? "−" : ""}$${
 
 /** A user's own strategies on their own Binance Demo account: choose up to the allowed number, capital and margin;
  *  the server's provisioner runs each as the owner's bot does, after the owner approves the account. */
-export function UserBots({ consent, locale = "ar", money: mode = "demo", liveCapital = 0, liveMargin = 0, liveConsented = false }: {
+export function UserBots({ consent, locale = "ar", money: mode = "demo", liveCapital = 0, liveMargin = 0, liveReserve = 40, liveConsented = false,
+                           liveStrategies = ["momentum_ls"] }: {
   consent: { enabled: boolean, leverage?: number, risk_per_trade_pct?: number, max_aggregate_risk_pct?: number }, locale?: Locale,
-  money?: "demo" | "live", liveCapital?: number, liveMargin?: number, liveConsented?: boolean }){
+  money?: "demo" | "live", liveCapital?: number, liveMargin?: number, liveReserve?: number, liveConsented?: boolean, liveStrategies?: string[] }){
   const live = mode === "live"
   const t = T[locale], en = locale === "en"
   const LABELS = en ? NAME_EN : NAME_AR
@@ -91,13 +93,13 @@ export function UserBots({ consent, locale = "ar", money: mode = "demo", liveCap
     setChosen(c => { const cur = c.filter(x => offered.includes(x)); return cur.includes(s) ? cur.filter(x => x !== s) : cur.length < max ? [...cur, s] : cur })
   }
   async function save(on: boolean){
-    if(live){                 // real money: momentum, step 2's numbers (the server computes the limits from them)
+    if(live){                 // real money: step 2's strategies and numbers (the server computes the limits from them)
       if(on && !liveConsented){ setMsg(t.liveNeedConsent); return }
-      if(!confirm(on ? t.liveConfirm(liveCapital, liveMargin) : t.confirmOff)) return
+      if(!confirm(on ? t.liveConfirm(liveShort(liveStrategies), liveCapital, liveMargin, liveReserve) : t.confirmOff)) return
       setBusy(true); setMsg("")
       try{
-        await apiSetUserBots({ env: "live", enabled: on, strategies: ["momentum_ls"], leverage: 2, risk_per_trade_pct: 1, max_aggregate_risk_pct: 3,
-          capital_usdt: liveCapital, capital_margin_override_usdt: liveMargin })
+        await apiSetUserBots({ env: "live", enabled: on, strategies: liveStrategies, leverage: 2, risk_per_trade_pct: 1, max_aggregate_risk_pct: 3,
+          capital_usdt: liveCapital, capital_margin_override_usdt: liveMargin, capital_reserve_pct: liveReserve })
         setMsg(on ? t.savedOn : t.savedOff); load()
       }catch(e: any){ setMsg(`⚠️ ${e.message}`) }
       finally{ setBusy(false) }
@@ -126,7 +128,7 @@ export function UserBots({ consent, locale = "ar", money: mode = "demo", liveCap
   const bots = Object.entries(data.bots || {}) as [string, any][]
   return (
     <Card className={live ? "border-loss/30" : "border-signal/30"}>
-      <CardHeader title={live ? t.liveTitle : t.title} sub={live ? t.liveSub : t.sub(max)}
+      <CardHeader title={live ? t.liveTitle : t.title} sub={live ? t.liveSub(liveShort(liveStrategies)) : t.sub(max)}
         action={ans && <Pill tone={ans[1]}>{ans[0]}</Pill>} />
       {ans && <p className="mb-4 rounded-xl bg-surface2 px-4 py-3 text-[13px] text-muted">{ans[2]}</p>}
       {(live ? !liveConsented : !consent.enabled) && <p className="mb-4 text-[12px] text-loss">{live ? t.liveNeedConsent : t.needConsent}</p>}
@@ -153,7 +155,7 @@ export function UserBots({ consent, locale = "ar", money: mode = "demo", liveCap
       <div className="mt-4 flex flex-wrap items-center gap-2">
         <button onClick={() => save(true)} disabled={busy || (live && !liveConsented)}
           className={live ? "inline-flex items-center justify-center gap-2 rounded-xl bg-loss px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40" : btn.primary}>
-          {enabled ? t.saveChanges : live ? t.liveStart : t.start}</button>
+          {enabled ? t.saveChanges : live ? t.liveStart(liveShort(liveStrategies)) : t.start}</button>
         {enabled && <button onClick={() => save(false)} disabled={busy} className={btn.secondary}>{t.stop}</button>}
         {msg && <span className="text-[12px] text-muted">{msg}</span>}
       </div>
