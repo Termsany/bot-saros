@@ -8,7 +8,7 @@ set -eu
 COMMIT=$(git rev-parse --verify "${1:?commit}^{commit}")
 HOST=${2:-root@148.230.113.18}
 SSH="ssh -i $HOME/.ssh/claude_vps -o BatchMode=yes $HOST"
-git -c core.autocrlf=false archive "$COMMIT" bot.py strategies_advanced.py strategies_trend.py strategies_wave.py trade_card.py \
+git -c core.autocrlf=false archive "$COMMIT" bot.py bots strategies_advanced.py strategies_trend.py strategies_wave.py trade_card.py \
     assets/fonts backend/app deploy/vps/raqm-ratio-nobtc.service | $SSH "set -eu
   T=\$(mktemp -d); trap 'rm -rf \"\$T\"' EXIT
   tar -x -C \"\$T\"
