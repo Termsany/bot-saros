@@ -63,10 +63,26 @@ def admin_action(actor: str, action: str, result: str, details=None) -> bool:
     name = label(action)
     if not name:
         return False
+    _activity("admin", f"{name} ({result})", email=actor, details=details)
     return _send(f"🔐 أدمن · {name}\n{actor} · {result}{_details(details)}")
 
 
 def user_real_money(user: dict, what: str, details=None) -> bool:
     """A user's own real-money change: consent, a real-money bot on/off or its numbers, a key replaced."""
     who = str(user.get("email") or str(user.get("id") or "")[:8])
+    _activity("real_money", what, uid=user.get("id"), email=user.get("email"), details=details)
     return _send(f"💰 مستخدم · {what}\n{who}{_details(details)}")
+
+
+def admin_session(user: dict, ip, device: str) -> bool:
+    """An admin's new sign-in session (security plan item 10): a stolen password or session shows up on the phone."""
+    return _send(f"🔐 أدمن · دخول جديد\n{user.get('email')} · {device} · {ip or '?'}")
+
+
+def _activity(kind, what, **kw):
+    """The same change on the account's activity page (account_activity); never raises."""
+    try:
+        from app import account_activity
+        account_activity.record(kind, what, **kw)
+    except Exception as e:
+        print(f"activity not recorded: {type(e).__name__}")

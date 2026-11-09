@@ -30,6 +30,7 @@ GET /api/paper/close/{bot}/{rid}
 GET /api/plans
 GET /api/telegram/status
 GET /api/trades
+GET /api/user/activity
 GET /api/user/bots
 GET /api/user/bots/close/{strategy}/{rid}
 GET /api/user/bots/risk

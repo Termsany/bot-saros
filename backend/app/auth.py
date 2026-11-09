@@ -17,7 +17,7 @@ Env: SUPABASE_URL, SUPABASE_ANON_KEY (or SUPABASE_SERVICE_KEY), ADMIN_EMAILS, CR
 """
 import os, time, hashlib, hmac, json, base64
 import httpx
-from fastapi import Header, HTTPException
+from fastapi import Header, HTTPException, Request
 
 _CACHE: dict = {}
 _CACHE_TTL_S = 60
@@ -84,8 +84,34 @@ def _bearer(authorization: str) -> str:
     return authorization.split(" ", 1)[1].strip()
 
 
-async def require_user(authorization: str = Header(default="")) -> dict:
-    return await _verify_token(_bearer(authorization))
+def _session_id(token: str):
+    """Supabase's session id claim (read only after Supabase accepted this very token). It opens nothing on its own."""
+    try:
+        part = token.split(".")[1]
+        sid = json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4))).get("session_id")
+        return sid if isinstance(sid, str) and 0 < len(sid) <= 64 else None
+    except Exception:
+        return None
+
+
+def _note_session(user: dict, token: str, request) -> None:
+    """Security plan item 10: the first request of each sign-in session goes on the account's activity page
+    (account_activity), and an admin's new session also to the owner's Telegram. Never blocks the request."""
+    try:
+        from app import account_activity, security_alerts
+        ip = request.client.host if request is not None and request.client else None
+        ua = request.headers.get("user-agent", "") if request is not None else None
+        if account_activity.session_seen(user, _session_id(token), ip=ip, ua=ua) and is_admin(user):
+            security_alerts.admin_session(user, ip, account_activity.device(ua))
+    except Exception as e:
+        print(f"session not noted: {type(e).__name__}")
+
+
+async def require_user(authorization: str = Header(default=""), request: Request = None) -> dict:
+    token = _bearer(authorization)
+    user = await _verify_token(token)
+    _note_session(user, token, request)
+    return user
 
 
 def is_admin(user: dict) -> bool:
@@ -95,8 +121,10 @@ def is_admin(user: dict) -> bool:
     return bool(admins and user.get("email") in admins and user.get("email_confirmed") and (not ids or user.get("id") in ids))
 
 
-async def require_admin(authorization: str = Header(default="")) -> dict:
-    user = await _verify_token(_bearer(authorization))
+async def require_admin(authorization: str = Header(default=""), request: Request = None) -> dict:
+    token = _bearer(authorization)
+    user = await _verify_token(token)
+    _note_session(user, token, request)
     admins = _admin_emails()
     if not admins:
         raise HTTPException(403, "ADMIN_EMAILS not set on the backend — admin endpoints are disabled")
