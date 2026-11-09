@@ -299,6 +299,33 @@ def server_problems(now, disk=_disk, mem=_mem, ntp=_ntp_synced, offset=_binance_
     return out
 
 
+# ── the paper bots (owner, 2026-11-09: "the new bots on paper, watched"): play money, but the three portfolios and the
+# candidates are measured on them, so a paper bot that stopped is a hole in the measurement. Each writes its page file
+# every cycle (a minute); one that hasn't for PAPER_STALE_S is stopped or stuck.
+PAPER_PUBLIC = Path(os.getenv("BOT_PUBLIC_DIR", "/var/www/bot.da3m.io"))
+PAPER_STALE_S = 900
+PAPER_BOTS = {"status": "الترند اليومي", "listing": "شورت العملات الجديدة", "momentum": "مومنتم", "retail_fade": "عكس الأغلبية",
+              "rsi2_btc": "RSI-2 + فلتر BTC", "rsi2": "RSI-2", "breakout": "بريك أوت التذبذب", "tbreak": "اختراق الترند",
+              "ratio": "Ratio trend", "ratio_nobtc": "Ratio trend من غير BTC/ETH"}
+
+
+def paper_problems(now, public=PAPER_PUBLIC, bots=PAPER_BOTS):
+    """{key: (text, checks)}: a paper bot whose page file is missing, unreadable or older than PAPER_STALE_S. Two checks
+    in a row (a restart takes a cycle)."""
+    out = {}
+    for name, label in bots.items():
+        try:
+            st = json.loads(_read_status(public / f"{name}.json", limit=8 << 20))
+            age = (now - datetime.fromisoformat(str(st["updated"]).replace("Z", "+00:00"))).total_seconds()
+        except FileNotFoundError:
+            out[f"paper:{name}"] = (f"البوت الورقي {label}: ملفه ({name}.json) مش موجود", 2); continue
+        except Exception as e:
+            out[f"paper:{name}"] = (f"البوت الورقي {label}: ملفه مش بيتقري ({type(e).__name__})", 2); continue
+        if age > PAPER_STALE_S:
+            out[f"paper:{name}"] = (f"البوت الورقي {label} ما حدّثش من {int(age // 60)} دقيقة — واقف أو معلّق", 2)
+    return out
+
+
 def checks(now, users=False):
     """problems() and the server's, or one problem saying the watchdog itself can't look: a crash here used to mean silence."""
     try:
@@ -306,6 +333,7 @@ def checks(now, users=False):
             return user_problems(now)
         out = problems(now)
         out.update(server_problems(now))
+        out.update(paper_problems(now))
         return out
     except Exception as e:
         return {"watchdog": (f"المراقب نفسه مش قادر يفحص البوتات: {type(e).__name__}: {e}", 2)}

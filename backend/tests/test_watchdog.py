@@ -115,10 +115,11 @@ class WatchdogTests(unittest.TestCase):
         self.assertEqual(self.server(disk=boom, mem=boom, ntp=boom, offset=lambda: None, vault=lambda: None), {})
         self.assertEqual(self.server(vault=lambda: "empty"), {})              # no user has saved a key yet
 
-    def test_checks_adds_the_server_to_the_bots(self):
+    def test_checks_adds_the_server_and_the_paper_bots_to_the_bots(self):
         with mock.patch.object(wd, "problems", lambda now: {"down:demo:x": ("t", 2)}), \
-             mock.patch.object(wd, "server_problems", lambda now: {"server:disk": ("d", 2)}):
-            self.assertEqual(set(wd.checks(NOW)), {"down:demo:x", "server:disk"})
+             mock.patch.object(wd, "server_problems", lambda now: {"server:disk": ("d", 2)}), \
+             mock.patch.object(wd, "paper_problems", lambda now: {"paper:momentum": ("p", 2)}):
+            self.assertEqual(set(wd.checks(NOW)), {"down:demo:x", "server:disk", "paper:momentum"})
         with mock.patch.object(wd, "user_problems", lambda now: {}), mock.patch.object(wd, "server_problems", lambda now: 1 / 0):
             self.assertEqual(wd.checks(NOW, users=True), {})                 # the users' watchdog: their bots only
 
@@ -130,6 +131,47 @@ class WatchdogTests(unittest.TestCase):
         self.assertEqual("\n".join(parts).split("\n"), lines)                          # nothing lost or reordered
         self.assertEqual(wd.chunks(["x" * 5000]), ["x" * wd.LIMIT])
         self.assertEqual(wd.chunks([]), [])
+
+
+class PaperWatchTests(unittest.TestCase):
+    """The paper bots (owner, 2026-11-09): a page file that stopped moving is a stopped bot."""
+    def setUp(self):
+        self.td = tempfile.TemporaryDirectory(); self.pub = Path(self.td.name)
+        self.bots = {"momentum": "مومنتم", "retail_fade": "عكس الأغلبية", "rsi2_btc": "RSI-2 + فلتر BTC"}
+        for n in self.bots: self.write(n, NOW - timedelta(minutes=1))
+
+    def tearDown(self):
+        self.td.cleanup()
+
+    def write(self, name, updated):
+        (self.pub / f"{name}.json").write_text(json.dumps({"updated": updated.isoformat(), "history": []}), encoding="utf-8")
+
+    def seen(self):
+        return wd.paper_problems(NOW, public=self.pub, bots=self.bots)
+
+    def test_fresh_paper_bots_send_nothing(self):
+        self.assertEqual(self.seen(), {})
+
+    def test_a_paper_bot_that_stopped_writing_is_named_after_two_checks(self):
+        self.write("retail_fade", NOW - timedelta(minutes=40))
+        seen = self.seen()
+        self.assertEqual(set(seen), {"paper:retail_fade"})
+        self.assertIn("عكس الأغلبية ما حدّثش من 40 دقيقة", seen["paper:retail_fade"][0])
+        self.assertEqual(seen["paper:retail_fade"][1], 2)
+        state, msgs = wd.step({}, seen); self.assertEqual(msgs, [])                       # one check: not yet
+        state, msgs = wd.step(state, seen); self.assertEqual(len(msgs), 1)                # the second: alerted
+        state, msgs = wd.step(state, {}); self.assertTrue(msgs[0].startswith("✅"))       # and when it writes again
+
+    def test_a_missing_or_broken_file_is_a_problem(self):
+        (self.pub / "rsi2_btc.json").unlink(); (self.pub / "momentum.json").write_text("{", encoding="utf-8")
+        seen = self.seen()
+        self.assertIn("مش موجود", seen["paper:rsi2_btc"][0]); self.assertIn("مش بيتقري", seen["paper:momentum"][0])
+
+    def test_every_paper_bot_of_the_page_is_watched(self):
+        page = (ROOT / "deploy" / "vps" / "page" / "index.html").read_text(encoding="utf-8")
+        for name in ("status", "listing", "momentum", "retail_fade", "rsi2_btc", "rsi2", "breakout", "tbreak", "ratio", "ratio_nobtc"):
+            self.assertIn(name, wd.PAPER_BOTS)
+            self.assertTrue(f"{name}.json" in page or f'["{name}"' in page, name)
 
 
 class WatchdogUnitTests(unittest.TestCase):
