@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from backend.app import risk_manager as riskmgr
 from backend.app import live_accounts
+from backend.app import user_bots as users   # the one place the users' folder layout is written down
 
 STRATEGIES = ("trend_daily", "vol_breakout", "rsi2_pullback", "trend_breakout", "listing_short", "momentum_ls", "ratio_trend")
 LEDGERS = {"demo": Path("/opt/raqm-risk-demo"), "live": Path("/opt/raqm-risk")}
@@ -139,6 +140,8 @@ def _unit_failed(name):
 
 # ── users' bots (Phase 2, docs/phase2-design.md): run as root with only CAP_DAC_READ_SEARCH (raqm-watchdog-users), so
 # it can read every user's status and write nothing of theirs. Their kill switch shows in their status (entry_block).
+# Each bot's status is in /opt/raqm-users/ipc/<uid>--<strategy>/ (its unit's %i, the provisioner's ipc_instance): until
+# 2026-11-09 this read <uid>/<strategy>/, found no file and alerted "not writing its status" while the kill switch was on.
 USER_UNITS = Path("/etc/systemd/system")
 USER_IPC = Path("/opt/raqm-users/ipc")
 USER_STATE = Path("/var/lib/raqm-watchdog-users/state.json")
@@ -163,7 +166,7 @@ def user_problems(now, bots=None, active=_user_active, ipc=USER_IPC):
     out = {}
     for uid, s in (user_bots() if bots is None else bots):
         who = f"{s} (مستخدم {uid[:8]})"
-        st = check_bot(out, now, f"user:{uid}:{s}", who, None, active(uid, s), ipc / uid / s / "live_status.json")
+        st = check_bot(out, now, f"user:{uid}:{s}", who, None, active(uid, s), users.ipc_instance(uid, s, ipc) / "live_status.json")
         if st and "kill switch" in (st.get("entry_block") or ""):
             out[f"kill:user:{uid}"] = (f"قفل الطوارئ اشتغل على حساب المستخدم {uid[:8]}: {st['entry_block']}", 1)
     return out

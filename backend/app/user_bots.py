@@ -3,7 +3,7 @@ the root provisioner (scripts/provision_users.py), which applies it — so both 
 Stdlib only: the provisioner imports it from the real-orders code copy.
 
 The API never trades: it writes /opt/raqm-users/desired/<uid>.json (no keys), reads the user's own bots' status
-from /opt/raqm-users/ipc/<uid>/<strategy>/ and drops close requests there, like the owner's admin page does.
+from /opt/raqm-users/ipc/<uid>--<strategy>/ (ipc_instance) and drops close requests there, like the owner's admin page does.
 """
 import json, os, re
 from datetime import datetime, timezone
