@@ -38,6 +38,7 @@ GET /api/user/keys/status
 GET /api/user/live/status
 GET /api/user/me
 GET /api/user/settings
+GET /api/user/statement
 GET /api/user/tier
 HEAD /api/health/bots
 PATCH /api/admin/risk/limits

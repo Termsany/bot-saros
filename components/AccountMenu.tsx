@@ -1,6 +1,6 @@
 "use client"
 import { useEffect, useRef, useState } from "react"
-import { Bot, ChevronDown, History, LayoutDashboard, LogOut, MonitorX, ShieldCheck } from "lucide-react"
+import { Bot, ChevronDown, History, LayoutDashboard, LogOut, MonitorX, Receipt, ShieldCheck } from "lucide-react"
 import { Pill } from "@/components/ui"
 import { apiIsAdmin } from "@/lib/api"
 import { getMyTier, supabase } from "@/lib/supabase"
@@ -53,6 +53,7 @@ export function AccountMenu({ email, tier, isAdmin, compact = false }: { email: 
   const links = [
     { href: "/dashboard", label: "لوحة التحكم", icon: LayoutDashboard },
     { href: "/settings/live", label: "بوتاتي على Binance (Demo)", icon: Bot },
+    { href: "/settings/statement", label: "كشف الحساب الشهري", icon: Receipt },
     { href: "/settings/activity", label: "نشاط الحساب", icon: History },
     ...(isAdmin ? [{ href: "/admin", label: "الإدارة", icon: ShieldCheck }] : []),
   ]

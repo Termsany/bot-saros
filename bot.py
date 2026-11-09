@@ -2842,7 +2842,9 @@ def _write_closed(d, state):
     if _CLOSED_WRITTEN["n"] == len(rows): return
     try:
         _write_json_atomic(d / "closed.json", {"updated": datetime.now(timezone.utc).isoformat(), "env": binance_env(),
-            "closed": [{k: h.get(k) for k in ("symbol", "side", "opened", "time", "pnl", "pnl_pct", "reason", "by")} for h in rows]})
+            # entry/exit/qty/funding_pnl: the user's monthly statement (backend/app/user_statement.py, owner 2026-11-08)
+            "closed": [{k: h.get(k) for k in ("symbol", "side", "opened", "time", "entry", "exit", "qty", "pnl", "pnl_pct",
+                                              "funding_pnl", "reason", "by")} for h in rows]})
         _CLOSED_WRITTEN["n"] = len(rows)
     except Exception as e: log(f"closed trades: {e}")
 

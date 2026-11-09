@@ -157,6 +157,20 @@ export async function apiUserActivity(): Promise<{ items: ActivityItem[], keep_d
     const r=await fetch(`${API}/api/user/activity`, { headers, cache: "no-store" }); return r.ok ? r.json() : null
   }catch{ return null }
 }
+/** A user's monthly statement (GET /api/user/statement): their own bots' closed trades in one month. */
+export type StatementSummary = { trades: number, wins: number, losses: number, unknown: number, net_usdt: number,
+  funding_usdt: number | null, best_usdt: number | null, worst_usdt: number | null }
+export type StatementTrade = { strategy: string, env: string, symbol: string, side: string, opened: string | null, time: string,
+  entry: number | null, exit: number | null, qty: number | null, pnl: number | null, funding_pnl: number | null, reason: string | null }
+export type Statement = { month: string, env: string | null, months: string[], total: StatementSummary,
+  strategies: Record<string, StatementSummary & { env: string }>, trades: StatementTrade[] }
+export async function apiUserStatement(month: string, env: "live" | "demo"): Promise<Statement|null>{
+  try{
+    const headers = await signedInHeaders(); if(!headers) return null
+    const q = new URLSearchParams({ env, ...(month ? { month } : {}) })
+    const r=await fetch(`${API}/api/user/statement?${q}`, { headers, cache: "no-store" }); return r.ok ? r.json() : null
+  }catch{ return null }
+}
 // ── a user's own bots (Phase 2): what they ask for, their bots' status, closing — always the signed-in user's own
 export async function apiUserBots(): Promise<any|null>{
   try{

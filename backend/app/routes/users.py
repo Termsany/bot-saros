@@ -4,6 +4,8 @@ approval of users' bots. Every user endpoint is scoped by the session's user id,
 Moved out of app/main.py (development-plan 3.2); the paths and behaviour are unchanged. Names the tests replace on
 app.main are read as M.<name> at call time.
 """
+from datetime import datetime, timezone
+
 from fastapi import APIRouter
 
 from app import main as M
@@ -192,6 +194,24 @@ async def user_live_disable(request: Request, user: dict = Depends(require_user)
 # status; the root provisioner decides and runs them (the owner's approval, consent, keys, cap — Demo only). The user
 # id is always the session's: a user reaches only their own desired state and their own bots' folders.
 from app import user_bots
+
+@router.get("/api/user/statement")
+async def user_statement_get(month: str = "", env: str = "", user: dict = Depends(require_user)):
+    """The user's monthly statement (app/user_statement.py): their own bots' closed trades in one month, per bot and in
+    total. No month = the newest one that has a trade; `months` lists every month there is one."""
+    from app import user_statement
+    rate_limit(user["id"], "user_statement", 30, 60)
+    if env not in ("", "demo", "live"):
+        raise HTTPException(400, "env must be demo or live")
+    closed = user_statement.closed_by_strategy(user["id"])
+    if env:
+        closed = {s: v for s, v in closed.items() if v[0] == env}
+    months = user_statement.months(closed)
+    month = month or (months[0] if months else datetime.now(timezone.utc).strftime("%Y-%m"))
+    try:
+        return {**user_statement.build(closed, month, env or None), "months": months}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 @router.get("/api/user/bots")
 async def user_bots_get(user: dict = Depends(require_user)):
