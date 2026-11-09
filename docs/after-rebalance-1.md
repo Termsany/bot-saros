@@ -37,6 +37,8 @@ sudo deploy/vps/setup-live.sh "$(git rev-parse HEAD)"
 ```
 - `setup-live.sh` installs `bot.py`, `bots/`, the backend modules (now with `live_accounts.py`), the scripts and the tools.
 - **The running bots keep the code already in their memory.**
+- `setup-live.sh` also rewrites `/opt/raqm-users/code`, the code every real-money user bot (`raqm-user@…`) runs. Those
+  bots have `Restart=always`: any restart after this step loads the new code. Step 7b says how they're restarted.
 - The paper bots in `/opt/raqm-bot` need `bots/` copied next to `bot.py`, as in `deploy/vps/README.md`. A `bot.py` without `bots/` fails at import.
 
 ## 4. The API: its code and its unit
@@ -81,6 +83,26 @@ for s in trend_daily ratio_trend vol_breakout trend_breakout rsi2_pullback listi
   - nothing on Binance the bot doesn't hold.
 - The watchdog shows 0 problems.
 
+## 7b. The users' real-money bots (the owner's second account first)
+These run from `/opt/raqm-users/code`, which step 3 already updated. List the running ones:
+```bash
+systemctl list-units --type=service --state=running --no-legend 'raqm-user@*'
+```
+- **The restart is the owner's go:** real money. Do it between cycles, away from 00:00 UTC and never on the bot's
+  rebalance day. One bot at a time, by its full instance name (`<uid>--<strategy>`), never `raqm-user@*`:
+  ```bash
+  systemctl restart 'raqm-user@<uid>--<strategy>'
+  ```
+- **Check it.** `rebalance_check.py` doesn't read user bots yet: their state is under `/var/lib/raqm-users/<uid>/` and
+  their key is the user's own. So, read only:
+  - `systemctl is-active` and `journalctl -u 'raqm-user@<uid>--<strategy>' --since -10min` show no traceback;
+  - `tail -30 /var/lib/raqm-users/<uid>/state/<strategy>.log`: a new cycle, the same number of open positions as
+    before the restart, no recovery or review line;
+  - the positions and their stops match Binance on that account (the user's page, or the owner on Binance).
+- A user bot whose kill switch is tripped stays tripped after the restart: resetting it is the owner's.
+- Any problem: the owner decides whether to stop that bot (its stops stay on Binance) and looks at its positions
+  there; then roll back (step 9).
+
 ## 8. Testers
 - `provision_users.py --dry-run`: read what it would do.
 - Then `systemctl enable --now raqm-users-provision.timer`.
@@ -89,7 +111,8 @@ for s in trend_daily ratio_trend vol_breakout trend_breakout rsi2_pullback listi
   user (docs/users-real-money-plan.md).
 
 ## 9. Rolling back
-- `setup-live.sh <the previous commit>`, then the same restarts: Demo first, the real bot last.
+- `setup-live.sh <the previous commit>`, then the same restarts: Demo first, the real bot, then the users' bots
+  (step 7b; the previous commit's code goes back to `/opt/raqm-users/code` too).
 - The API: `raqm-api-update --manual <the previous commit>`, and the saved unit back
   (`/root/raqm-api.service.bak-<date>`, `daemon-reload`, restart the API).
 - The previous commit is the one written down in step 3.
