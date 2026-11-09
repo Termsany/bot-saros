@@ -9,7 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-RATIO = {"top": 7, "sma": 50, "min_days": 120, "every_days": 7, "exclude": []}   # exclude: --ratio-exclude (research §25)
+RATIO = {"top": 7, "sma": 50, "min_days": 120, "every_days": 7, "exclude": [], "net": False, "stop": 0.40}
+# exclude: --ratio-exclude (research §25). net: --ratio-net — one position per coin, the sum of its pairs (run_once_ratio_net)
 
 def ratio_public_name():
     """The ratio bot's public file and paper close-request folder: "ratio", or --public-name for a second one."""
@@ -66,6 +67,8 @@ def _ratio_close_pair(ex, state, key, prices, reason, fcache):
     return pnl
 
 def run_once_ratio(ex):
+    if bot.RATIO.get("net"):
+        return run_once_ratio_net(ex)
     R = bot.RATIO; state = bot.load_state(); state.setdefault("pairs", {}); now = datetime.now(timezone.utc)
     if not bot.CONFIG["paper_trading"]:
         # a block (recovery, kill switch, unknown position) stops entries only — the live adapters refuse them. The
@@ -180,6 +183,141 @@ def run_once_ratio(ex):
                 try: prices[leg["sym"]] = float(ex.fetch_ticker(leg["sym"])["last"])
                 except Exception: pass
     bot.write_ratio_status(state, prices)
+
+
+# ── the netted ratio trend (--ratio-net; owner 2026-11-09, docs/ratio-trend-live-plan.md §1) ──
+# Every pair among the members still gives its sign, but the bot holds their sum: one position per coin of
+# |units| x the unit margin, long when the sum is positive, short when negative (7 coins: +6 ... -6). A one-way
+# account holds one position per coin, so this is the only way to trade all 21 pairs live; the paired path held
+# whichever coin-disjoint pairs came first. Its PnL is the pairs' (research/ratio_netting_study.py, §25 is this).
+# A coin whose units change is closed and reopened at the new size with a fresh 40% stop
+# (research/ratio_net_live_study.py prices that against trading the change only: about 8% of the profit). A coin
+# whose stop fired stays flat until its units change, as the study.
+def ratio_targets(ex, members, cache):
+    """{coin: net units} over every pair among `members`; a pair without enough history adds nothing."""
+    t = {}
+    for i, a in enumerate(members):
+        for b in members[i + 1:]:
+            sig = bot.ratio_signal(ex, a, b, cache)
+            if not sig: continue
+            t[a] = t.get(a, 0) + sig; t[b] = t.get(b, 0) - sig
+    return {c: u for c, u in t.items() if u}
+
+
+def ratio_net_plan(target, prev, positions):
+    """(close, open): the coins to close and the coins to open at `target`, given the last target the bot traded
+    (`prev`: {coin: {"units", "opened"}}) and what it holds. A coin whose units changed is closed (if held) and
+    reopened; one whose units didn't change and that it opened is left alone even if flat (its stop fired); one it
+    never managed to open is tried again."""
+    pu = {c: v.get("units", 0) for c, v in prev.items()}
+    changed = {c for c in set(target) | set(pu) if target.get(c, 0) != pu.get(c, 0)}
+    retry = {c for c in target if c not in changed and not prev.get(c, {}).get("opened") and c not in positions}
+    return sorted(c for c in changed if c in positions), sorted(c for c in changed | retry if target.get(c, 0))
+
+
+def run_once_ratio_net(ex):
+    R = bot.RATIO; state = bot.load_state(); state.setdefault("ratio_net", {}); now = datetime.now(timezone.utc); prices = {}
+    live = not bot.CONFIG["paper_trading"]
+    if state.get("pairs"):
+        # the paired path's book: switching a running bot between the two would orphan its legs
+        bot.log("⛔ ratio --ratio-net: الحالة فيها أزواج من النسخة القديمة — قفلهم الأول أو استخدم ملف حالة جديد"); return
+    if live:
+        bot.reconcile_live(state, ex)
+        if bot._ENTRY_BLOCK.get("reason"): bot.log(f"⛔ دخول جديد متوقف، الخروج شغّال — {bot._ENTRY_BLOCK['reason']}")
+        bot.process_manual_closes(state, ex, {})
+    bot.process_paper_closes(state, ex, ratio_public_name())
+    for sym, pos in (list(state["positions"].items()) if not live else []):   # paper stops; live, Binance holds them
+        try:
+            price = float(ex.fetch_ticker(sym)["last"]); prices[sym] = price
+            if price >= pos["sl"] if pos["side"] == "short" else price <= pos["sl"]:
+                pnl = bot._paper_close(ex, state, sym, price, f"وقف {pos['sl']:.6g}"); bot.save_state(state)
+                bot.log(f"🔒 وقف {pos['side']} {sym} @ {price:.6g} PnL {pnl:+.4f}")
+        except Exception as e: bot.log(f"ratio {sym}: {e}")
+    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    if state.get("ratio_day") != today.isoformat():          # once a day, right after the daily close
+        cache = {}
+        last = state.get("ratio_members_at")
+        if last is None or today - datetime.fromisoformat(last) >= pd.Timedelta(days=R["every_days"]):
+            members = bot.ratio_members(ex, cache)
+            if len(members) == R["top"]:
+                state["ratio_members"], state["ratio_members_at"] = members, today.isoformat()
+                state["ratio_rank"] = dict(bot._ratio_rank)
+                bot.log(f"🔝 ratio: أعلى {R['top']}: {', '.join(m.split('/')[0] for m in members)}")
+        members = state.get("ratio_members") or []
+        if len(members) != R["top"]:
+            bot.log(f"ratio: {len(members)} عملة بس — مفيش تغيير النهارده"); state["ratio_day"] = today.isoformat(); bot.save_state(state)
+        else:
+            try: target = bot.ratio_targets(ex, members, cache)
+            except Exception as e:                            # a signal not read: no trade on half the pairs; next cycle
+                bot.log(f"ratio: {e}"); bot.write_ratio_net_status(state, prices); return
+            prev = state["ratio_net"]
+            close, open_ = bot.ratio_net_plan(target, prev, state["positions"])
+            lev = int(bot.CONFIG.get("leverage", 2)); closed = 0.0
+            if live:
+                exits = [{"symbol": c, "side": "close_" + state["positions"][c]["side"], "action": "exit", "position": state["positions"][c],
+                          "price": float(ex.fetch_ticker(c)["last"]), "order": i, "risk_usdt": 0, "notional_usdt": 0,
+                          "correlation_group": bot._correlation_group(c)} for i, c in enumerate(close)]
+                if exits:
+                    result = bot._phase2_live_basket(ex, state, "ratio_trend", "ratio-net-exit", exits, reserve=False)
+                    if not result or result.get("status") != "filled": bot.save_state(state); return
+                entries = []
+                for i, c in enumerate(open_):
+                    u = target[c]; px = float(ex.fetch_ticker(c)["last"]); prices[c] = px; side = "long" if u > 0 else "short"
+                    stop = px * (1 - R["stop"]) if u > 0 else px * (1 + R["stop"])
+                    entries.append(bot._phase2_leg(c, side, bot.position_size(px) * abs(u), px, stop, None, "ratio_trend", i, extra={"units": u}))
+                if entries:
+                    result = bot._phase2_live_basket(ex, state, "ratio_trend", "ratio-net-entry", entries)
+                    if not result or result.get("status") != "filled": bot.save_state(state); return   # tried again next cycle
+            else:
+                for c in close:
+                    try: closed += bot._paper_close(ex, state, c, float(ex.fetch_ticker(c)["last"]), "الوزن اتغير")
+                    except Exception as e: bot.log(f"قفل {c}: {e}")
+                for c in open_:
+                    try:
+                        u = target[c]; px = float(ex.fetch_ticker(c)["last"]); prices[c] = px; side = "long" if u > 0 else "short"
+                        state["positions"][c] = {"side": side, "entry": px, "qty": bot.position_size(px) * abs(u) * lev / px, "leverage": lev,
+                                                 "time": now.isoformat(), "sl": px * (1 - R["stop"]) if u > 0 else px * (1 + R["stop"]),
+                                                 "tp": None, "units": u}
+                    except Exception as e: bot.log(f"فتح {c}: {e}")
+            opened_now = set(open_)
+            state["ratio_net"] = {c: {"units": u, "opened": c in state["positions"] or (bool(prev.get(c, {}).get("opened")) and c not in opened_now)}
+                                  for c, u in target.items()}
+            state["ratio_day"] = today.isoformat(); bot.save_state(state)
+            if close or open_:
+                fmt = ", ".join(f"{c.split('/')[0]} {target[c]:+d}" for c in open_) or "—"
+                bot.log(f"🔄 ratio (صافي): قفل {len(close)} {closed:+.4f} | فتح: {fmt}")
+                bot.notify(f"⚠️ HIGH RISK — ratio trend (صافي لكل عملة, {'LIVE' if live else 'Paper'})\nاتقفل {len(close)} · اتفتح: {fmt}")
+    for sym in state["positions"]:
+        if sym not in prices:
+            try: prices[sym] = float(ex.fetch_ticker(sym)["last"])
+            except Exception: pass
+    bot.write_ratio_net_status(state, prices)
+
+
+def write_ratio_net_status(state, prices):
+    """The netted bot's page file: one row per coin with its units, like momentum's (no pairs)."""
+    out_dir = bot.CONFIG.get("public_dir")
+    if not out_dir: return
+    pos = []
+    for sym, p in state["positions"].items():
+        price = prices.get(sym, p["entry"]); sg = 1 if p["side"] == "long" else -1
+        pnl = sg * (price - p["entry"]) * p["qty"]; margin = p["entry"] * p["qty"] / max(1, int(p.get("leverage", 2)))
+        pos.append({"symbol": sym.split(":")[0], "id": sym.split("/")[0] + "USDT", "side": p["side"], "units": p.get("units"),
+                    "entry": p["entry"], "price": price, "qty": p["qty"], "margin": round(margin, 2), "sl": p["sl"],
+                    "pnl": round(pnl, 4), "pnl_pct": round(pnl / margin * 100, 2) if margin else 0, "opened": p["time"]})
+    st = state.get("stats", {})
+    data = {"updated": datetime.now(timezone.utc).isoformat(), "risk": "high", "mode": "paper" if bot.CONFIG["paper_trading"] else "live",
+            "net": True, "rules": bot.RATIO, "leverage": int(bot.CONFIG.get("leverage", 2)), "margin": bot.CONFIG.get("trade_amount_usdt"),
+            "started": bot.CONFIG.get("started_at"), "members": [m.split("/")[0] for m in state.get("ratio_members", [])],
+            "targets": {c.split("/")[0]: v.get("units") for c, v in (state.get("ratio_net") or {}).items()},
+            "stats": {"closed": st.get("trades", 0), "wins": st.get("wins", 0), "losses": st.get("losses", 0),
+                      "realized": round(float(st.get("pnl", 0)), 4), "unrealized": round(sum(x["pnl"] for x in pos), 4), "open": len(pos)},
+            "positions": pos, "history": [{**h, "pnl": bot._r4(h.get("pnl"))} for h in state.get("history", [])[-300:]][::-1]}
+    try:
+        name = ratio_public_name(); d = Path(out_dir); tmp = d / f"{name}.json.tmp"
+        tmp.write_text(json.dumps(data, ensure_ascii=False, default=str), encoding="utf-8"); tmp.replace(d / f"{name}.json")
+    except Exception as e: bot.log(f"public ratio status: {e}")
+
 
 def write_ratio_status(state, prices):
     out_dir = bot.CONFIG.get("public_dir")

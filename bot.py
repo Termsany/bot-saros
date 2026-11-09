@@ -3445,6 +3445,7 @@ def start_dashboard_server(port=None):
 # ── the strategies, one file each (bots/): re-exported here — bot.<name> stays the one name the CLI, the API and the tests use ──
 from bots.momentum_ls import MOM, RETAIL, momentum_public_name, retail_ratio, momentum_due, momentum_next, momentum_mode, momentum_rank, run_once_momentum, write_momentum_status
 from bots.ratio_trend import RATIO, ratio_public_name, ratio_mode, _daily_closed, _ratio_rank, ratio_members, ratio_signal, _ratio_close_pair, run_once_ratio, write_ratio_status
+from bots.ratio_trend import ratio_targets, ratio_net_plan, run_once_ratio_net, write_ratio_net_status
 from bots.listing_short import LISTING, listing_mode, _listing_close, run_once_listing, write_listing_status
 from bots.vol_breakout import VB, breakout_mode, run_once_breakout
 from bots.rsi2_pullback import RSI2, rsi2_public_name, rsi2_btc_ok, rsi2_mode, rsi_wilder, run_once_rsi2
@@ -3470,6 +3471,7 @@ if __name__=="__main__":
     p.add_argument("--expect-env", default=None, choices=["live", "demo", "testnet"],
                    help="refuse to start unless BINANCE_ENV is exactly this (the testnet service passes testnet)")
     p.add_argument("--ratio-exclude", default="", help="ratio trend: coins left out of the weekly pick, e.g. BTC,ETH (research §25)")
+    p.add_argument("--ratio-net", action="store_true", help="ratio trend: one position per coin, the sum of its pairs — the only way a one-way account trades all of them (docs/ratio-trend-live-plan.md §1)")
     p.add_argument("--momentum-retail", action="store_true", help="momentum_ls ranked against the crowd's long/short ratio (paper only, research §29)")
     p.add_argument("--rsi2-btc-ma", type=int, default=0, help="RSI-2: new entries only while BTC closes above this daily average, e.g. 200 (research §28)")
     p.add_argument("--public-name", default=None, help="a second bot of the same strategy: its public file name (e.g. ratio_nobtc)")
@@ -3489,6 +3491,9 @@ if __name__=="__main__":
     CONFIG["notify"]=args.notify
     if args.public: CONFIG["public_dir"]=args.public
     if args.ratio_exclude: RATIO["exclude"]=[c.strip().upper() for c in args.ratio_exclude.split(",") if c.strip()]
+    if args.ratio_net:
+        if args.strategy != "ratio_trend": p.error("--ratio-net: ratio_trend only")
+        RATIO["net"]=True
     if args.momentum_retail:
         if args.strategy != "momentum_ls" or not args.paper: p.error("--momentum-retail: paper momentum_ls only")
         MOM.update(RETAIL)

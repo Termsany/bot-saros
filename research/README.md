@@ -608,6 +608,30 @@ before any result.
   - Survivorship in the coin list itself (the data has delisted coins since 2019) is a separate question.
 - **Run it after any simulator change:** `python research/lookahead_check.py`. It exits 1 on a finding.
 
+### 34. The netted ratio trend as the bot trades it (`ratio_net_live_study.py`, 2026-11-09)
+Owner: real money for the ratio trend without BTC/ETH.
+- **The gap:** the live path held one position per coin, so it opened only the coin-disjoint pairs that came first
+  (at most 2 on Demo). That isn't the strategy §25 measured, because §25 is netted (one position per coin, the sum
+  of its pairs).
+- **The fix:** `bot.py --ratio-net` (bots/ratio_trend.py `run_once_ratio_net`) trades that netted book.
+- **How the bot trades a change:** it closes a coin and reopens it at the new size, with a fresh 40% stop. The study
+  charges only the change in units. Priced here (30-day top 7, $26 × 2 a unit, 2020-01 to 2026-10):
+
+| universe | trades | PnL $ | worst DD $ | Sharpe < 2024 / 2024 → | fees $ |
+|---|---|---|---|---|---|
+| no BTC/ETH | the change (§25) | 3,324 | 1,301 | 0.62 / 0.86 | 273 |
+| no BTC/ETH | close + reopen (the bot) | 3,042 | 1,375 | 0.55 / 0.80 | 555 |
+| with them | the change | 2,455 | 1,273 | 0.59 / 0.64 | 267 |
+| with them | close + reopen | 2,163 | 1,354 | 0.52 / 0.57 | 559 |
+
+- **Closing and reopening costs about 8% of the profit and 3 units of drawdown.** Kept for a first version: one
+  exit and one entry per change, through the basket engine that's already tested. Trading only the difference
+  (partial closes and add-ons, with the stop resized) is a later step.
+- **About 730 coin changes a year:** two a day, each one close and one open with its stop.
+- **What doesn't change:** the worst drawdown is ~53 units, about two thirds of the capital (24 + 53 units), and it
+  lasted from 2021-11 to 2023-08. The 45% drawdown kill switch would stop it inside a drawdown like that one. 17
+  universes were tried on the same data.
+
 ## The site now shows only the four paper bots
 
 `research/bots_stats.py` writes `lib/bot-stats.json` (the numbers the site shows); the dashboard's live section and
