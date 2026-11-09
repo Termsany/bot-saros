@@ -87,6 +87,73 @@ def paper_lines(now, public=PUBLIC, baseline_path=PAPER_BASELINE):
     return lines
 
 
+# The three portfolios of research/README.md §31 on paper (owner, 2026-11-09: "three bots on paper, $100 x2 a coin").
+# Each strategy is its own paper bot (one account each, §32), so a portfolio is the sum of its bots' closed trades,
+# every trade scaled to $100 of margin (a bot that ran smaller earlier counts at the same weight), from the day its
+# newest bot started.
+PORTFOLIO_MARGIN = 100.0
+PORTFOLIO_BOTS = {"momentum": "مومنتم", "retail_fade": "ضد الجمهور", "rsi2_btc": "RSI-2 + BTC"}
+PORTFOLIOS = {"مومنتم + ضد الجمهور": ("momentum", "retail_fade"),
+              "مومنتم + RSI-2": ("momentum", "rsi2_btc"),
+              "الثلاثة": ("momentum", "retail_fade", "rsi2_btc")}
+
+
+def _when(x):
+    try:
+        t = datetime.fromisoformat(str(x).replace("Z", "+00:00"))
+        return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+def portfolio_trades(doc, since):
+    """[(close time, PnL at $100 of margin)] of a paper bot's trades closed at or after `since`."""
+    try:
+        margin = float(doc.get("margin") or 0)
+    except (TypeError, ValueError):
+        margin = 0.0
+    if margin <= 0:
+        return []
+    out = []
+    for h in doc.get("history") or []:
+        t = _when(h.get("time"))
+        try:
+            pnl = float(h["pnl"]) * PORTFOLIO_MARGIN / margin
+        except (KeyError, TypeError, ValueError):
+            continue
+        if t and t >= since:
+            out.append((t, pnl))
+    return out
+
+
+def portfolio_lines(now, public=PUBLIC):
+    lines = ["", f"🧺 المحافظ الثلاثة على الورق (كل عملة ${PORTFOLIO_MARGIN:.0f} × 2، كل استراتيجية حساب لوحدها)"]
+    docs = {}
+    for name in PORTFOLIO_BOTS:
+        try:
+            docs[name] = json.loads((public / f"{name}.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            pass
+    for label, bots in PORTFOLIOS.items():
+        missing = [PORTFOLIO_BOTS[b] for b in bots if b not in docs or not _when(docs[b].get("started"))]
+        if missing:
+            lines.append(f"• {label}: ملف {' و'.join(missing)} مش موجود"); continue
+        since = max(_when(docs[b].get("started")) for b in bots)
+        trades = sorted(t for b in bots for t in portfolio_trades(docs[b], since))
+        eq = peak = dd = 0.0
+        for _, pnl in trades:
+            eq += pnl; peak = max(peak, eq); dd = max(dd, peak - eq)
+        wins = sum(1 for _, p in trades if p > 0)
+        open_ = sum(len(docs[b].get("positions") or []) for b in bots)
+        days = max(0, (now - since).days)
+        line = f"• {label}: من {since.date()} ({days} يوم) — {len(trades)} صفقة"
+        if trades:
+            line += f"، كسب {wins / len(trades):.0%}، صافي ${eq:+,.0f}، أقصى تراجع ${dd:,.0f}"
+        lines.append(line + f" · مفتوح دلوقتي {open_} (${open_ * PORTFOLIO_MARGIN:,.0f} مارجن)")
+    lines.append("   الباكتست (§31): الثلاثة أنعم (Sharpe بعد 2024 1.60 وأخف أسوأ شهر)؛ مومنتم + ضد الجمهور أعلى ربح وأعلى تراجع")
+    return lines
+
+
 def _read(ipc, folder, env):
     try:
         doc = json.loads((ipc / folder / "closed.json").read_text(encoding="utf-8"))
@@ -176,6 +243,7 @@ def main(argv=None):
         text, far = report(demo_measure.measure(load_closed(), baseline, now), labels)
         text += "\n" + "\n".join(real_and_experiment(IPC, baseline, now))
         text += "\n" + "\n".join(paper_lines(now))
+        text += "\n" + "\n".join(portfolio_lines(now))
     print(text)
     if "--telegram" in argv:
         sys.path.insert(0, str(ROOT / "scripts")); import watchdog

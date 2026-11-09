@@ -113,5 +113,49 @@ class RealAndExperimentTests(unittest.TestCase):
         self.assertIn("❌ الأربع أسوأ", self.text(datetime(2027, 1, 15, tzinfo=timezone.utc)))
 
 
+class PortfolioTests(unittest.TestCase):
+    """The three §31 portfolios from the paper bots' public files (owner, 2026-11-09)."""
+    def setUp(self):
+        self.td = tempfile.TemporaryDirectory(); self.pub = Path(self.td.name)
+
+    def tearDown(self):
+        self.td.cleanup()
+
+    def bot(self, name, started, margin, pnls, positions=0):
+        hist = [{"symbol": "X/USDT", "pnl": p, "time": (started + timedelta(days=i + 1)).isoformat()} for i, p in enumerate(pnls)]
+        (self.pub / f"{name}.json").write_text(json.dumps({"started": started.isoformat(), "margin": margin, "history": hist,
+                                                           "positions": [{}] * positions}), encoding="utf-8")
+
+    def lines(self):
+        return "\n".join(dw.portfolio_lines(NOW, public=self.pub))
+
+    def test_each_portfolio_sums_its_bots_from_its_newest_start_at_100_dollars(self):
+        early, late = NOW - timedelta(days=30), NOW - timedelta(days=10)
+        # momentum's trades close days 1..21 after `early`: only the last two (+30, -10) are on or after `late`
+        self.bot("momentum", early, 100, [-50, 40] + [0] * 17 + [30, -10], positions=10)
+        self.bot("retail_fade", late, 20, [4, -2], positions=6)            # $20 margin: x5 at $100 -> +20, -10
+        self.bot("rsi2_btc", late, 100, [10])
+        out = self.lines()
+        self.assertIn("مومنتم + ضد الجمهور: من", out)
+        self.assertIn("4 صفقة، كسب 50%، صافي $+30", out)                  # +30 -10 +20 -10
+        self.assertIn("مفتوح دلوقتي 16 ($1,600 مارجن)", out)
+        self.assertIn("5 صفقة، كسب 60%، صافي $+40", out)                  # the three: and RSI-2's +10
+
+    def test_the_drawdown_is_the_worst_fall_of_the_combined_closed_trades(self):
+        start = NOW - timedelta(days=5)
+        for b in ("retail_fade", "rsi2_btc"):
+            self.bot(b, start, 100, [])
+        self.bot("momentum", start, 100, [50, -80, 20])
+        self.assertIn("أقصى تراجع $80", self.lines())
+
+    def test_a_missing_bot_is_named_not_guessed(self):
+        self.bot("momentum", NOW - timedelta(days=3), 100, [5])
+        self.assertIn("الثلاثة: ملف ضد الجمهور وRSI-2 + BTC مش موجود", self.lines())
+
+    def test_every_paper_bot_of_the_portfolios_runs_at_100_dollars(self):
+        for u in ("raqm-retail-fade.service", "raqm-momentum.service", "raqm-rsi2-btc.service"):
+            self.assertIn(" --amount 100 ", (ROOT / "deploy" / "vps" / u).read_text(encoding="utf-8"), u)
+
+
 if __name__ == "__main__":
     unittest.main()
