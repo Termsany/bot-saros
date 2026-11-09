@@ -588,6 +588,26 @@ before any result.
   filter, X3 L3) to `lib/paper-baseline.json` in the Demo baseline's units, and the Sunday report
   (`scripts/demo_weekly.py`) puts each paper bot next to it with `demo_measure`'s rules: samples 15 and 36 trades.
 
+### 33. Look-ahead check — no simulator reads the future (November 2026)
+`research/lookahead_check.py` (owner, 2026-11-09; the idea of freqtrade's lookahead-analysis, written from scratch).
+- **How:** every coin's history is cut at a date T as a live bot sees it at T's open: T's bar has only its open, then
+  15 flat, empty bars. Each simulator runs again. Every entry up to and including T must come out the same: same coin,
+  side, time and price.
+- **Stop orders from the open** (vol_breakout: open + k × yesterday's range) keep T's high and low, so the order can
+  fill. Only T's close and volume are hidden.
+- **Proven on planted leaks** (backend/tests/test_lookahead_check.py): it catches reading tomorrow's close, reading the
+  entry bar's own close, and choosing coins by their whole-history return. It passes the honest versions.
+- **Result:** 8 cut dates, 2021-03 to 2025-07, on the 7 live strategies and the paper ones (rsi2_btc here, retail_fade
+  on the server with the open-interest files). **0 missing, 0 extra, 0 repriced** in every one. That's 2,720
+  momentum_ls entries and 1,098 retail_fade entries by the last cut.
+- **First run:** 14 vol_breakout entries on the cut day were "missing". These were its stop orders filling on T's
+  high, which a live stop order does too. They're handled as above; a test pins both cases.
+- **Limits:**
+  - It checks entries only. Exits of trades open at T are cut short by design.
+  - A leak through T's high or low in an intraday-fill strategy isn't seen.
+  - Survivorship in the coin list itself (the data has delisted coins since 2019) is a separate question.
+- **Run it after any simulator change:** `python research/lookahead_check.py`. It exits 1 on a finding.
+
 ## The site now shows only the four paper bots
 
 `research/bots_stats.py` writes `lib/bot-stats.json` (the numbers the site shows); the dashboard's live section and
