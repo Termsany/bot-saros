@@ -25,7 +25,9 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-ReadWritePaths=/opt/raqm-api /opt/raqm-ipc /opt/raqm-ipc-paper /opt/raqm-risk /opt/raqm-risk-demo -/opt/raqm-risk-accounts
+# the users' bots (backend/app/user_bots.py): their requests, the owner's approvals and real-money switch (desired/),
+# and their close requests (ipc/) — without them every user's save failed: "Read-only file system" (2026-11-07)
+ReadWritePaths=/opt/raqm-api /opt/raqm-ipc /opt/raqm-ipc-paper /opt/raqm-risk /opt/raqm-risk-demo -/opt/raqm-risk-accounts -/opt/raqm-users/desired -/opt/raqm-users/ipc
 
 [Install]
 WantedBy=multi-user.target

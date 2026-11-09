@@ -25,6 +25,7 @@ STATE = ROOT / "state" / "watchdog.json"
 HEARTBEAT = IPC / "watchdog_heartbeat.json"   # read by the API's public /api/health/bots, for a check from outside the server
 STALE_S = 300            # the bots write their status every minute
 ENV_NAME = {"demo": "Demo", "live": "فلوس حقيقية"}
+FOREIGN = "صفقات على المنصة البوت مفتحهاش"   # bot.py reconcile_live's entry block for a position it didn't open
 
 
 # Demo experiments with a unit of their own (not raqm-demo@<strategy>), watched like the Demo bots: their status folder
@@ -59,7 +60,13 @@ def check_bot(out, now, key, who, env, active, status_path):
     if st.get("review"):
         out[f"review:{key}"] = (f"{who} محتاج مراجعة: " + " · ".join(f"{k.split(':')[0]} ({(v or {}).get('reason')})" for k, v in st["review"].items()), 1)
     block = st.get("entry_block") or ""
-    if block and "kill switch" not in block:          # the kill switch has its own alert, once per account
+    if block and FOREIGN in block and env == "live":
+        # a position the bot didn't open on a real account (owner, 2026-11-07: a manual EVAA trade stopped every entry
+        # for hours before the alert): at the first check, saying what it blocks and what to do
+        coins = block.split(FOREIGN, 1)[1].strip(" :")
+        out[f"foreign:{key}"] = (f"صفقة على حساب {who} البوت ما فتحهاش: {coins} — البوت وقف أي دخول جديد، والتبديل الجاي "
+                                 f"هيقفل السلة القديمة ومش هيفتح الجديدة. اقفلها وامسح أي أمر مفتوح عليها (الحساب ده للبوت لوحده)", 1)
+    elif block and "kill switch" not in block:        # the kill switch has its own alert, once per account
         out[f"block:{key}"] = (f"الدخول متوقف في {who}: {block}", 2)
     return st
 
@@ -77,15 +84,25 @@ def _read_status(path, limit=1 << 20):
         os.close(fd)
 
 
-def problems(now, unit=unit, ipc=IPC, ledgers=LEDGERS, failed=None, accounts=None, risk_root=live_accounts.RISK_ROOT):
+def named_unit(name):
+    """(enabled, active) of a unit by its full name (a copy account's raqm-live-<name>@<strategy>)."""
+    run = lambda *a: subprocess.run(["systemctl", *a, name], capture_output=True, text=True).stdout.strip()
+    return run("is-enabled") == "enabled", run("is-active") == "active"
+
+
+def problems(now, unit=unit, ipc=IPC, ledgers=LEDGERS, failed=None, accounts=None, risk_root=live_accounts.RISK_ROOT,
+             copies=None, copy_unit=named_unit):
     """Every problem seen now: {key: (text, checks in a row before alerting)}. A live strategy on its own Binance
-    account (backend/app/live_accounts.py) has its own ledger, so its own kill switch and alert."""
+    account (backend/app/live_accounts.py) has its own ledger, so its own kill switch and alert; so does a copy of a
+    strategy on a copy account, watched through its own unit and status folder."""
     out = {}
-    if accounts is None:
+    if accounts is None or copies is None:
         try:
-            accounts = live_accounts.load()
+            accounts = live_accounts.load() if accounts is None else accounts
+            copies = live_accounts.load_copies() if copies is None else copies
         except live_accounts.RegistryError as e:
-            out["accounts"] = (f"ملف الحسابات الحقيقية (accounts.json) مش سليم: {e}", 1); accounts = {}
+            out["accounts"] = (f"ملف الحسابات الحقيقية (accounts.json) مش سليم: {e}", 1)
+            accounts, copies = accounts or {}, copies or {}
     for env in ("demo", "live"):
         watched = set()
         for s in STRATEGIES + (tuple(EXPERIMENTS) if env == "demo" else ()):
@@ -93,6 +110,14 @@ def problems(now, unit=unit, ipc=IPC, ledgers=LEDGERS, failed=None, accounts=Non
             if not enabled: continue
             watched.add(live_accounts.account_of(s, accounts) if env == "live" else None)
             check_bot(out, now, f"{env}:{s}", f"{s} ({ENV_NAME[env]})", env, active, ipc / s / "live_status.json")
+        if env == "live":
+            for acct, ss in sorted(copies.items()):
+                for s in ss:
+                    enabled, active = copy_unit(live_accounts.copy_unit_name(acct, s))
+                    if not enabled: continue
+                    watched.add(acct)
+                    check_bot(out, now, f"live:{acct}:{s}", f"{s} ({ENV_NAME['live']} · {acct})", "live", active,
+                              live_accounts.copy_ipc(acct, s, ipc) / "live_status.json")
         for acct in sorted(watched, key=lambda a: a or ""):
             key = env if acct is None else f"{env}:{acct}"
             name = ENV_NAME[env] if acct is None else f"{ENV_NAME[env]} ({acct})"
@@ -188,7 +213,7 @@ def send(text):
 
 
 # The server itself (development-plan 2.4): what stops every bot at once without any bot being "down" first.
-DOMAINS = ("api.da3m.io", "bot.da3m.io", "realbot.da3m.io")   # this server's sites (it also hosts others, not ours)
+DOMAINS = ("api.da3m.io", "demo.da3m.io", "realbot.da3m.io")   # this server's sites (it also hosts others, not ours)
 DISK_MIN_FREE = (0.10, 5 * 1024 ** 3)   # under 10 % or 5 GB free: SQLite ledgers and logs start failing to write
 MEM_MIN_AVAILABLE = 0.10
 CLOCK_MAX_OFFSET_MS = 1000              # Binance refuses requests outside recvWindow (5 s): alert well before

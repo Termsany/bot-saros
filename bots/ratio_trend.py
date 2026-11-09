@@ -9,7 +9,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-RATIO = {"top": 7, "sma": 50, "min_days": 120, "every_days": 7}
+RATIO = {"top": 7, "sma": 50, "min_days": 120, "every_days": 7, "exclude": []}   # exclude: --ratio-exclude (research §25)
+
+def ratio_public_name():
+    """The ratio bot's public file and paper close-request folder: "ratio", or --public-name for a second one."""
+    return bot.CONFIG.get("public_name") or "ratio"
 
 def ratio_mode():
     """HIGH RISK paper experiment: ratio trend on every pair among the top 7 Binance crypto perpetuals by 30-day volume
@@ -25,7 +29,8 @@ def _daily_closed(ex, sym, cache):
 _ratio_rank = {}
 
 def ratio_members(ex, cache):
-    syms = [x for x, _, _ in bot.listing_markets(ex)]
+    skip = {c.upper() for c in bot.RATIO.get("exclude") or []}
+    syms = [x for x, _, _ in bot.listing_markets(ex) if x.split("/")[0].upper() not in skip]   # the next ones in line come in
     tick = ex.fetch_tickers()
     cands = sorted(syms, key=lambda x: -float((tick.get(x) or {}).get("quoteVolume") or 0))[:bot.RATIO["top"] * 3]
     rows = []
@@ -68,7 +73,7 @@ def run_once_ratio(ex):
         bot.reconcile_live(state, ex)
         if bot._ENTRY_BLOCK.get("reason"): bot.log(f"⛔ دخول جديد متوقف، الخروج شغّال — {bot._ENTRY_BLOCK['reason']}")
         bot.process_manual_closes(state, ex, {})   # the site's close button (it waited unanswered for the basket bots)
-    bot.process_paper_closes(state, ex, "ratio")
+    bot.process_paper_closes(state, ex, ratio_public_name())
     # every cycle: a leg the exchange closed (its stop, or by hand) leaves the other one unhedged until handled
     if not bot.CONFIG["paper_trading"]:
         # reconcile_live books a leg the exchange closed but leaves the pair: the other leg is then an unhedged
@@ -202,6 +207,6 @@ def write_ratio_status(state, prices):
                          "pnl": bot._r4(h.get("pnl")), "reason": h.get("reason", ""),
                          "time": h.get("time"), "opened": h.get("opened"), "ranks": h.get("ranks")} for h in state.get("history", [])[-300:]][::-1]}
     try:
-        d = Path(out_dir); tmp = d / "ratio.json.tmp"
-        tmp.write_text(json.dumps(data, ensure_ascii=False, default=str), encoding="utf-8"); tmp.replace(d / "ratio.json")
+        name = ratio_public_name(); d = Path(out_dir); tmp = d / f"{name}.json.tmp"
+        tmp.write_text(json.dumps(data, ensure_ascii=False, default=str), encoding="utf-8"); tmp.replace(d / f"{name}.json")
     except Exception as e: bot.log(f"public ratio status: {e}")

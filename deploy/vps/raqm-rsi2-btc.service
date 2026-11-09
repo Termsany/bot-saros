@@ -1,0 +1,28 @@
+[Unit]
+Description=Raqm bot — RSI-2 pullback with a BTC filter (new entries only while BTC is above its 200-day average; paper experiment, research §28)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=raqm
+Group=raqm
+WorkingDirectory=/opt/raqm-rsi2-btc
+EnvironmentFile=-/opt/raqm-bot/.env
+Environment=PYTHONUNBUFFERED=1
+# owner, 2026-11-07: a second RSI-2 paper bot next to raqm-rsi2 — the same rule and size ($100 x2), plus no new
+# entries while BTC's daily close is below its 200-day average (research §28: win rate 66 -> 70%, max drawdown
+# 48 -> 28 margins, same Sharpe after 2024, fewer trades). Own state (state_rsi2_btc.json / .log), page data ->
+# rsi2_btc.json, Telegram messages marked [RSI-2 + BTC filter]. Paper only: no order reaches an exchange.
+# Its own code folder (installed by deploy/vps/install-rsi2-btc.sh), so the other paper bots in /opt/raqm-bot keep
+# their code. It shares their venv and Telegram settings only.
+ExecStart=/opt/raqm-bot/venv/bin/python -E -s bot.py --paper --strategy rsi2_pullback --rsi2-btc-ma 200 --public-name rsi2_btc --label "RSI-2 + BTC filter" --amount 100 --leverage 2 --poll 60 --notify --public /var/www/bot.da3m.io --state state_rsi2_btc.json
+Restart=always
+RestartSec=30
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/raqm-rsi2-btc /var/www/bot.da3m.io
+
+[Install]
+WantedBy=multi-user.target

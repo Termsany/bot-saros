@@ -12,6 +12,7 @@ GET /api/admin/risk
 GET /api/admin/strategies
 GET /api/admin/user-bots
 GET /api/admin/users
+GET /api/admin/users-live
 GET /api/backtest/history
 GET /api/bot/status
 GET /api/chart
@@ -29,6 +30,7 @@ GET /api/paper/close/{bot}/{rid}
 GET /api/plans
 GET /api/telegram/status
 GET /api/trades
+GET /api/user/activity
 GET /api/user/bots
 GET /api/user/bots/close/{strategy}/{rid}
 GET /api/user/bots/risk
@@ -36,6 +38,7 @@ GET /api/user/keys/status
 GET /api/user/live/status
 GET /api/user/me
 GET /api/user/settings
+GET /api/user/statement
 GET /api/user/tier
 HEAD /api/health/bots
 PATCH /api/admin/risk/limits
@@ -50,6 +53,7 @@ POST /api/admin/plans
 POST /api/admin/risk/kill-switch
 POST /api/admin/strategies/{strategy}/lifecycle
 POST /api/admin/user-bots/{uid}/approve
+POST /api/admin/users-live
 POST /api/admin/users/{target_user_id}/ban
 POST /api/backtest
 POST /api/bot/start

@@ -52,6 +52,14 @@ export async function apiSaveSettings(body: { capital: number; strategy: string 
   if(!r.ok) throw new Error(d.detail || "ما اتحفظش")
   return d
 }
+/** The signed-in user as the API sees them: admin or not, and for the admin the 2FA state (null: not signed in or
+ *  the API can't be reached). */
+export async function apiMe(): Promise<{ admin: boolean, mfa?: { enrolled: boolean, aal: string, required: boolean } } | null>{
+  try{
+    const headers = await signedInHeaders(); if(!headers) return null
+    const r=await fetch(`${API}/api/user/me`, { headers, cache: "no-store" }); return r.ok ? await r.json() : null
+  }catch{ return null }
+}
 /** Is the signed-in user the admin (shows the admin buttons; every admin endpoint checks again). */
 export async function apiIsAdmin(): Promise<boolean>{
   try{
@@ -140,6 +148,29 @@ export async function apiLiveCloseResult(strategy: string, id: string): Promise<
   const r=await fetch(`${API}/api/live/close/${strategy}/${id}`, { headers: await authHeaders(), cache: "no-store" })
   return r.ok ? r.json() : { done: false }
 }
+/** The signed-in account's own activity (security plan item 10): sign-in sessions and sensitive changes, newest first. */
+export type ActivityItem = { at: string, kind: "session" | "account" | "real_money" | "admin", what: string,
+  ip: string | null, device: string | null, details: Record<string, unknown> | null }
+export async function apiUserActivity(): Promise<{ items: ActivityItem[], keep_days: number }|null>{
+  try{
+    const headers = await signedInHeaders(); if(!headers) return null
+    const r=await fetch(`${API}/api/user/activity`, { headers, cache: "no-store" }); return r.ok ? r.json() : null
+  }catch{ return null }
+}
+/** A user's monthly statement (GET /api/user/statement): their own bots' closed trades in one month. */
+export type StatementSummary = { trades: number, wins: number, losses: number, unknown: number, net_usdt: number,
+  funding_usdt: number | null, best_usdt: number | null, worst_usdt: number | null }
+export type StatementTrade = { strategy: string, env: string, symbol: string, side: string, opened: string | null, time: string,
+  entry: number | null, exit: number | null, qty: number | null, pnl: number | null, funding_pnl: number | null, reason: string | null }
+export type Statement = { month: string, env: string | null, months: string[], total: StatementSummary,
+  strategies: Record<string, StatementSummary & { env: string }>, trades: StatementTrade[] }
+export async function apiUserStatement(month: string, env: "live" | "demo"): Promise<Statement|null>{
+  try{
+    const headers = await signedInHeaders(); if(!headers) return null
+    const q = new URLSearchParams({ env, ...(month ? { month } : {}) })
+    const r=await fetch(`${API}/api/user/statement?${q}`, { headers, cache: "no-store" }); return r.ok ? r.json() : null
+  }catch{ return null }
+}
 // ── a user's own bots (Phase 2): what they ask for, their bots' status, closing — always the signed-in user's own
 export async function apiUserBots(): Promise<any|null>{
   try{
@@ -149,18 +180,24 @@ export async function apiUserBots(): Promise<any|null>{
 }
 /** A real-money plan's risk before the user accepts it (GET /api/user/bots/risk): one stop, the worst week, the level. */
 export type LiveRisk = { one_stop_usdt: number, per_trade_pct: number, legs: number, worst_usdt: number, aggregate_pct: number,
-  level: "low" | "medium" | "high" | "very_high", ok: boolean, why: string | null }
-export async function apiUserBotsRisk(capital: number, margin: number): Promise<LiveRisk | null>{
+  level: "low" | "medium" | "high" | "very_high", ok: boolean, why: string | null,
+  reserve_pct: number, max_open: number, fits: boolean, max_margin: number }   // the whole basket after the reserve
+export async function apiUserBotsRisk(capital: number, margin: number, reserve = 40, strategies: string[] = ["momentum_ls"]): Promise<LiveRisk | null>{
   try{
     const headers = await signedInHeaders(); if(!headers) return null
-    const r = await fetch(`${API}/api/user/bots/risk?capital=${encodeURIComponent(capital)}&margin=${encodeURIComponent(margin)}`, { headers, cache: "no-store" })
+    const q = new URLSearchParams({ capital: String(capital), margin: String(margin), reserve: String(reserve), strategies: strategies.join(",") })
+    const r = await fetch(`${API}/api/user/bots/risk?${q}`, { headers, cache: "no-store" })
     return r.ok ? r.json() : null
   }catch{ return null }
 }
 export async function apiSetUserBots(body: any): Promise<any>{
-  const r=await fetch(`${API}/api/user/bots`, { method:"POST", headers: await authHeaders(JSON_CT), body: JSON.stringify(body) })
+  let r: Response | undefined
+  try{ r = await fetch(`${API}/api/user/bots`, { method:"POST", headers: await authHeaders(JSON_CT), body: JSON.stringify(body) }) }
+  catch{ r = undefined }
+  // a server error answered without CORS headers reaches the page as no answer at all (2026-11-07: "reading 'json'")
+  if(!r) throw new Error("الطلب ما وصلش للسيرفر أو السيرفر وقع — جرّب تاني بعد شوية، ولو اتكرر بلّغ")
   const d = await r.json().catch(()=>({}))
-  if(!r.ok) throw new Error(d.detail || "ما اتحفظش")
+  if(!r.ok) throw new Error(d.detail || (r.status >= 500 ? "حصل خطأ في السيرفر — ما اتحفظش" : "ما اتحفظش"))
   return d
 }
 export async function apiUserBotClose(strategy: string, symbol: string): Promise<{ id: string }>{
@@ -175,6 +212,14 @@ export async function apiAdminUserBots(): Promise<any|null>{
     const r=await fetch(`${API}/api/admin/user-bots`, { headers, cache: "no-store" }); return r.ok ? r.json() : null
   }catch{ return null }
 }
+/** Admin: the owner's switch for real money for invited users (root's main lock on the server is needed too). */
+export async function apiAdminUsersLive(): Promise<{ on: boolean, by: string | null, at: string | null } | null>{
+  try{
+    const headers = await signedInHeaders(); if(!headers) return null
+    const r=await fetch(`${API}/api/admin/users-live`, { headers, cache: "no-store" }); return r.ok ? r.json() : null
+  }catch{ return null }
+}
+export const apiSetAdminUsersLive = (on: boolean) => postJson("/api/admin/users-live", { on, confirm: true })
 export function chartUrl(file:string){ return `${API}/api/chart?file=${encodeURIComponent(file)}` }
 /** The chart needs the user's login (it's theirs only) — an <img src> can't send it, so fetch it and show a local copy. */
 export async function apiChartObjectUrl(file:string): Promise<string|null>{

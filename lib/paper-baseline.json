@@ -1,0 +1,57 @@
+{
+ "strategies": {
+  "rsi2_btc": {
+   "all": {
+    "trades": 226,
+    "per_month": 3.0,
+    "win_rate": 70.4,
+    "avg_win_pct": 10.3,
+    "avg_loss_pct": -12.3,
+    "profit_factor": 1.99,
+    "max_dd_margins": 1.4,
+    "net_margins": 8.2
+   },
+   "since_2024": {
+    "trades": 121,
+    "per_month": 3.6,
+    "win_rate": 67.8,
+    "avg_win_pct": 11.1,
+    "avg_loss_pct": -12.4,
+    "profit_factor": 1.88,
+    "max_dd_margins": 1.4,
+    "net_margins": 4.3
+   },
+   "max_open": 8,
+   "to": "2026-10-30"
+  },
+  "retail_fade": {
+   "all": {
+    "trades": 1518,
+    "per_month": 26.0,
+    "win_rate": 49.7,
+    "avg_win_pct": 24.5,
+    "avg_loss_pct": -20.8,
+    "profit_factor": 1.17,
+    "max_dd_margins": 5.4,
+    "net_margins": 26.4
+   },
+   "since_2024": {
+    "trades": 893,
+    "per_month": 26.4,
+    "win_rate": 49.5,
+    "avg_win_pct": 27.5,
+    "avg_loss_pct": -21.7,
+    "profit_factor": 1.24,
+    "max_dd_margins": 5.0,
+    "net_margins": 23.6
+   },
+   "max_open": 12,
+   "to": "2026-10-30"
+  }
+ },
+ "meta": {
+  "generatedAt": "2026-11-08T10:02:15+00:00",
+  "margin_usdt": 20,
+  "note": "research/paper_baseline.py; same units as lib/demo-baseline.json"
+ }
+}

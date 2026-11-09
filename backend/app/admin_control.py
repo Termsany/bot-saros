@@ -74,6 +74,8 @@ def audit(root: Path, actor: str, action: str, result: str, details: dict[str, A
     try:
         con.execute("INSERT INTO admin_audit(at,actor,action,result,details) VALUES(?,?,?,?,?)", (now(), actor, action, result, json.dumps(details or {}, ensure_ascii=False, default=str)))
     finally: con.close()
+    from app import security_alerts           # the owner's phone hears of every sensitive change (security plan 4)
+    security_alerts.admin_action(actor, action, result, details)
 
 def list_audit(root: Path, limit=100):
     con=connect(root)

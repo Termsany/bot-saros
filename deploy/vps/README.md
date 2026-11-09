@@ -1,4 +1,4 @@
-# Paper bot on a VPS (bot.da3m.io)
+# Paper bot on a VPS (demo.da3m.io, bot.da3m.io until 2026-11-06)
 
 The daily trend bot runs on its own server (Render's free plan sleeps and loses its files), in paper mode:
 `bot.py --paper --strategy trend_daily --leverage 2 --universe 10` — the top 10 crypto USDT perpetuals on Bybit by
@@ -9,8 +9,8 @@ The daily trend bot runs on its own server (Render's free plan sleeps and loses 
 | code + venv + state.json + trades.log | `/opt/raqm-bot` (user `raqm`) |
 | Telegram token / chat id | `/opt/raqm-bot/.env` (mode 600, never committed) |
 | service | `raqm-bot.service` → `/etc/systemd/system/` |
-| public page | `page/index.html` + `status.json` (written by the bot) → `/var/www/bot.da3m.io` |
-| nginx site | `nginx-bot.da3m.io.conf` → `/etc/nginx/sites-available/`, HTTPS by certbot |
+| public page | `page/index.html` + `status.json` (written by the bot) → `/var/www/bot.da3m.io` (the folder keeps its old name: the bots' units write there) |
+| nginx site | `nginx-demo.da3m.io.conf` → `/etc/nginx/sites-available/demo.da3m.io`, HTTPS by certbot. `nginx-bot.da3m.io.conf`: the old name, answering 410 until its DNS record is gone |
 
 Update the bot after a change:
 
@@ -47,8 +47,9 @@ Logs: `journalctl -u raqm-listing -f`.
 
 ## Third paper bot: weekly momentum long/short
 
-`raqm-momentum.service` runs `bot.py --strategy momentum_ls --state state_momentum.json`: every 7 days (first cycle
-after 00:00 UTC) rank the top 50 Binance crypto USDT perpetuals by 30-day volume on their 2-week return, long the
+`raqm-momentum.service` runs `bot.py --strategy momentum_ls --state state_momentum.json` from its own folder
+`/opt/raqm-momentum-paper` (`sh deploy/vps/install-momentum-paper.sh <commit>`): every Monday (first cycle after
+00:00 UTC, like the real bot) rank the top 50 Binance crypto USDT perpetuals by 30-day volume on their 2-week return, long the
 strongest 5 and short the weakest 5 for a week, stop 40%, $20 × 2, fees + real funding, paper only. Page data
 `momentum.json`. Live prices on the page come from `wss://fstream.binance.com/market/ws` (Binance moved market
 streams there; the old `/ws` path accepts subscriptions but sends nothing). Logs: `journalctl -u raqm-momentum -f`.

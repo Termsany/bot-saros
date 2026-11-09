@@ -5,11 +5,12 @@ import { Logo } from "@/components/Logo"
 import { AppShell } from "@/components/AppShell"
 import { CardHeader, Dot, PageHeader, Pill, Toggle, btn, field, label, type Tone } from "@/components/ui"
 import { LiveStrategies } from "@/components/LiveStrategies"
-import { AdminUserBots } from "@/components/AdminUserBots"
+import { AdminUserBots, AdminUsersLive } from "@/components/AdminUserBots"
 import { AdminOverview } from "@/components/AdminOverview"
 import { AdminInvites, PlanPrices } from "@/components/AdminInvites"
 import { CATALOG_STRATEGIES, NAME_AR, TIERS } from "@/lib/strategies"
-import { apiIsAdmin } from "@/lib/api"
+import { apiMe } from "@/lib/api"
+import { AdminMfaGate, AdminMfaSetup, type MfaState } from "@/components/AdminMfa"
 import { authHeaders } from "@/lib/supabase"
 
 type Json = Record<string, any>
@@ -255,8 +256,18 @@ export default function AdminPage() {
   const [moreOpen, setMoreOpen] = useState(false)
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null)
   const [autoRefresh, setAutoRefresh] = useState(true)
-  const [access, setAccess] = useState<"checking" | "allowed" | "denied">("checking")
+  const [access, setAccess] = useState<"checking" | "allowed" | "denied" | "mfa">("checking")
+  const [mfa, setMfa] = useState<MfaState | null>(null)
   const loadingRef = useRef(false)
+
+  // admin, then the 2FA code when the account has an authenticator (the API refuses admin calls without it anyway)
+  const checkAccess = (alive: () => boolean = () => true) => apiMe().then(me => {
+    if (!alive()) return
+    if (!me?.admin) return setAccess("denied")
+    setMfa(me.mfa || null)
+    if (me.mfa?.enrolled && me.mfa.aal !== "aal2") return setAccess("mfa")
+    setAccess("allowed"); void load()
+  })
 
   const load = async () => {
     if (loadingRef.current) return
@@ -307,11 +318,7 @@ export default function AdminPage() {
     const requested = new URLSearchParams(window.location.search).get("tab")
     if (requested && sections.some(([id]) => id === requested)) setSection(requested)
     let active = true
-    apiIsAdmin().then(isAdmin => {
-      if (!active) return
-      setAccess(isAdmin ? "allowed" : "denied")
-      if (isAdmin) void load()
-    })
+    checkAccess(() => active)
     return () => { active = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -374,6 +381,10 @@ export default function AdminPage() {
     ...ALL_STRATEGY_IDS.map(id => ({ id: `strategy-${id}`, label: STRATEGY_LABELS_AR[id] || id, hint: "استراتيجية · البوتات الحية", onSelect: () => selectSection("live") })),
   ]
 
+  if (access === "mfa") {
+    return <div dir="rtl" className="min-h-screen bg-void text-ink grid place-items-center p-6"><AdminMfaGate onPassed={() => { setAccess("checking"); void checkAccess() }} /></div>
+  }
+
   if (access !== "allowed") {
     return (
       <div dir="rtl" className="min-h-screen bg-void text-ink grid place-items-center p-6">
@@ -401,6 +412,7 @@ export default function AdminPage() {
             <button onClick={() => void load()} disabled={busy} className={btn.primary}>حدّث دلوقتي</button>
           </>} />
         {error && <Notice tone="loss">{error}</Notice>}
+        {mfa && !mfa.enrolled && <AdminMfaSetup mfa={mfa} onDone={() => void checkAccess()} />}
         <nav className="relative rounded-xl border border-line bg-surface p-1" aria-label="أقسام الإدارة">
           <div className="flex gap-1 overflow-x-auto">
             {PRIMARY_TABS.map(id => sections.find(s => s[0] === id)!).map(([id, label, Icon]) => (
@@ -495,7 +507,7 @@ export default function AdminPage() {
           </div>
         )}
 
-        {section === "real" && <><LiveStrategies /><div className="mt-5"><AdminUserBots /></div></>}
+        {section === "real" && <><LiveStrategies /><div className="mt-5 space-y-5"><AdminUsersLive /><AdminUserBots /></div></>}
 
         {section === "live" && (
           <div className="space-y-5">

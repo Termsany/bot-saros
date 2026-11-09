@@ -19,11 +19,14 @@ class UserBotsApiTests(ApiAuthTests):
         import app.main as m
         from app import user_bots as ub
         self.m, self.ub = m, ub
+        m._rate_hits.clear()                      # each test starts with its own request budget
         d = Path(self.tmp.name)
         self.desired, self.ipc = d / "desired", d / "ipc"; self.desired.mkdir(); self.ipc.mkdir()
         self.tokens = mock.patch.dict(ts.TOKENS, {
-            "u1-token": {"id": U1, "email": "u1@example.com", "email_confirmed": True},
-            "u2-token": {"id": U2, "email": "u2@example.com", "email_confirmed": True},
+            "u1-token": {"id": U1, "email": "u1@example.com", "email_confirmed": True, "mfa_enrolled": True, "aal": "aal2"},
+            "u2-token": {"id": U2, "email": "u2@example.com", "email_confirmed": True, "mfa_enrolled": True, "aal": "aal2"},
+            "u1-password": {"id": U1, "email": "u1@example.com", "email_confirmed": True, "mfa_enrolled": True, "aal": "aal1"},
+            "u1-no2fa": {"id": U1, "email": "u1@example.com", "email_confirmed": True, "mfa_enrolled": False, "aal": "aal1"},
             "new-token": {"id": U2, "email": "u2@example.com", "email_confirmed": False}})
         from app import user_keys_vault as ukv
         self.paths = [mock.patch.object(ub, "DESIRED", self.desired), mock.patch.object(ub, "IPC_ROOT", self.ipc),
@@ -68,7 +71,8 @@ class UserBotsApiTests(ApiAuthTests):
         r = self.c.get("/api/user/bots", headers=self.h("u1-token")).json()
         self.assertEqual(r["provision"]["state"], "waiting_approval")
         self.assertTrue(r["bots"]["trend_daily"]["running"]); self.assertEqual(r["rules"]["envs"], ["demo", "live"])
-        self.assertEqual(r["rules"]["live"]["strategies"], ["momentum_ls"])          # real money: momentum only
+        self.assertEqual(r["rules"]["live"]["strategies"], ["momentum_ls", "rsi2_pullback"])   # real money: momentum, RSI-2
+        self.assertEqual(r["rules"]["live"]["slots"], {"momentum_ls": 10, "rsi2_pullback": 10})
         self.assertEqual(self.c.get("/api/user/bots", headers=self.h("u2-token")).json()["bots"], {})
 
     def test_close_only_an_open_position_of_a_running_bot_of_ones_own(self):
@@ -101,6 +105,30 @@ class UserBotsApiTests(ApiAuthTests):
         self.assertEqual(self.c.get("/api/admin/user-bots", headers=self.h("u1-token")).status_code, 403)
         r = self.c.get("/api/admin/user-bots", headers=self.h("admin-token")).json()
         self.assertEqual([(u["user_id"], u["provision"]["state"]) for u in r["users"]], [(U1, "running")])
+        self.assertIsNone(r["users"][0]["email"])                                   # Supabase unreachable: no email, no error
+        from app import admin_users
+
+        async def accounts(**kw):
+            return {"available": True, "error": None, "users": [{"id": U1, "email": "friend@example.com"}, {"id": "x", "email": "y"}]}
+        with mock.patch.object(admin_users, "fetch_gotrue_users", accounts):
+            r = self.c.get("/api/admin/user-bots", headers=self.h("admin-token")).json()
+        self.assertEqual(r["users"][0]["email"], "friend@example.com")              # the owner sees who it is
+
+    def test_the_owner_opens_and_closes_real_money_for_users_from_the_admin_page(self):
+        # owner, 2026-11-07: no server command for the day-to-day switch; root's main lock still needed (provisioner)
+        get = lambda tok="admin-token": self.c.get("/api/admin/users-live", headers=self.h(tok))
+        post = lambda body, tok="admin-token": self.c.post("/api/admin/users-live", headers=self.h(tok), json=body)
+        self.assertEqual(get().json()["on"], False)                                   # no file yet: off
+        self.assertEqual(post({"on": True}).status_code, 400)                         # confirmation required
+        self.assertEqual(post({"on": True, "confirm": True}, "u1-token").status_code, 403)
+        self.assertEqual(get("u1-token").status_code, 403)
+        r = post({"on": True, "confirm": True})
+        self.assertEqual(r.status_code, 200, r.text); self.assertTrue(r.json()["on"])
+        self.assertEqual(json.loads((self.desired / "live.switch").read_text(encoding="utf-8"))["on"], True)
+        self.assertTrue(get().json()["on"]); self.assertTrue(get().json()["by"])
+        post({"on": False, "confirm": True})
+        self.assertFalse(get().json()["on"])
+        self.assertEqual(self.c.get("/api/admin/user-bots", headers=self.h("admin-token")).json()["users"], [])   # not a user
 
     # P2.7 review
     def test_a_status_file_that_is_a_link_is_not_read(self):
@@ -162,6 +190,59 @@ class UserBotsApiTests(ApiAuthTests):
         self.assertEqual(self.c.get("/api/user/bots/risk?capital=0&margin=20", headers=self.h("u1-token")).status_code, 400)
         self.assertEqual(self.c.get("/api/user/bots/risk?capital=1000&margin=20").status_code, 401)
 
+    def test_the_reserve_decides_whether_the_whole_basket_fits(self):
+        # owner, 2026-11-07: $300 at $24 needs a 20% reserve (300 × 80% ÷ 24 = 10 trades); at the default 40%, 7 fit
+        q = lambda **p: self.c.get("/api/user/bots/risk", params={"capital": 300, "margin": 24, **p}, headers=self.h("u1-token")).json()
+        r = q()
+        self.assertEqual((r["ok"], r["fits"], r["max_open"], r["max_margin"]), (False, False, 7, 18.0))
+        self.assertIn("at most $18", r["why"])
+        r = q(reserve=20)
+        self.assertEqual((r["ok"], r["fits"], r["max_open"], r["level"]), (True, True, 10, "very_high"))
+        self.assertFalse(q(reserve=5)["ok"]); self.assertFalse(q(reserve=70)["ok"])
+        base = {"env": "live", "enabled": True, "leverage": 2, "risk_per_trade_pct": 1, "max_aggregate_risk_pct": 3,
+                "strategies": ["momentum_ls"], "capital_usdt": 300, "capital_margin_override_usdt": 24}
+        self.assertEqual(self.c.post("/api/user/bots", headers=self.h("u1-token"), json=base).status_code, 400)
+        r = self.c.post("/api/user/bots", headers=self.h("u1-token"), json={**base, "capital_reserve_pct": 20})
+        self.assertEqual(r.status_code, 200, r.text)
+        d = r.json()["desired"]
+        self.assertEqual((d["capital_reserve_pct"], d["risk_per_trade_pct"], d["max_aggregate_risk_pct"]), (20.0, 8.0, 80.0))
+        self.assertEqual(self.c.get("/api/user/bots", headers=self.h("u1-token")).json()["rules"]["live"]["reserve"],
+                         {"default": 40.0, "min": 10.0, "max": 60.0})
+
+    def test_a_consent_for_a_plan_that_needs_a_lower_reserve_is_accepted(self):
+        from app.user_keys_vault import save_user_keys
+        from app.user_live_activation import CONSENT_TEXT
+        save_user_keys(U1, "binance", "k", "s")
+        body = {"exchange": "binance", "confirm": CONSENT_TEXT, "environment": "live", "capital_usdt": 300, "margin_usdt": 24}
+        with mock.patch.object(self.m, "live_trading_allowed", return_value=True), \
+             mock.patch("app.routes.users.live_trading_allowed", return_value=True, create=True):
+            self.assertEqual(self.c.post("/api/user/live/enable", headers=self.h("u1-token"), json=body).status_code, 200)
+
+    def test_rsi2_with_momentum_doubles_the_worst_case_and_the_consent_keeps_the_choice(self):
+        # owner, 2026-11-07: RSI-2 + the BTC filter for real money next to momentum, one or both (research §28)
+        from app.user_keys_vault import save_user_keys
+        from app.user_live_activation import CONSENT_TEXT
+        q = lambda s: self.c.get("/api/user/bots/risk", params={"capital": 2000, "margin": 20, "strategies": s}, headers=self.h("u1-token"))
+        both, rsi2 = q("rsi2_pullback,momentum_ls").json(), q("rsi2_pullback").json()
+        self.assertEqual((both["legs"], both["worst_usdt"], both["ok"]), (20, 320.0, True))
+        self.assertEqual((rsi2["legs"], rsi2["worst_usdt"]), (10, 160.0))
+        self.assertEqual(q("trend_daily").status_code, 400); self.assertEqual(q("").status_code, 400)
+        save_user_keys(U1, "binance", "k", "s")
+        body = {"exchange": "binance", "confirm": CONSENT_TEXT, "environment": "live", "capital_usdt": 2000, "margin_usdt": 20}
+        with mock.patch.object(self.m, "live_trading_allowed", return_value=True),              mock.patch("app.routes.users.live_trading_allowed", return_value=True, create=True):
+            self.assertEqual(self.c.post("/api/user/live/enable", headers=self.h("u1-token"), json={**body, "strategies": ["vol_breakout"]}).status_code, 400)
+            self.assertEqual(self.c.post("/api/user/live/enable", headers=self.h("u1-token"), json=body).status_code, 200)
+            self.assertEqual(self.c.get("/api/user/live/status", headers=self.h("u1-token")).json()["strategies"], ["momentum_ls"])   # none named: momentum
+            self.assertEqual(self.c.post("/api/user/live/enable", headers=self.h("u1-token"),
+                                         json={**body, "strategies": ["rsi2_pullback", "momentum_ls"]}).status_code, 200)
+        self.assertEqual(self.c.get("/api/user/live/status", headers=self.h("u1-token")).json()["strategies"], ["momentum_ls", "rsi2_pullback"])
+        plan = {"env": "live", "enabled": True, "leverage": 2, "risk_per_trade_pct": 1, "max_aggregate_risk_pct": 3,
+                "strategies": ["rsi2_pullback", "momentum_ls"], "capital_usdt": 2000, "capital_margin_override_usdt": 20}
+        r = self.c.post("/api/user/bots", headers=self.h("u1-token"), json=plan)
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual((r.json()["desired"]["strategies"], r.json()["desired"]["max_aggregate_risk_pct"]), (["momentum_ls", "rsi2_pullback"], 20.0))
+        self.assertEqual(self.c.post("/api/user/bots", headers=self.h("u1-token"), json={**plan, "strategies": ["trend_daily"]}).status_code, 400)
+
     def test_a_real_money_consent_stores_the_accepted_capital_and_margin(self):
         from app.user_keys_vault import save_user_keys
         from app.user_live_activation import CONSENT_TEXT, get_user_live_record
@@ -172,14 +253,44 @@ class UserBotsApiTests(ApiAuthTests):
             self.assertEqual(self.c.post("/api/user/live/enable", headers=self.h("u1-token"), json={**body, "margin_usdt": 1}).status_code, 400)
             self.assertEqual(self.c.post("/api/user/live/enable", headers=self.h("u1-token"), json=body).status_code, 200)
         rec = get_user_live_record(self.m.USER_LIVE_ACTIVATION_PATH, user_id=U1)
-        self.assertEqual((rec["environment"], rec["capital_usdt"], rec["margin_usdt"], rec["risk_per_trade_pct"]), ("live", 1000.0, 20.0, 1.6))
+        self.assertEqual((rec["environment"], rec["capital_usdt"], rec["margin_usdt"], rec["risk_per_trade_pct"]), ("live", 1000.0, 20.0, 2.0))   # 1.6% ÷ the 80% floor
 
     def test_a_real_money_desired_state_is_momentum_only(self):
         base = {"env": "live", "enabled": True, "leverage": 2, "risk_per_trade_pct": 1, "max_aggregate_risk_pct": 3,
                 "capital_usdt": 1000, "capital_margin_override_usdt": 20}
         self.assertEqual(self.c.post("/api/user/bots", headers=self.h("u1-token"), json={**base, "strategies": ["trend_daily"]}).status_code, 400)
         r = self.c.post("/api/user/bots", headers=self.h("u1-token"), json={**base, "strategies": ["momentum_ls"]})
-        self.assertEqual(r.status_code, 200); self.assertEqual(r.json()["desired"]["max_aggregate_risk_pct"], 16.0)
+        self.assertEqual(r.status_code, 200); self.assertEqual(r.json()["desired"]["max_aggregate_risk_pct"], 20.0)
+
+    def test_real_money_changes_need_a_session_that_passed_2fa_and_turning_off_never_does(self):
+        from app.user_keys_vault import save_user_keys
+        from app.user_live_activation import CONSENT_TEXT
+        save_user_keys(U1, "binance", "k", "s")
+        consent = {"exchange": "binance", "confirm": CONSENT_TEXT, "environment": "live", "capital_usdt": 1000, "margin_usdt": 20}
+        live = {"env": "live", "enabled": True, "strategies": ["momentum_ls"], "leverage": 2, "risk_per_trade_pct": 1,
+                "max_aggregate_risk_pct": 3, "capital_usdt": 1000, "capital_margin_override_usdt": 20}
+        with mock.patch("app.routes.users.live_trading_allowed", return_value=True, create=True):
+            for tok, why in (("u1-no2fa", "mfa_setup_required"), ("u1-password", "mfa_required")):
+                r = self.c.post("/api/user/live/enable", headers=self.h(tok), json=consent)
+                self.assertEqual(r.status_code, 403); self.assertTrue(r.json()["detail"].startswith(why), r.json())
+                self.assertEqual(self.c.post("/api/user/bots", headers=self.h(tok), json=live).status_code, 403)
+            self.assertEqual(self.c.post("/api/user/live/enable", headers=self.h("u1-token"), json=consent).status_code, 200)
+            self.assertEqual(self.c.post("/api/user/bots", headers=self.h("u1-token"), json=live).status_code, 200)
+            # now trading real money: replacing the key needs the code too; stopping never does
+            self.assertEqual(self.c.post("/api/user/keys/save", headers=self.h("u1-password"),
+                                         json={"exchange": "binance", "apiKey": "k2", "secret": "s2"}).status_code, 403)
+            self.assertEqual(self.c.post("/api/user/bots", headers=self.h("u1-password"), json={**live, "enabled": False}).status_code, 200)
+            self.assertEqual(self.c.post("/api/user/live/disable", headers=self.h("u1-no2fa")).status_code, 200)
+
+    def test_demo_needs_no_2fa(self):
+        from app.user_keys_vault import save_user_keys
+        from app.user_live_activation import CONSENT_TEXT
+        self.assertEqual(self.c.post("/api/user/keys/save", headers=self.h("u1-no2fa"),
+                                     json={"exchange": "binance", "apiKey": "k", "secret": "s"}).status_code, 200)
+        r = self.c.post("/api/user/live/enable", headers=self.h("u1-no2fa"),
+                        json={"exchange": "binance", "confirm": CONSENT_TEXT, "environment": "demo"})
+        self.assertEqual(r.status_code, 200, r.json())
+        self.assertEqual(self.ask("u1-no2fa").status_code, 200)
 
 
 if __name__ == "__main__":

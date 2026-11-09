@@ -56,6 +56,7 @@ install -m 644 -o root -g root "$T/scripts/demo_e2e.py" "$L/scripts/demo_e2e.py"
 install -m 644 -o root -g root "$T/scripts/live_report.py" "$L/scripts/live_report.py"   # the daily report (read only)
 install -m 644 -o root -g root "$T/scripts/watchdog.py" "$L/scripts/watchdog.py"         # problem alerts (read only)
 install -m 644 -o root -g root "$T/scripts/backup.py" "$L/scripts/backup.py"             # daily backup to Telegram (read only)
+install -m 644 -o root -g root "$T/scripts/backup_crypto.py" "$L/scripts/backup_crypto.py"   # locks it with the owner's public key
 install -m 644 -o root -g root "$T/scripts/provision_users.py" "$L/scripts/provision_users.py"   # Phase 2 users' bots (root)
 install -m 644 -o root -g root "$T/scripts/live_preflight.py" "$L/scripts/live_preflight.py"     # checks before real money (root, read only)
 install -m 644 -o root -g root "$T/scripts/realbot_export.py" "$L/scripts/realbot_export.py"     # realbot.da3m.io's live.json (raqmlive)
@@ -83,6 +84,7 @@ for f in "$L"/backend/app/*.py; do install -m 644 -o root -g root "$f" "$U/backe
 for f in "$L"/assets/fonts/*; do install -m 644 -o root -g root "$f" "$U/assets/fonts/"; done
 install -d -o root -g root -m 755 "$U/scripts"
 install -m 644 -o root -g root "$L/scripts/backup.py" "$U/scripts/backup.py"   # each user's part of the users' backup, run as them
+install -m 644 -o root -g root "$L/scripts/backup_crypto.py" "$U/scripts/backup_crypto.py"
 [ -x "$U/venv/bin/python" ] || python3 -m venv "$U/venv"
 "$U/venv/bin/pip" install -q --only-binary=:all: -r "$T/deploy/vps/live-requirements.txt"
 # keys: only the key lines, never the whole file. /opt/raqm-bot is writable by the paper user: a whole-file copy
