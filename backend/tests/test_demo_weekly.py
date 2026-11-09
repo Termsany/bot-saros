@@ -121,35 +121,47 @@ class PortfolioTests(unittest.TestCase):
     def tearDown(self):
         self.td.cleanup()
 
-    def bot(self, name, started, margin, pnls, positions=0):
-        hist = [{"symbol": "X/USDT", "pnl": p, "time": (started + timedelta(days=i + 1)).isoformat()} for i, p in enumerate(pnls)]
-        (self.pub / f"{name}.json").write_text(json.dumps({"started": started.isoformat(), "margin": margin, "history": hist,
-                                                           "positions": [{}] * positions}), encoding="utf-8")
+    S = dw.PORTFOLIO_START
+    LATER = S + timedelta(days=12)
+
+    def bot(self, name, margin, trades, positions=(), started=None):
+        """trades: [(opened, days after it the trade closed, pnl)]; positions: [opened]. "started" moves at every
+        restart, so it's set to the last minute here and must not matter."""
+        hist = [{"symbol": "X/USDT", "pnl": p, "opened": o.isoformat(), "time": (o + timedelta(days=d)).isoformat()} for o, d, p in trades]
+        doc = {"started": (started or self.LATER).isoformat(), "margin": margin, "history": hist,
+               "positions": [{"symbol": "X/USDT", "opened": o.isoformat()} for o in positions]}
+        (self.pub / f"{name}.json").write_text(json.dumps(doc), encoding="utf-8")
 
     def lines(self):
-        return "\n".join(dw.portfolio_lines(NOW, public=self.pub))
+        return "\n".join(dw.portfolio_lines(self.LATER, public=self.pub))
 
-    def test_each_portfolio_sums_its_bots_from_its_newest_start_at_100_dollars(self):
-        early, late = NOW - timedelta(days=30), NOW - timedelta(days=10)
-        # momentum's trades close days 1..21 after `early`: only the last two (+30, -10) are on or after `late`
-        self.bot("momentum", early, 100, [-50, 40] + [0] * 17 + [30, -10], positions=10)
-        self.bot("retail_fade", late, 20, [4, -2], positions=6)            # $20 margin: x5 at $100 -> +20, -10
-        self.bot("rsi2_btc", late, 100, [10])
+    def test_each_portfolio_sums_the_trades_opened_from_its_start_at_100_dollars(self):
+        before = self.S - timedelta(days=3)
+        # momentum: an old basket's trade closing after the start is left out; +30 and -10 opened after it count
+        self.bot("momentum", 100, [(before, 1, -50), (before, 5, 40), (self.S + timedelta(hours=1), 2, 30), (self.S + timedelta(days=3), 1, -10)],
+                 positions=[before, self.S + timedelta(days=7)])
+        self.bot("retail_fade", 20, [(self.S + timedelta(days=2), 5, 4), (self.S + timedelta(days=2), 6, -2)],   # $20: x5 -> +20, -10
+                 positions=[self.S + timedelta(days=9)] * 6)
+        self.bot("rsi2_btc", 100, [(self.S + timedelta(days=8), 2, 10)])
         out = self.lines()
-        self.assertIn("مومنتم + ضد الجمهور: من", out)
-        self.assertIn("4 صفقة، كسب 50%، صافي $+30", out)                  # +30 -10 +20 -10
-        self.assertIn("مفتوح دلوقتي 16 ($1,600 مارجن)", out)
-        self.assertIn("5 صفقة، كسب 60%، صافي $+40", out)                  # the three: and RSI-2's +10
+        self.assertIn("مومنتم + ضد الجمهور: من 2026-11-09 (12 يوم) — 4 صفقة، كسب 50%، صافي $+30", out)   # +30 -10 +20 -10
+        self.assertIn("مفتوح دلوقتي 7 ($700 مارجن)", out)                 # the old basket's open leg is left out
+        self.assertIn("الثلاثة: من 2026-11-09 (12 يوم) — 5 صفقة، كسب 60%، صافي $+40", out)
+
+    def test_a_restart_does_not_empty_the_portfolios(self):
+        for b in ("retail_fade", "rsi2_btc"):
+            self.bot(b, 100, [])
+        self.bot("momentum", 100, [(self.S + timedelta(hours=2), 1, 25)], started=self.LATER - timedelta(minutes=1))
+        self.assertIn("1 صفقة، كسب 100%، صافي $+25", self.lines())
 
     def test_the_drawdown_is_the_worst_fall_of_the_combined_closed_trades(self):
-        start = NOW - timedelta(days=5)
         for b in ("retail_fade", "rsi2_btc"):
-            self.bot(b, start, 100, [])
-        self.bot("momentum", start, 100, [50, -80, 20])
+            self.bot(b, 100, [])
+        self.bot("momentum", 100, [(self.S, 1, 50), (self.S, 2, -80), (self.S, 3, 20)])
         self.assertIn("أقصى تراجع $80", self.lines())
 
     def test_a_missing_bot_is_named_not_guessed(self):
-        self.bot("momentum", NOW - timedelta(days=3), 100, [5])
+        self.bot("momentum", 100, [(self.S, 1, 5)])
         self.assertIn("الثلاثة: ملف ضد الجمهور وRSI-2 + BTC مش موجود", self.lines())
 
     def test_every_paper_bot_of_the_portfolios_runs_at_100_dollars(self):
