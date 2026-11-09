@@ -6,20 +6,23 @@ Wants=network-online.target
 [Service]
 User=raqm
 Group=raqm
-WorkingDirectory=/opt/raqm-bot
+# owner, 2026-11-09: its own code folder (deploy/vps/install-momentum-paper.sh), so the paper basket follows the
+# current code (rebalance on Monday 00:00 UTC, like the real momentum bot) without touching the other paper bots in
+# /opt/raqm-bot. It shares their venv and Telegram settings only.
+WorkingDirectory=/opt/raqm-momentum-paper
 EnvironmentFile=-/opt/raqm-bot/.env
 Environment=PYTHONUNBUFFERED=1
 # admin close requests from the site (deploy/vps/setup-paper-ipc.sh)
 Environment=RAQM_PAPER_IPC=/opt/raqm-ipc-paper
 # own state file (state_momentum.json / state_momentum.log); page data -> momentum.json
-ExecStart=/opt/raqm-bot/venv/bin/python bot.py --paper --strategy momentum_ls --amount 100 --leverage 2 --poll 60 --notify --public /var/www/bot.da3m.io --state state_momentum.json
+ExecStart=/opt/raqm-bot/venv/bin/python -E -s bot.py --paper --strategy momentum_ls --amount 100 --leverage 2 --poll 60 --notify --public /var/www/bot.da3m.io --state state_momentum.json
 Restart=always
 RestartSec=30
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-ReadWritePaths=/opt/raqm-bot /var/www/bot.da3m.io /opt/raqm-ipc-paper
+ReadWritePaths=/opt/raqm-momentum-paper /var/www/bot.da3m.io /opt/raqm-ipc-paper
 
 [Install]
 WantedBy=multi-user.target

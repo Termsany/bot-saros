@@ -47,8 +47,9 @@ Logs: `journalctl -u raqm-listing -f`.
 
 ## Third paper bot: weekly momentum long/short
 
-`raqm-momentum.service` runs `bot.py --strategy momentum_ls --state state_momentum.json`: every 7 days (first cycle
-after 00:00 UTC) rank the top 50 Binance crypto USDT perpetuals by 30-day volume on their 2-week return, long the
+`raqm-momentum.service` runs `bot.py --strategy momentum_ls --state state_momentum.json` from its own folder
+`/opt/raqm-momentum-paper` (`sh deploy/vps/install-momentum-paper.sh <commit>`): every Monday (first cycle after
+00:00 UTC, like the real bot) rank the top 50 Binance crypto USDT perpetuals by 30-day volume on their 2-week return, long the
 strongest 5 and short the weakest 5 for a week, stop 40%, $20 × 2, fees + real funding, paper only. Page data
 `momentum.json`. Live prices on the page come from `wss://fstream.binance.com/market/ws` (Binance moved market
 streams there; the old `/ws` path accepts subscriptions but sends nothing). Logs: `journalctl -u raqm-momentum -f`.
