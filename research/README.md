@@ -588,6 +588,33 @@ before any result.
   filter, X3 L3) to `lib/paper-baseline.json` in the Demo baseline's units, and the Sunday report
   (`scripts/demo_weekly.py`) puts each paper bot next to it with `demo_measure`'s rules: samples 15 and 36 trades.
 
+### 30. momentum_ls: leaving out the coins that went too far — not adopted, one to watch (November 2026)
+
+`research/momentum_filter_study.py` (owner, 2026-11-09: very strong coins go long and hit the stop, and the reverse).
+Each filter drops an overextended candidate at the ranking close and takes the next one, so the basket stays 5 + 5;
+10 variants fixed before any result; $20 x2, fees, real funding, the 40% guard. The first row matches §28.
+
+| variant | stops % 2024 → | win % 2024 → | PF 2024 → | max DD | Sharpe < 2024 | Sharpe 2024 → | PnL 2024 → |
+|---|---|---|---|---|---|---|---|
+| **today (no filter)** | 9.2 | 49.6 | 1.24 | 240 | 0.68 | **1.22** | **+1,164** |
+| 2-week return capped: long ≤ +100%, short ≥ −50% (the in-sample pick) | 6.0 | 48.5 | 1.13 | 227 | **0.89** | 0.83 | +582 |
+| capped: long ≤ +200%, short ≥ −66% | 7.2 | 48.7 | 1.18 | 233 | 0.77 | 1.05 | +836 |
+| skip the 1 / 2 most extreme of each side | 7.1 / 5.9 | 48.6 / 48.3 | 1.17 / 1.14 | 237 / 209 | 0.65 / 0.55 | 0.98 / 0.84 | +791 / +613 |
+| last day's move over 15% | 7.7 | 49.6 | 1.22 | **198** | 0.60 | 1.16 | +1,032 |
+| distance from the 20-day average: +30%/−25%; +60%/−40% | 4.5; 6.2 | 47.7; 48.6 | 1.09; 1.12 | 208; 272 | 0.75; 0.89 | 0.59; 0.71 | +385; +516 |
+| most volatile 20% left out | **3.4** | **50.1** | 1.08 | 200 | 0.59 | 0.60 | +271 |
+| **trend agreement: long above, short below the 50-day average** | 9.3 | 49.1 | **1.25** | 212 | **0.87** | 1.21 | **+1,200** |
+
+- **The stops are not where the losses are.** Every filter lowers the stops (9.2% → as low as 3.4%), but the profit
+  drops faster: the coins that went furthest are also the ones that keep going. The edge lives in the extremes (the
+  MAX effect, §4): leaving them out loses more winners than stops.
+- **The in-sample pick failed:** capping the 2-week return was the best before 2024 (0.89) and fell to 0.83 after.
+- **Nothing beat today's rule in both periods.** The closest: **trend agreement (50-day average)** — the same Sharpe
+  after 2024 (1.21 vs 1.22), better before (0.87 vs 0.68), PnL +1,822 → +2,009 overall, max DD 240 → 212, PF 1.18 →
+  1.22, 8% fewer trades (some weeks have fewer than 5 shorts below their average). Not the pick by the rule, and
+  "equal after 2024" is not "better".
+- **Decision:** momentum_ls stays as it is. Trend agreement is the one to watch, e.g. on paper next to the bot.
+
 ## The site now shows only the four paper bots
 
 `research/bots_stats.py` writes `lib/bot-stats.json` (the numbers the site shows); the dashboard's live section and
