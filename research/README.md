@@ -637,6 +637,24 @@ scaled to the portfolio's dollars a trade, fixed size (no compounding), 2022-01 
 - **Caveats:** the crowd strategy was found after looking (§29) and its 2026 (+$361) is most of its result; RSI-2
   trades rarely (160 trades in 5 years). Not compounded, before slippage on small coins.
 
+### 32. One account or one sub-account each (`one_account_study.py`, 2026-11-09)
+
+One-way mode holds one position per coin and the risk gate refuses a coin another strategy holds, so on one account
+a trade is refused when another strategy's trade holds the coin at its entry (taken in entry order; on a tie momentum,
+then crowd, then RSI-2). Same sizes and period as §31.
+
+| portfolio | account | %/yr | %/yr 2024-> | max DD | worst month | months up | Sharpe <2024 / 2024-> |
+|---|---|---|---|---|---|---|---|
+| momentum + crowd | separate | 90 | 140 | $291 | −$135 | 69% | 0.37 / 1.50 |
+| momentum + crowd | one account | 67 | 116 | $365 | −$171 | 59% | −0.05 / 1.28 |
+| all three | separate | 77 | 120 | $236 | −$107 | 71% | 0.41 / 1.60 |
+| all three | one account | 54 | 96 | $301 | −$132 | 60% | −0.12 / 1.32 |
+
+- **On one account the profit falls by about 30%** and the drawdown rises by $65–75.
+- **The crowd strategy loses most of its edge:** 19% of its trades are refused (momentum already holds the coin) and
+  they made $405 of its $521; momentum loses 5% of its trades (+$134), RSI-2 34% (+$20).
+- **So each strategy goes on its own sub-account** (as with trend_daily, `shared_account_study.py`), never one account.
+
 ## The site now shows only the four paper bots
 
 `research/bots_stats.py` writes `lib/bot-stats.json` (the numbers the site shows); the dashboard's live section and
