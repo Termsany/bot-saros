@@ -261,7 +261,9 @@ def _ensure_legacy_migrated(con, path):
     _write_state_tx(con, state)
 
 
-_META_KEYS = ("limits", "kill_switch", "equity_high_water_mark", "equity_observed_at", "daily", "equity_last")
+_META_KEYS = ("limits", "kill_switch", "equity_high_water_mark", "equity_observed_at", "daily", "equity_last",
+              "transfers_through", "transfers_applied")
+TRANSFERS_KEPT = 20      # the last transfers applied, for the admin page and the audit
 
 
 def _write_meta_tx(con, state):
@@ -612,7 +614,56 @@ def release_open_risk(path, *, strategy, symbol):
         con.close()
 
 
-def update_equity_and_check_kill_switch(path, equity_usdt, *, equity_observed_at=None, max_equity_age_s=30):
+def _transfers_rows(transfers):
+    """[(epoch ms, usdt)] from what the bot read (Binance income TRANSFER), the odd row dropped; None stays None."""
+    if transfers is None:
+        return None
+    out = []
+    for row in transfers:
+        try:
+            t, a = int(row[0]), float(row[1])
+        except (TypeError, ValueError, IndexError):
+            continue
+        if math.isfinite(a) and t > 0:
+            out.append((t, a))
+    return out
+
+
+def _apply_transfers(state, rows):
+    """Money moved into or out of the account is not a gain or a loss (owner, 2026-11-07: a $200 withdrawal on
+    2026-11-05 read as a 51% drawdown and tripped the kill switch). Each transfer after the ledger's watermark moves
+    the high-water mark and the day's starting equity by the same amount, once. With no watermark yet the transfers
+    seen so far are taken as already in the figures (the high-water mark was built with them) and only later ones
+    count. Returns the net applied."""
+    if rows is None:
+        return 0.0
+    wm = state.get("transfers_through")
+    if wm is None:
+        state["transfers_through"] = max([t for t, _ in rows], default=int(datetime.now(timezone.utc).timestamp() * 1000))
+        return 0.0
+    new = [(t, a) for t, a in rows if t > int(wm)]
+    if not new:
+        return 0.0
+    state["transfers_through"] = max(t for t, _ in new)
+    net = sum(a for _, a in new)
+    if net:
+        hwm = state.get("equity_high_water_mark")
+        if hwm is not None:
+            state["equity_high_water_mark"] = max(float(hwm) + net, 0.0)
+        daily = state.get("daily") or {}
+        if daily.get("date") == _today() and daily.get("start_equity") is not None:
+            daily["start_equity"] = max(float(daily["start_equity"]) + net, 0.0)
+        kept = list(state.get("transfers_applied") or [])
+        kept.append({"at": _now(), "usdt": round(net, 8), "count": len(new)})
+        state["transfers_applied"] = kept[-TRANSFERS_KEPT:]
+    return net
+
+
+def update_equity_and_check_kill_switch(path, equity_usdt, *, equity_observed_at=None, max_equity_age_s=30, transfers=None):
+    """The equity just read, against the high-water mark and the day's start: trips the kill switch past the limits.
+    `transfers`: the account's transfers in/out (read before the equity), applied once each so that moving money
+    never reads as a drawdown or a daily loss; None (unreadable, paper) leaves the figures as they were."""
+    rows = _transfers_rows(transfers)
     con = _connect(path)
     try:
         con.execute("BEGIN IMMEDIATE")
@@ -634,6 +685,7 @@ def update_equity_and_check_kill_switch(path, equity_usdt, *, equity_observed_at
         equity_usdt = float(equity_usdt)
         state["equity_observed_at"] = equity_observed_at   # already proven fresh above; never substitute "now"
         state["equity_last"] = equity_usdt          # the dashboard and the bots' sizing cap the capital with it
+        _apply_transfers(state, rows)               # before the high-water mark moves: a deposit is no new high
         hwm = state.get("equity_high_water_mark")
         if hwm is None or equity_usdt > hwm:
             state["equity_high_water_mark"] = equity_usdt
