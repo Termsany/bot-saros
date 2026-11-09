@@ -12,7 +12,23 @@ from pathlib import Path
 # weekday 0 = Monday (owner, 2026-11-03): the rebalance follows Binance's weekly candle. The weekday is arbitrary in the
 # backtest too (every 7 days from the data's start) and the results swing with it (PF 1.08–1.22 over the 7 days,
 # Monday 1.15): Monday is a fixed, readable anchor, not a fitted one.
-MOM = {"weeks": 2, "top": 50, "n": 5, "min_days": 60, "stop": 0.40, "every_days": 7, "weekday": 0}
+MOM = {"weeks": 2, "top": 50, "n": 5, "min_days": 60, "stop": 0.40, "every_days": 7, "weekday": 0, "score": "return", "min_ranked": 20}
+# --momentum-retail (owner, 2026-11-07; research §29, paper only): the same weekly basket, ranked against the crowd —
+# among the top 20 by 30-day volume (150+ days listed), long the 3 whose all-accounts long/short ratio (Binance, the
+# last 3 days' hourly values) is lowest, short the 3 where it is highest; every Wednesday, as the study's weeks ran
+RETAIL = {"top": 20, "n": 3, "min_days": 150, "weekday": 2, "score": "retail", "ls_hours": 72, "min_ranked": 8}
+
+
+def momentum_public_name():
+    """The momentum bot's public file and paper close-request folder: "momentum", or --public-name for a second one."""
+    return bot.CONFIG.get("public_name") or "momentum"
+
+
+def retail_ratio(ex, sym):
+    """Mean of Binance's all-accounts long/short ratio over the last RETAIL ls_hours hours, or None."""
+    rows = ex.fapiDataGetGlobalLongShortAccountRatio({"symbol": sym.split("/")[0] + "USDT", "period": "1h", "limit": RETAIL["ls_hours"]})
+    vals = [float(r["longShortRatio"]) for r in rows or [] if r.get("longShortRatio") not in (None, "")]
+    return sum(vals) / len(vals) if len(vals) >= RETAIL["ls_hours"] // 2 else None
 
 
 def momentum_due(last_iso, today, every_days=MOM["every_days"], weekday=MOM["weekday"]):
@@ -50,11 +66,20 @@ def momentum_rank(ex):
     rows = []
     for sym in cands:
         try:
-            k = ex.fetch_ohlcv(sym, "1d", limit=70)[:-1]          # closed candles only
+            k = ex.fetch_ohlcv(sym, "1d", limit=max(70, bot.MOM["min_days"] + 10))[:-1]          # closed candles only
             if len(k) < bot.MOM["min_days"]: continue
             rows.append((sum(r[4] * r[5] for r in k[-30:]) / 30, sym, k[-1][4] / k[-1 - 7 * bot.MOM["weeks"]][4] - 1))
         except Exception as e: bot.log(f"momentum {sym}: {e}")
     top = sorted(rows, reverse=True)[:bot.MOM["top"]]
+    if bot.MOM.get("score") == "retail":
+        # against the crowd: the highest long/short ratio first (the shorts), the lowest last (the longs)
+        scored = []
+        for _, sym, _ in top:
+            try:
+                r = retail_ratio(ex, sym)
+                if r is not None: scored.append((sym, r))
+            except Exception as e: bot.log(f"retail ratio {sym}: {e}")
+        return sorted(scored, key=lambda x: -x[1])
     return [(sym, ret) for _, sym, ret in sorted(top, key=lambda r: r[2])]
 
 def run_once_momentum(ex):
@@ -65,7 +90,7 @@ def run_once_momentum(ex):
         bot.reconcile_live(state, ex)
         if bot._ENTRY_BLOCK.get("reason"): bot.log(f"⛔ دخول جديد متوقف، الخروج شغّال — {bot._ENTRY_BLOCK['reason']}")
         bot.process_manual_closes(state, ex, {})   # the site's close button (it waited unanswered for the basket bots)
-    bot.process_paper_closes(state, ex, "momentum")
+    bot.process_paper_closes(state, ex, momentum_public_name())
     # protective stops during the week (paper; live, the stop order is on the exchange and reconcile_live books its fill —
     # _paper_close here dropped the live position from the books without closing it on the exchange)
     for sym, pos in (list(state["positions"].items()) if bot.CONFIG["paper_trading"] else []):
@@ -81,7 +106,7 @@ def run_once_momentum(ex):
     last = state.get("mom_last")
     if bot.momentum_due(last, today, M["every_days"], M.get("weekday")):
         ranked = bot.momentum_rank(ex)
-        if len(ranked) >= 20:
+        if len(ranked) >= M.get("min_ranked", 20) and len(ranked) >= 2 * M["n"]:
             closed = 0.0
             lev = int(bot.CONFIG.get("leverage", 2)); picks = [(s, r, "short") for s, r in ranked[:M["n"]]] + [(s, r, "long") for s, r in ranked[-M["n"]:]]
             if not bot.CONFIG["paper_trading"]:
@@ -117,11 +142,18 @@ def run_once_momentum(ex):
             state["mom_last"] = today.isoformat()
             state["mom_ranking"] = [{"symbol": s.split(":")[0], "ret": round(r * 100, 1)} for s, r in ranked]
             bot.save_state(state)
-            longs = ", ".join(f"{s.split('/')[0]} {r * 100:+.0f}%" for s, r, sd in picks if sd == "long")
-            shorts = ", ".join(f"{s.split('/')[0]} {r * 100:+.0f}%" for s, r, sd in picks if sd == "short")
+            retail = M.get("score") == "retail"
+            fmt = (lambda r: f"L/S {r:.2f}") if retail else (lambda r: f"{r * 100:+.0f}%")
+            longs = ", ".join(f"{s.split('/')[0]} {fmt(r)}" for s, r, sd in picks if sd == "long")
+            shorts = ", ".join(f"{s.split('/')[0]} {fmt(r)}" for s, r, sd in picks if sd == "short")
             bot.log(f"🔄 مومنتم: تبديل أسبوعي — قفل {closed:+.4f} | لونج: {longs} | شورت: {shorts}")
-            bot.notify(f"🔄 مومنتم — تبديل أسبوعي (Paper)\nالأسبوع اللي فات: {closed:+.2f}$\n🟢 لونج الأقوى: {longs}\n🔴 شورت الأضعف: {shorts}")
+            if retail:
+                bot.notify(f"🔄 عكس الأغلبية — تبديل أسبوعي (Paper)\nالأسبوع اللي فات: {closed:+.2f}$\n🟢 لونج (الأغلبية شورت): {longs}\n🔴 شورت (الأغلبية لونج): {shorts}")
+            else:
+                bot.notify(f"🔄 مومنتم — تبديل أسبوعي (Paper)\nالأسبوع اللي فات: {closed:+.2f}$\n🟢 لونج الأقوى: {longs}\n🔴 شورت الأضعف: {shorts}")
         else: bot.log(f"مومنتم: {len(ranked)} عملة بس في القائمة — مفيش تبديل")
+        if M.get("score") == "retail":       # its ranking on the page: the crowd's ratio, not a 2-week return
+            state["mom_ranking"] = [{"symbol": s.split(":")[0], "ratio": round(r, 3)} for s, r in ranked]; bot.save_state(state)
     for sym in state["positions"]:
         if sym not in prices:
             try: prices[sym] = float(ex.fetch_ticker(sym)["last"])
@@ -138,18 +170,20 @@ def write_momentum_status(state, prices):
         pnl = sg * (price - p["entry"]) * p["qty"]; margin = p["entry"] * p["qty"] / max(1, int(p.get("leverage", 2)))
         pos.append({"symbol": sym.split(":")[0], "id": sym.split("/")[0] + "USDT", "side": p["side"], "entry": p["entry"], "price": price,
                     "qty": p["qty"], "margin": round(margin, 2), "sl": p["sl"], "pnl": round(pnl, 4),
-                    "pnl_pct": round(pnl / margin * 100, 2) if margin else 0, "ret": round(p.get("ret", 0) * 100, 1), "opened": p["time"]})
+                    "pnl_pct": round(pnl / margin * 100, 2) if margin else 0, "opened": p["time"],
+                    **({"ratio": round(float(p.get("ret", 0)), 3)} if bot.MOM.get("score") == "retail" else {"ret": round(p.get("ret", 0) * 100, 1)})})
     st = state.get("stats", {}); last = state.get("mom_last")
     data = {"updated": datetime.now(timezone.utc).isoformat(), "mode": "paper" if bot.CONFIG["paper_trading"] else "live", "rules": bot.MOM,
             "leverage": int(bot.CONFIG.get("leverage", 2)), "margin": bot.CONFIG.get("trade_amount_usdt"), "started": bot.CONFIG.get("started_at"),
-            "last_rebalance": last, "next_rebalance": bot.momentum_next(last).isoformat() if last else None,
+            "last_rebalance": last, "next_rebalance": bot.momentum_next(last, bot.MOM["every_days"], bot.MOM["weekday"]).isoformat() if last else None,
             "stats": {"closed": st.get("trades", 0), "wins": st.get("wins", 0), "losses": st.get("losses", 0),
                       "realized": round(float(st.get("pnl", 0)), 4), "unrealized": round(sum(x["pnl"] for x in pos), 4), "open": len(pos)},
-            "positions": sorted(pos, key=lambda x: (x["side"], -x["ret"])),
+            "positions": sorted(pos, key=lambda x: (x["side"], -x.get("ret", 0), x.get("ratio", 0))),
+            **({"ranking": state.get("mom_ranking", [])} if bot.MOM.get("score") == "retail" else {}),
             "history": [{"symbol": h["symbol"].split(":")[0], "side": h.get("side"), "entry": h["entry"], "exit": h["exit"], "pnl": bot._r4(h.get("pnl")),
                          "reason": h.get("reason", ""), "time": h.get("time"), "opened": h.get("opened"), "ret": h.get("ret")}
                         for h in state.get("history", [])[-300:]][::-1]}
     try:
-        d = Path(out_dir); tmp = d / "momentum.json.tmp"
-        tmp.write_text(json.dumps(data, ensure_ascii=False, default=str), encoding="utf-8"); tmp.replace(d / "momentum.json")
+        name = momentum_public_name(); d = Path(out_dir); tmp = d / f"{name}.json.tmp"
+        tmp.write_text(json.dumps(data, ensure_ascii=False, default=str), encoding="utf-8"); tmp.replace(d / f"{name}.json")
     except Exception as e: bot.log(f"public momentum status: {e}")

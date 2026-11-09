@@ -77,7 +77,7 @@ class ClosedFileTests(unittest.TestCase):
             botmod._write_closed(Path(d), state); botmod._write_closed(Path(d), state)
             doc = json.loads((Path(d) / "closed.json").read_text(encoding="utf-8"))
         self.assertEqual(w.call_count, 1)
-        self.assertEqual(len(doc["closed"]), 40); self.assertEqual(set(doc["closed"][0]), {"symbol", "side", "opened", "time", "pnl", "pnl_pct", "reason", "by"})
+        self.assertEqual(len(doc["closed"]), 40); self.assertEqual(set(doc["closed"][0]), {"symbol", "side", "opened", "time", "entry", "exit", "qty", "pnl", "pnl_pct", "funding_pnl", "reason", "by"})
 
 
 class EndpointTests(unittest.TestCase):

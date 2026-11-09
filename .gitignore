@@ -46,3 +46,4 @@ testnet_e2e_runs/
 # Playwright (npm run test:e2e)
 playwright-report/
 test-results/
+account_activity.sqlite3

@@ -6,7 +6,9 @@ import { ShieldCheck, Eye, EyeOff, Power, CheckCircle2 } from "lucide-react"
 import { authHeaders } from "@/lib/supabase"
 import { CONSENT_TEXT } from "@/lib/liveConsent"
 import { UserBots } from "@/components/UserBots"
+import { UserMfa } from "@/components/UserMfa"
 import { apiUserBotsRisk, type LiveRisk } from "@/lib/api"
+import { LIVE_STRATEGIES, LIVE_NAMES } from "@/lib/liveStrategies"
 import { useLocale, useT } from "@/lib/i18n/locale"
 
 // The page's words (Figma "RAQM — Global Redesign 2026"); the consent text itself stays English (the server compares it).
@@ -31,18 +33,22 @@ const T = {
     agreeBtn: (x?: string) => `وافق على ${x} Demo (فلوس وهمية)`, keysFirst: (x?: string) => `احفظ مفاتيح ${x} الأول.`,
     account: "حالة حسابك", keysOf: (x: string) => `مفاتيح ${x}`, keyPaper: "محفوظة · Paper", keyNone: "مش موجودة", realTrading: "التداول الحقيقي", running: "شغال",
     demoOnly: <><b className="text-corona">دلوقتي على Binance Demo بس</b> (فلوس وهمية): اعمل مفاتيح من وضع Demo Trading في Binance. الفلوس الحقيقية مقفولة لحد ما الاستراتيجيات تخلص قياسها.</>,
-    mDemo: "Demo · فلوس وهمية", mLive: "فلوس حقيقية", mLiveNote: "بالدعوة بس · momentum بس · على حسابك انت في Binance",
+    mDemo: "Demo · فلوس وهمية", mLive: "فلوس حقيقية", mLiveNote: "بالدعوة بس · momentum و/أو RSI-2 · على حسابك انت في Binance",
+    stratsL: "الاستراتيجيات — واحدة أو الاتنين (كل واحدة لحد 10 صفقات في نفس الوقت)", stratsNeed: "اختار استراتيجية واحدة على الأقل",
     cAmount: "2 · المبلغ والمارجن", cAmountSub: "انت اللي بتحددهم · السيرفر بيحسب الخطورة ومش بيقبل غير اللي وافقت عليه",
     capital: "راس المال ($) — مش أكتر من رصيدك على Binance", marginL: "المارجن لكل صفقة ($)",
+    reserveL: "الاحتياطي (%) — برّه الصفقات",
+    fits: (n: number, legs: number) => `بيدخل ${n} صفقة من ${legs} في السلة`,
+    floorNote: (pct: number) => `لو رصيدك نزل تحت ${pct}% من راس المال، البوت مش بيفتح سلة جديدة لحد ما تراجع (الوقفات والخروج شغالين)`,
     size: "حجم الصفقة", oneStop: "لو الوقف اتضرب في صفقة", worst: (n: number) => `أسوأ أسبوع (الـ ${n} وقفات)`, ofCapital: "من راس المال",
     levels: { low: "خطورة منخفضة", medium: "خطورة متوسطة", high: "خطورة عالية", very_high: "خطورة عالية جدًا" } as Record<string, string>,
     lCalc: "بيحسب…", lNeed: "اكتب راس المال والمارجن",
     minNote: "BTC محتاج مارجن $25 وETH $10 على الأقل (أقل أمر على Binance) — أقل من كده بيتسابوا",
     acceptLevel: (lvl: string, worst: string, pct: number) => `بوافق على ${lvl}: أسوأ أسبوع ممكن يخسّرني ${worst} (${pct}% من راس المال)، على مسؤوليتي`,
     agreeLive: "وافق على الفلوس الحقيقية",
-    agreedLive: (cap?: number | null, mar?: number | null) => `موافق على فلوس حقيقية · راس مال $${cap} · مارجن $${mar} للصفقة`,
+    agreedLive: (cap?: number | null, mar?: number | null, s?: string) => `موافق على فلوس حقيقية · ${s} · راس مال $${cap} · مارجن $${mar} للصفقة`,
     sRiskLive: (lvl: string, worst: string) => `${lvl} · أسوأ أسبوع ${worst}`,
-    liveNote: <><b className="text-loss">فلوس حقيقية</b>: البوت بيتداول بفلوسك على حسابك انت في Binance، وممكن تخسر. المفتاح لازم يكون <b>السحب فيه مقفول</b> و<b>مقفول على IP السيرفر</b> — السيرفر بيتأكد من ده بنفسه قبل أول صفقة، ومفتاح مش كده بيترفض.</>,
+    liveNote: <><b className="text-loss">فلوس حقيقية</b>: البوت بيتداول بفلوسك على حسابك انت في Binance، وممكن تخسر. المفتاح لازم يكون <b>مقفول على IP السيرفر</b> وعليه <b>Reading وFutures بس</b>: السحب والتحويلات والـ Spot/Margin والـ Options كلها مقفولة. السيرفر بيتأكد من ده بنفسه قبل أول صفقة وكل يوم بعدها، ومفتاح مش كده بيترفض والبوت بيبطّل يفتح صفقات.</>,
   },
   en: {
     rLev: "Leverage is 1 to 5", rTrade: "Risk per trade is up to 1%", rMax: "Max open risk is up to 3%", rOrder: "Risk per trade must be below the max open risk",
@@ -64,18 +70,22 @@ const T = {
     agreeBtn: (x?: string) => `Agree on ${x} Demo (play money)`, keysFirst: (x?: string) => `Save your ${x} keys first.`,
     account: "Your account", keysOf: (x: string) => `${x} keys`, keyPaper: "Saved · Paper", keyNone: "None", realTrading: "Trading", running: "Running",
     demoOnly: <><b className="text-corona">Binance Demo only for now</b> (play money): create keys in Binance's Demo Trading mode. Real money stays locked until the strategies finish their measurement.</>,
-    mDemo: "Demo · play money", mLive: "Real money", mLiveNote: "By invitation · momentum only · on your own Binance account",
+    mDemo: "Demo · play money", mLive: "Real money", mLiveNote: "By invitation · momentum and/or RSI-2 · on your own Binance account",
+    stratsL: "Strategies — one or both (each up to 10 trades at once)", stratsNeed: "Pick at least one strategy",
     cAmount: "2 · Amount and margin", cAmountSub: "You set them · the server computes the risk and holds you to what you accepted",
     capital: "Capital ($) — not more than your Binance balance", marginL: "Margin per trade ($)",
+    reserveL: "Reserve (%) — kept out of trades",
+    fits: (n: number, legs: number) => `${n} of the basket's ${legs} trades fit`,
+    floorNote: (pct: number) => `If your balance falls under ${pct}% of the capital, the bot opens no new basket until you look (stops and exits keep working)`,
     size: "Trade size", oneStop: "If one trade's stop is hit", worst: (n: number) => `Worst week (all ${n} stops)`, ofCapital: "of the capital",
     levels: { low: "Low risk", medium: "Medium risk", high: "High risk", very_high: "Very high risk" } as Record<string, string>,
     lCalc: "Computing…", lNeed: "Enter the capital and the margin",
     minNote: "BTC needs a $25 margin and ETH $10 at least (Binance's smallest order) — below that they're skipped",
     acceptLevel: (lvl: string, worst: string, pct: number) => `I accept ${lvl}: the worst week can lose me ${worst} (${pct}% of the capital), at my own risk`,
     agreeLive: "Agree to real money",
-    agreedLive: (cap?: number | null, mar?: number | null) => `Agreed to real money · capital $${cap} · margin $${mar} per trade`,
+    agreedLive: (cap?: number | null, mar?: number | null, s?: string) => `Agreed to real money · ${s} · capital $${cap} · margin $${mar} per trade`,
     sRiskLive: (lvl: string, worst: string) => `${lvl} · worst week ${worst}`,
-    liveNote: <><b className="text-loss">Real money</b>: the bot trades your money on your own Binance account, and you can lose. The key must have <b>withdrawals off</b> and be <b>restricted to the server's IP</b> — the server checks this itself before the first trade and refuses a key that isn't.</>,
+    liveNote: <><b className="text-loss">Real money</b>: the bot trades your money on your own Binance account, and you can lose. The key must be <b>restricted to the server's IP</b> with <b>Reading and Futures only</b>: withdrawals, transfers, Spot/Margin and Options all off. The server checks this itself before the first trade and every day after; a key that isn't is refused and the bot stops opening trades.</>,
   },
 }
 
@@ -87,7 +97,7 @@ const EXCHANGES = [
 ] as const
 
 type KeyStatus = { configured: boolean; paper: boolean }
-type LiveStatus = { enabled: boolean; exchange?: string; leverage?: number; risk_per_trade_pct?: number; max_aggregate_risk_pct?: number; consented_at?: string; environment?: string; capital_usdt?: number | null; margin_usdt?: number | null }
+type LiveStatus = { enabled: boolean; exchange?: string; leverage?: number; risk_per_trade_pct?: number; max_aggregate_risk_pct?: number; consented_at?: string; environment?: string; capital_usdt?: number | null; margin_usdt?: number | null; strategies?: string[] | null }
 
 /**
  * User-facing live-trading settings — require_user, NOT admin. Every call here
@@ -117,19 +127,25 @@ export default function UserLiveSettingsPage() {
   const [money, setMoney] = useState<"demo" | "live">("demo")
   const [capital, setCapital] = useState("1000")
   const [margin, setMargin] = useState("20")
+  const [reserve, setReserve] = useState("40")      // user_bots.LIVE_RESERVE_DEFAULT; the whole basket must fit after it
+  const [liveStrats, setLiveStrats] = useState<string[]>(["momentum_ls"])   // real money: momentum and/or RSI-2 (owner, 2026-11-07)
   const [risk, setRisk] = useState<LiveRisk | null>(null)
   const [riskBusy, setRiskBusy] = useState(false)
   const live = money === "live"
   useEffect(() => {           // the risk of the numbers typed, from the server (the same numbers it will hold the user to)
     if (!live) return
-    const cap = Number(capital), mar = Number(margin)
-    if (!(cap > 0 && mar > 0)) { setRisk(null); return }
+    const cap = Number(capital), mar = Number(margin), res = Number(reserve)
+    if (!(cap > 0 && mar > 0) || reserve === "" || !(res >= 0) || !liveStrats.length) { setRisk(null); return }
     setRiskBusy(true)
-    const id = setTimeout(async () => { setRisk(await apiUserBotsRisk(cap, mar)); setRiskBusy(false) }, 300)
+    const id = setTimeout(async () => { setRisk(await apiUserBotsRisk(cap, mar, res, liveStrats)); setRiskBusy(false) }, 300)
     return () => clearTimeout(id)
-  }, [live, capital, margin])
+  }, [live, capital, margin, reserve, liveStrats])
+  const ordered = (s: string[]) => LIVE_STRATEGIES.filter(x => s.includes(x)) as string[]
+  function toggleStrat(s: string){
+    setLiveStrats(cur => cur.includes(s) ? (cur.length > 1 ? cur.filter(x => x !== s) : cur) : ordered([...cur, s]))
+  }
   const usd = (v: number) => `$${v.toLocaleString("en-US", { maximumFractionDigits: 2 })}`
-  const liveRiskError = !(Number(capital) > 0 && Number(margin) > 0) ? t.lNeed : riskBusy || !risk ? t.lCalc : !risk.ok ? (risk.why || t.lNeed) : ""
+  const liveRiskError = !liveStrats.length ? t.stratsNeed : !(Number(capital) > 0 && Number(margin) > 0) ? t.lNeed : riskBusy || !risk ? t.lCalc : !risk.ok ? (risk.why || t.lNeed) : ""
   const demoRiskError = !(leverage >= 1 && leverage <= 5) ? t.rLev
     : !(riskPerTrade > 0 && riskPerTrade <= 1) ? t.rTrade
     : !(maxRisk > 0 && maxRisk <= 3) ? t.rMax
@@ -147,8 +163,14 @@ export default function UserLiveSettingsPage() {
         const ls = await r2.json(); setLiveStatus(ls)
         if (ls.enabled && ls.environment === "live" && ls.capital_usdt && ls.margin_usdt) {   // a real-money consent: show it
           setMoney("live"); setCapital(String(ls.capital_usdt)); setMargin(String(ls.margin_usdt))
+          if (Array.isArray(ls.strategies) && ls.strategies.length) setLiveStrats(ordered(ls.strategies))
         }
       }
+    } catch {}
+    try {   // the reserve saved with the bots (it isn't part of the consent: it changes how many trades fit, not a stop's cost)
+      const r3 = await fetch(`${API}/api/user/bots`, { headers: await authHeaders() })
+      if (r3.ok) { const b = await r3.json(); if (b?.desired?.env === "live" && b.desired.capital_reserve_pct != null) setReserve(String(b.desired.capital_reserve_pct))
+        if (b?.desired?.env === "live" && Array.isArray(b.desired.strategies) && b.desired.strategies.length) setLiveStrats(ordered(b.desired.strategies)) }
     } catch {}
   }
   useEffect(() => { loadStatus() }, [])
@@ -191,7 +213,7 @@ export default function UserLiveSettingsPage() {
         method: "POST", headers: await authHeaders({ "Content-Type": "application/json" }),
         // users trade on Binance Demo only for now (docs/phase2-design.md): the consent is recorded for Demo
         body: JSON.stringify(live
-          ? { exchange, confirm: confirmText, environment: "live", capital_usdt: Number(capital), margin_usdt: Number(margin) }
+          ? { exchange, confirm: confirmText, environment: "live", capital_usdt: Number(capital), margin_usdt: Number(margin), strategies: liveStrats }
           : { exchange, confirm: confirmText, leverage, risk_per_trade_pct: riskPerTrade, max_aggregate_risk_pct: maxRisk, environment: "demo" }),
       })
       const j = await r.json().catch(() => ({}))
@@ -222,9 +244,11 @@ export default function UserLiveSettingsPage() {
   }
 
   const keysReady = !!status[exchange]?.configured
-  // a consent counts for what is on screen: Demo, or real money for exactly these numbers (a change asks again)
+  // a consent counts for what is on screen: Demo, or real money for exactly these numbers and strategies it covers (a change asks again)
+  const covered = liveStatus.strategies || ["momentum_ls"]
   const consented = liveStatus.enabled && (!live || (liveStatus.environment === "live"
-    && Number(capital) === Number(liveStatus.capital_usdt) && Number(margin) === Number(liveStatus.margin_usdt)))
+    && Number(capital) === Number(liveStatus.capital_usdt) && Number(margin) === Number(liveStatus.margin_usdt)
+    && liveStrats.every(s => covered.includes(s))))
   const consentReady = confirmText === CONSENT_TEXT && agreeChecked
   const exName = EXCHANGES.find(e => e.id === exchange)?.name
   const steps: [string, string, "done" | "now" | "todo"][] = [
@@ -270,6 +294,7 @@ export default function UserLiveSettingsPage() {
 
       <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
         <div className="min-w-0 space-y-5">
+          {live && <UserMfa locale={locale} />}
           {/* Save/update own key — write-only form, never re-displayed */}
           <Card>
             <CardHeader title={t.c1} sub={t.c1Sub}/>
@@ -298,11 +323,26 @@ export default function UserLiveSettingsPage() {
           {live ? (
           <Card className="border-loss/30">
             <CardHeader title={t.cAmount} sub={t.cAmountSub} action={risk?.ok && <Pill tone={risk.level === "low" ? "profit" : risk.level === "medium" ? "corona" : "loss"}>{t.levels[risk.level]}</Pill>}/>
-            <div className="grid gap-3 sm:grid-cols-2">
+            <span className={label}>{t.stratsL}</span>
+            <div className="mb-4 grid gap-2 sm:grid-cols-2" data-testid="live-strategies">
+              {LIVE_STRATEGIES.map(s => {
+                const on = liveStrats.includes(s), [name, desc] = LIVE_NAMES[locale === "en" ? "en" : "ar"][s]
+                return (
+                  <button key={s} type="button" role="checkbox" aria-checked={on} onClick={() => toggleStrat(s)}
+                    className={`rounded-xl border px-3 py-2.5 text-start ${on ? "border-loss bg-loss/10" : "border-line"}`}>
+                    <div className="text-[14px] font-semibold">{on ? "✓ " : ""}{name}</div>
+                    <div className="text-[11px] text-faint">{desc}</div>
+                  </button>
+                )
+              })}
+            </div>
+            <div className="grid gap-3 sm:grid-cols-3">
               <label className="block"><span className={label}>{t.capital}</span>
                 <input type="number" min={0} inputMode="decimal" value={capital} onChange={e => setCapital(e.target.value)} className={`${field} font-mono`} dir="ltr"/></label>
               <label className="block"><span className={label}>{t.marginL}</span>
                 <input type="number" min={0} inputMode="decimal" value={margin} onChange={e => setMargin(e.target.value)} className={`${field} font-mono`} dir="ltr"/></label>
+              <label className="block"><span className={label}>{t.reserveL}</span>
+                <input type="number" min={10} max={60} step={5} inputMode="decimal" value={reserve} onChange={e => setReserve(e.target.value)} className={`${field} font-mono`} dir="ltr" data-testid="live-reserve"/></label>
             </div>
             {risk && risk.ok ? (
               <div className="mt-4 grid gap-2 sm:grid-cols-3" data-testid="live-risk">
@@ -316,7 +356,9 @@ export default function UserLiveSettingsPage() {
                 ))}
               </div>
             ) : <div className={`mt-4 rounded-xl px-4 py-3 text-[13px] ${riskError && riskError !== t.lCalc ? "bg-loss/10 text-loss" : "bg-surface2 text-muted"}`}>{riskError}</div>}
-            <p className="mt-3 text-[12px] text-faint">{t.minNote}</p>
+            {risk && risk.ok && <p className="mt-3 text-[12px] text-muted" data-testid="live-fits">{t.fits(Math.min(risk.max_open, risk.legs), risk.legs)}</p>}
+            <p className="mt-2 text-[12px] text-faint">{t.floorNote(80)}</p>
+            <p className="mt-1 text-[12px] text-faint">{t.minNote}</p>
           </Card>
           ) : (
           <Card>
@@ -340,7 +382,7 @@ export default function UserLiveSettingsPage() {
             {consented ? (
               <div className="space-y-3">
                 <div className="flex items-center gap-2 text-sm text-profit"><CheckCircle2 size={16}/> {live
-                  ? t.agreedLive(liveStatus.capital_usdt, liveStatus.margin_usdt)
+                  ? t.agreedLive(liveStatus.capital_usdt, liveStatus.margin_usdt, covered.map(s => LIVE_NAMES[locale === "en" ? "en" : "ar"][s]?.[0] || s).join(" + "))
                   : t.agreed(liveStatus.exchange, liveStatus.environment === "demo", liveStatus.leverage, liveStatus.risk_per_trade_pct, liveStatus.max_aggregate_risk_pct)}</div>
                 <button onClick={disableLive} disabled={busy} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-loss px-4 py-2.5 text-sm font-semibold text-void"><Power size={15}/> {t.withdraw}</button>
               </div>
@@ -362,7 +404,7 @@ export default function UserLiveSettingsPage() {
             )}
           </Card>
 
-          <UserBots consent={liveStatus} locale={locale} money={money} liveCapital={Number(capital)} liveMargin={Number(margin)} liveConsented={consented && live} />
+          <UserBots consent={liveStatus} locale={locale} money={money} liveCapital={Number(capital)} liveMargin={Number(margin)} liveReserve={Number(reserve)} liveConsented={consented && live && !!risk?.ok} liveStrategies={liveStrats} />
         </div>
 
         <Card>

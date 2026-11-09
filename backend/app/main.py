@@ -879,11 +879,18 @@ def _accounts() -> dict:
     except live_accounts.RegistryError as e:
         raise HTTPException(503, f"accounts registry: {e}")
 
+def _copies() -> dict:
+    """The copy accounts: one more copy of a strategy that also runs on the main account (live_account.py add-copy)."""
+    try:
+        return live_accounts.load_copies(ACCOUNTS_REGISTRY)
+    except live_accounts.RegistryError as e:
+        raise HTTPException(503, f"accounts registry: {e}")
+
 def _acct_dir(acct: str):
-    """None for the main account; the sub-account's ledger folder; 400/404 for anything else."""
+    """None for the main account; the sub-account's (moved or copy) ledger folder; 400/404 for anything else."""
     if not acct: return None
     if not ACCT_RE.match(acct): raise HTTPException(400, "bad account name")
-    if acct not in _accounts(): raise HTTPException(404, "unknown live account")
+    if acct not in _accounts() and acct not in _copies(): raise HTTPException(404, "unknown live account")
     return live_accounts.paths(acct, risk_root=ACCOUNTS_RISK_ROOT)["risk"]
 
 def _live_activation_path(acct: str = "") -> Path:
@@ -891,8 +898,11 @@ def _live_activation_path(acct: str = "") -> Path:
     return LIVE_ACTIVATION_PATH if d is None else d / "live_activation.sqlite3"
 
 def _account_strategies(acct: str = "") -> list:
-    """The live strategies that trade on this account: its own, or for the main one every strategy no sub-account has."""
+    """The live strategies that trade on this account: its own, or for the main one every strategy no sub-account has
+    (a copy account takes nothing away from the main one)."""
     accs = _accounts()
+    copies = _copies()
+    if acct in copies: return [s for s in LIVE_STRATEGIES if s in copies[acct]]
     if acct: return [s for s in LIVE_STRATEGIES if s in accs.get(acct, [])]
     elsewhere = {s for ss in accs.values() for s in ss}
     return [s for s in LIVE_STRATEGIES if s not in elsewhere]
@@ -916,8 +926,9 @@ def _live_strategy(name: str) -> str:
     if name not in LIVE_STRATEGIES: raise HTTPException(400, "unknown live strategy")
     return name
 
-def _live_status_of(strategy: str) -> dict:
-    f = IPC_DIR / strategy / "live_status.json"
+def _live_status_of(strategy: str, acct: str = "") -> dict:
+    """A live bot's status: the main (or moved) one's folder, or a copy account's own (/opt/raqm-ipc/acct-<name>/...)."""
+    f = (live_accounts.copy_ipc(acct, strategy, IPC_DIR) if acct and acct in _copies() else IPC_DIR / strategy) / "live_status.json"
     if not f.exists():
         return {"running": False}
     try:
@@ -977,7 +988,7 @@ async def live_strategies(env: str = "live", acct: str = "", user: dict = Depend
         listed = _account_strategies(acct)
     rows = []
     for s in listed:
-        st = _live_status_of(s)
+        st = _live_status_of(s, acct if env == "live" else "")
         # one status folder per strategy for both bots (raqm-demo@ and raqm-live@): only the asked account's bot counts —
         # the real-money view showed the Demo bots' positions as its own (2026-11-03)
         mine = st.get("env") == env
@@ -1001,6 +1012,7 @@ async def live_strategies(env: str = "live", acct: str = "", user: dict = Depend
     if env == "live":
         accounts = [{"name": "", "strategies": _account_strategies("")}]
         accounts += [{"name": n, "strategies": ss} for n, ss in sorted(_accounts().items())]
+        accounts += [{"name": n, "strategies": ss, "copy": True} for n, ss in sorted(_copies().items())]
     return {"env": env, "acct": acct, "accounts": accounts, "kill_switch": kill,
             "enabled": live_trading_allowed() if env == "live" else True, "capital": capital,
             "account": (record or {}).get("account"), "record": record, "strategies": rows}

@@ -312,6 +312,7 @@ def notify(text):
     connection waits out the IPv6 attempt first) never holds up the trading cycle."""
     tok, chat = os.getenv("TELEGRAM_BOT_TOKEN", ""), os.getenv("TELEGRAM_CHAT_ID", "")
     if not (CONFIG.get("notify") and tok and chat): return
+    if CONFIG.get("label"): text = f"[{CONFIG['label']}] {text}"     # a second bot of the same strategy says which
     _tg_put((tok, chat, text))
 
 def _tg_put(item):
@@ -329,7 +330,7 @@ def notify_trade(h):
     try:
         import trade_card
         env = "paper" if CONFIG.get("paper_trading") else ("live" if binance_env() == "live" else "demo")
-        card = trade_card.build(h, strategy=_current_strategy_name(), env=env, leverage=CONFIG.get("leverage", 2))
+        card = trade_card.build(h, strategy=CONFIG.get("label") or _current_strategy_name(), env=env, leverage=CONFIG.get("leverage", 2))
     except Exception as e:
         log(f"trade card: {e}")
         notify(f"🔒 قفل {h.get('symbol')} — {h.get('reason', '')}\nPnL {float(h.get('pnl') or 0):+.2f}$"); return
@@ -1972,6 +1973,7 @@ def reconcile_live(state, ex):
                 state["recovery_required"][sym] = {"reason": f"الكمية على المنصة {q} مش {pos['qty']}", "at": datetime.now(timezone.utc).isoformat()}
                 notify(f"🚨 {sym}: الكمية على المنصة {q} مختلفة عن البوت {pos['qty']} — راجعها. البوت وقف أي دخول جديد.")
     _protect_pending(ex, state, live)
+    _audit_stops(ex, state, live)
     mine = {k.split(":")[0] for k in state["positions"]}
     unknown = sorted(set(live) - mine - _held_by_other_strategies())
     if unknown:
@@ -1981,6 +1983,59 @@ def reconcile_live(state, ex):
         state["_unknown_seen"] = unknown
     else:
         state.pop("_unknown_seen", None)
+    save_state(state)
+
+STOP_AUDIT_S = 3600
+AUDIT_REASON = "stop missing on the exchange (hourly stop check)"
+
+def _audit_stops(ex, state, live, now=None):
+    """reconcile_live, hourly (owner, 2026-11-08): every open position's recorded stop must still be on the exchange.
+    A stop cancelled by hand in the Binance app, or dropped by the exchange, used to leave the position open with no
+    protection while the bot's book still said "protected". Missing on two readings in a row (one read can lag; the
+    second runs on the next cycle) = the position is marked sl_unverified, which stops new entries and makes the
+    watchdog alert, plus a recovery_required entry and one Telegram message. Read only: it places and cancels nothing,
+    a person decides. When the stop is seen again, its own mark is cleared (and nobody else's)."""
+    now = now or datetime.now(timezone.utc)
+    audit = state.setdefault("_stop_audit", {})
+    pending = audit.get("missing") or {}
+    try:
+        recent = audit.get("at") and (now - datetime.fromisoformat(audit["at"])).total_seconds() < STOP_AUDIT_S
+    except (TypeError, ValueError):
+        recent = False
+    if recent and not pending:
+        return
+    from backend.app.oco import _owned_orders, _oco_id
+    missing = {}
+    for sym, pos in state["positions"].items():
+        ids = pos.get("oco_ids") or {}
+        want = {x for x in (ids.get("sl"), _oco_id(ids["pos_id"], "sl") if ids.get("pos_id") else None) if x}
+        if not want or not live.get(sym.split(":")[0]) or pos.get("unprotected"):
+            continue                                            # no stop of its own, flat, or already flagged
+        if pos.get("sl_unverified") and not pos.get("stop_audit_missing"):
+            continue                                            # the stop machinery is already handling this one
+        try:
+            found, complete = _owned_orders(ex, sym, want)
+        except Exception:
+            found, complete = {}, False
+        if not complete:
+            if sym in pending: missing[sym] = pending[sym]      # inconclusive: neither a miss nor a clear
+            continue
+        if found:
+            if pos.pop("stop_audit_missing", None):
+                pos.pop("sl_unverified", None)
+                if (state.get("recovery_required") or {}).get(sym, {}).get("reason") == AUDIT_REASON:
+                    state["recovery_required"].pop(sym, None)
+                notify(f"✅ {sym}: وقف الخسارة رجع ظاهر على المنصة")
+            continue
+        missing[sym] = pending.get(sym, 0) + 1
+        if missing[sym] >= 2 and not pos.get("stop_audit_missing"):
+            pos["stop_audit_missing"] = now.isoformat(); pos["sl_unverified"] = True
+            state.setdefault("recovery_required", {}).setdefault(sym, {"reason": AUDIT_REASON, "at": now.isoformat()})
+            notify(f"🚨 {sym}: وقف الخسارة مش موجود على Binance (اتلغى؟). الصفقة مفتوحة من غير حماية، والبوت وقف أي دخول "
+                   f"جديد. حط وقف بإيدك عند {pos.get('sl')} أو اقفل الصفقة.")
+    audit["missing"] = {k: v for k, v in missing.items() if v < 2}
+    if not audit["missing"]:
+        audit["at"] = now.isoformat()
     save_state(state)
 
 def _expect_stop(state, symbol, side, sl, cid):
@@ -2283,7 +2338,9 @@ def _write_closed(d, state):
     if _CLOSED_WRITTEN["n"] == len(rows): return
     try:
         _write_json_atomic(d / "closed.json", {"updated": datetime.now(timezone.utc).isoformat(), "env": binance_env(),
-            "closed": [{k: h.get(k) for k in ("symbol", "side", "opened", "time", "pnl", "pnl_pct", "reason", "by")} for h in rows]})
+            # entry/exit/qty/funding_pnl: the user's monthly statement (backend/app/user_statement.py, owner 2026-11-08)
+            "closed": [{k: h.get(k) for k in ("symbol", "side", "opened", "time", "entry", "exit", "qty", "pnl", "pnl_pct",
+                                              "funding_pnl", "reason", "by")} for h in rows]})
         _CLOSED_WRITTEN["n"] = len(rows)
     except Exception as e: log(f"closed trades: {e}")
 
@@ -3299,8 +3356,12 @@ def run_loop():
         notify(f"▶️ ⚠️ HIGH RISK — بوت ratio trend اشتغل ({mode})\nكل الأزواج بين أعلى {R['top']} عملة فوليوم · تجربة لمتابعة الأداء بس")
     elif momentum_mode():
         M=MOM
-        log(f"=== مومنتم: لونج أقوى {M['n']} وشورت أضعف {M['n']} من أعلى {M['top']} فوليوم (عائد {M['weeks']} أسبوع) — {mode} — تبديل كل اتنين 00:00 UTC، وقف {M['stop']:.0%} | هامش {CONFIG['trade_amount_usdt']} USDT x{CONFIG.get('leverage',2)} ===")
-        notify(f"▶️ بوت المومنتم اشتغل ({mode})\nكل أسبوع: لونج أقوى {M['n']} وشورت أضعف {M['n']} من أعلى {M['top']} عملة فوليوم")
+        if M.get("score") == "retail":
+            log(f"=== عكس الأغلبية: لونج أقل {M['n']} وشورت أعلى {M['n']} في نسبة لونج/شورت الحسابات من أعلى {M['top']} فوليوم — {mode} — تبديل كل أربع 00:00 UTC، وقف {M['stop']:.0%} | هامش {CONFIG['trade_amount_usdt']} USDT x{CONFIG.get('leverage',2)} ===")
+            notify(f"▶️ بوت عكس الأغلبية اشتغل ({mode})\nكل أربع: لونج أقل {M['n']} وشورت أعلى {M['n']} في نسبة لونج/شورت من أعلى {M['top']} عملة فوليوم")
+        else:
+            log(f"=== مومنتم: لونج أقوى {M['n']} وشورت أضعف {M['n']} من أعلى {M['top']} فوليوم (عائد {M['weeks']} أسبوع) — {mode} — تبديل كل اتنين 00:00 UTC، وقف {M['stop']:.0%} | هامش {CONFIG['trade_amount_usdt']} USDT x{CONFIG.get('leverage',2)} ===")
+            notify(f"▶️ بوت المومنتم اشتغل ({mode})\nكل أسبوع: لونج أقوى {M['n']} وشورت أضعف {M['n']} من أعلى {M['top']} عملة فوليوم")
     elif listing_mode():
         L=LISTING
         log(f"=== شورت العملات الجديدة — {mode} — دخول بعد {L['skip_days']} يوم، خروج بعد {L['hold_days']} يوم، وقف {L['stop']:.0%}، أقصى {L['max_open']} | هامش {CONFIG['trade_amount_usdt']} USDT x{CONFIG.get('leverage',2)} ===")
@@ -3364,11 +3425,11 @@ def start_dashboard_server(port=None):
         httpd.serve_forever()
 
 # ── the strategies, one file each (bots/): re-exported here — bot.<name> stays the one name the CLI, the API and the tests use ──
-from bots.momentum_ls import MOM, momentum_due, momentum_next, momentum_mode, momentum_rank, run_once_momentum, write_momentum_status
-from bots.ratio_trend import RATIO, ratio_mode, _daily_closed, _ratio_rank, ratio_members, ratio_signal, _ratio_close_pair, run_once_ratio, write_ratio_status
+from bots.momentum_ls import MOM, RETAIL, momentum_public_name, retail_ratio, momentum_due, momentum_next, momentum_mode, momentum_rank, run_once_momentum, write_momentum_status
+from bots.ratio_trend import RATIO, ratio_public_name, ratio_mode, _daily_closed, _ratio_rank, ratio_members, ratio_signal, _ratio_close_pair, run_once_ratio, write_ratio_status
 from bots.listing_short import LISTING, listing_mode, _listing_close, run_once_listing, write_listing_status
 from bots.vol_breakout import VB, breakout_mode, run_once_breakout
-from bots.rsi2_pullback import RSI2, rsi2_mode, rsi_wilder, run_once_rsi2
+from bots.rsi2_pullback import RSI2, rsi2_public_name, rsi2_btc_ok, rsi2_mode, rsi_wilder, run_once_rsi2
 from bots.trend_breakout import TB, tbreak_mode, run_once_tbreak
 from bots.trend_daily import trend_mode, analyze_trend, try_enter_trend
 
@@ -3390,6 +3451,11 @@ if __name__=="__main__":
     p.add_argument("--public", default=None, help="مجلد يتكتب فيه status.json لصفحة البوت العامة (صفقات ونتايج بس)")
     p.add_argument("--expect-env", default=None, choices=["live", "demo", "testnet"],
                    help="refuse to start unless BINANCE_ENV is exactly this (the testnet service passes testnet)")
+    p.add_argument("--ratio-exclude", default="", help="ratio trend: coins left out of the weekly pick, e.g. BTC,ETH (research §25)")
+    p.add_argument("--momentum-retail", action="store_true", help="momentum_ls ranked against the crowd's long/short ratio (paper only, research §29)")
+    p.add_argument("--rsi2-btc-ma", type=int, default=0, help="RSI-2: new entries only while BTC closes above this daily average, e.g. 200 (research §28)")
+    p.add_argument("--public-name", default=None, help="a second bot of the same strategy: its public file name (e.g. ratio_nobtc)")
+    p.add_argument("--label", default=None, help="a second bot of the same strategy: its name on Telegram")
     p.add_argument("--state", default=None, help="ملف الحالة (لتشغيل أكتر من بوت في نفس المجلد) — اللوج بيبقى بنفس الاسم .log")
     args=p.parse_args()
     if args.strategy: CONFIG["enabled_strategies"]=[s.strip() for s in args.strategy.split(",") if s.strip()]
@@ -3404,6 +3470,17 @@ if __name__=="__main__":
         CONFIG["max_open_positions"]=max(int(CONFIG["max_open_positions"]), args.universe)
     CONFIG["notify"]=args.notify
     if args.public: CONFIG["public_dir"]=args.public
+    if args.ratio_exclude: RATIO["exclude"]=[c.strip().upper() for c in args.ratio_exclude.split(",") if c.strip()]
+    if args.momentum_retail:
+        if args.strategy != "momentum_ls" or not args.paper: p.error("--momentum-retail: paper momentum_ls only")
+        MOM.update(RETAIL)
+    if args.rsi2_btc_ma:
+        if not 20 <= args.rsi2_btc_ma <= 400: p.error("--rsi2-btc-ma: 20..400 days")
+        RSI2["btc_ma"]=args.rsi2_btc_ma
+    if args.public_name:
+        if not re.fullmatch(r"[a-z][a-z0-9_]{1,30}", args.public_name): p.error("--public-name: lowercase letters, digits, _")
+        CONFIG["public_name"]=args.public_name
+    if args.label: CONFIG["label"]=args.label[:40]
     if args.state:
         STATE_PATH=Path(__file__).parent / args.state
         LOG_PATH=STATE_PATH.with_suffix(".log")   # next to the state (the live bot keeps both in state/, its code folder is read-only)

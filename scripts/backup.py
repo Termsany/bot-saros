@@ -14,15 +14,20 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SOURCES = {"state": ROOT / "state", "risk-demo": Path("/opt/raqm-risk-demo"), "risk-live": Path("/opt/raqm-risk")}
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import backup_crypto  # noqa: E402
+SOURCES ={"state": ROOT / "state", "risk-demo": Path("/opt/raqm-risk-demo"), "risk-live": Path("/opt/raqm-risk")}
 
 
-def all_sources(base=SOURCES, accounts=None, risk_root=None):
-    """SOURCES plus the ledger of every live strategy's own Binance account (backend/app/live_accounts.py)."""
+def all_sources(base=SOURCES, accounts=None, risk_root=None, copies=None):
+    """SOURCES plus the ledger of every live strategy's own Binance account and every copy account
+    (backend/app/live_accounts.py). A copy's state is in state/ already."""
     sys.path.insert(0, str(ROOT))
     from backend.app import live_accounts
     accounts = live_accounts.load() if accounts is None else accounts
-    extra = {f"risk-live-{n}": live_accounts.paths(n, risk_root=risk_root or live_accounts.RISK_ROOT)["risk"] for n in sorted(accounts)}
+    copies = live_accounts.load_copies() if copies is None else copies
+    extra = {f"risk-live-{n}": live_accounts.paths(n, risk_root=risk_root or live_accounts.RISK_ROOT)["risk"]
+             for n in sorted(set(accounts) | set(copies))}
     return {**base, **extra}
 SKIP = (".tmp", "-journal", "-wal", "-shm")
 LIMIT = 45 * 1024 * 1024     # Telegram takes files up to 50 MB from a bot
@@ -81,6 +86,25 @@ def users_archive(now, data_root=USERS_DATA, dump=None):
     return buf.getvalue(), n
 
 
+def restore_test(data):
+    """(ok, problems) for the daily archive: unpacked into a new temporary folder and checked the way a restore would
+    be (scripts/restore_check.py: the real ledger and the real bot's state are in it, every SQLite file passes
+    integrity_check, every JSON parses). Run on the plain archive before it is encrypted, since the server can't
+    open an encrypted one; the owner's monthly check of the encrypted file is `backup_crypto.py verify`."""
+    import restore_check                     # lazy: the users' code copy has no restore_check.py
+    with tempfile.TemporaryDirectory() as td:
+        arc = Path(td) / "a.tar.gz"; arc.write_bytes(data)
+        try:
+            res = restore_check.verify(restore_check.unpack(arc, Path(td) / "out"))
+        except Exception as e:
+            return False, [f"مقدرناش نفكها: {type(e).__name__}: {e}"]
+    bad = [line for ok, line in res if not ok]
+    return not bad, bad
+
+
+MONTHLY = "🗓️ أول الشهر: نزّل الملف ده وجرّب تفتحه على جهازك: python scripts/backup_crypto.py verify <الملف>"
+
+
 class PartialBackup(Exception):
     """Some users' parts failed: the rest is still sent, and the chat is told whose failed."""
     def __init__(self, data, n, failed):
@@ -124,9 +148,24 @@ def main():
         if len(data) > LIMIT:
             raise RuntimeError(f"archive {len(data) // 1048576} MB is over Telegram's limit")
         what = "بوتات المستخدمين" if users else "يومية"
+        # owner 2026-11-08: every daily archive is test-restored before it goes; a failure still sends it (a doubtful
+        # backup beats none) and says so loudly. The users' archive is one tar of each user's own, checked by tar alone.
+        restored, broken = (True, []) if users else restore_test(data)
+        # security plan item 11: locked with the owner's public key (scripts/backup_crypto.py) once it is installed;
+        # without it the backup still goes, and says so. With it, a failure to encrypt sends nothing in the clear.
+        pub = backup_crypto.public_key()
+        name = f"raqm-{'users-' if users else ''}backup-{now:%Y%m%d}.tar.gz"
+        if pub:
+            data, name, lock = backup_crypto.encrypt(data, pub), name + ".enc", "🔒 متشفّرة"
+        else:
+            lock = "⚠️ مش متشفّرة (مفتاح التشفير لسه مش على السيرفر)"
+        check = "" if users else (" · ✅ اتجربت تتفك" if restored else " · ❌ تجربة الفك فشلت")
+        monthly = f"\n{MONTHLY}" if pub and now.day == 1 and not users else ""
         _post("sendDocument", {"chat_id": chat, "disable_notification": "true",
-                               "caption": f"💾 نسخة احتياطية {what} — {n} {'مستخدم' if users else 'ملف'} · {len(data) / 1048576:.1f} MB"},
-              {"document": (f"raqm-{'users-' if users else ''}backup-{now:%Y%m%d}.tar.gz", data)})
+                               "caption": f"💾 نسخة احتياطية {what} — {n} {'مستخدم' if users else 'ملف'} · {len(data) / 1048576:.1f} MB · {lock}{check}{monthly}"},
+              {"document": (name, data)})
+        if not restored:
+            _post("sendMessage", {"chat_id": chat, "text": "🚨 النسخة الاحتياطية النهارده اتبعتت بس تجربة فكها فشلت: " + " · ".join(broken)[:3500]})
         if partial:
             _post("sendMessage", {"chat_id": chat, "text": f"🚨 نسخة بعض المستخدمين ما اتعملتش: {partial}"})
     except Exception as e:

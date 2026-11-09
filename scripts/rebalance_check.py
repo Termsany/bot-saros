@@ -33,16 +33,20 @@ BASKET = "momentum_ls"          # the one strategy with a basket and a weekly re
 STRATEGIES = ("trend_daily", "vol_breakout", "rsi2_pullback", "trend_breakout", "listing_short", "momentum_ls", "ratio_trend")
 
 
-def files_of(strategy):
-    """(state, status) of a live strategy's bot."""
+def files_of(strategy, copy=None):
+    """(state, status) of a live strategy's bot, or of its copy on the copy account `copy`."""
+    if copy:
+        from app import live_accounts as la
+        return ROOT / la.copy_state(copy, strategy), la.copy_ipc(copy, strategy, IPC) / "live_status.json"
     return ROOT / "state" / f"live-{strategy}.json", IPC / strategy / "live_status.json"
 
 
-def key_source(strategy, accounts, cred_dir, accounts_dir=None):
+def key_source(strategy, accounts, cred_dir, accounts_dir=None, copy=None):
     """(ok, why): the run reads the key of the account `strategy` trades on — the main account's (.env.real, no
-    credential directory) or its own sub-account's (CREDENTIALS_DIRECTORY = that account's folder)."""
+    credential directory), its own sub-account's or, with `copy`, that copy account's (CREDENTIALS_DIRECTORY = that
+    account's folder)."""
     from app import live_accounts as la
-    acct = la.account_of(strategy, accounts)
+    acct = copy or la.account_of(strategy, accounts)
     if acct is None:
         return (not cred_dir, "the main account's key" if not cred_dir else
                 f"{strategy} trades on the main account: run it without CREDENTIALS_DIRECTORY ({cred_dir})")
@@ -126,7 +130,7 @@ def check(state, status, ex, now, rebalance_day=False, watchdog=None, strategy=B
 def report(results, rebalance_day, strategy=BASKET, account=None):
     bad = sum(1 for ok, _ in results if ok is False)
     if strategy == BASKET:
-        head = "🔄 تشييك التبديل الحقيقي" if rebalance_day else "🔎 تشييك السلة الحقيقية"
+        head = ("🔄 تشييك التبديل الحقيقي" if rebalance_day else "🔎 تشييك السلة الحقيقية") + (f" (حساب {account})" if account else "")
     else:
         head = f"🔎 تشييك {strategy} الحقيقي" + (f" (حساب {account})" if account else "")
     lines = [head] + [f"{'ℹ️' if ok is None else '✅' if ok else '❌'} {t}" for ok, t in results]
@@ -141,9 +145,13 @@ def main(argv=None):
     strategy = argv[i + 1] if 0 <= i < len(argv) - 1 else BASKET
     if strategy not in STRATEGIES:
         sys.exit(f"unknown strategy {strategy!r}")
+    j = argv.index("--account") if "--account" in argv else -1
+    copy = argv[j + 1] if 0 <= j < len(argv) - 1 else None
     from app import live_accounts as la
     accounts = la.load()
-    ok, why = key_source(strategy, accounts, os.getenv("CREDENTIALS_DIRECTORY", "").strip())
+    if copy is not None and strategy not in la.load_copies().get(copy, []):
+        sys.exit(f"{strategy} has no copy on '{copy}'")
+    ok, why = key_source(strategy, accounts, os.getenv("CREDENTIALS_DIRECTORY", "").strip(), copy=copy)
     if not ok:
         sys.exit(why)
     import bot
@@ -153,9 +161,9 @@ def main(argv=None):
     load = lambda p: json.loads(p.read_text(encoding="utf-8"))
     try: wd = load(WATCHDOG)
     except Exception: wd = None
-    state_f, status_f = (STATE, STATUS) if strategy == BASKET else files_of(strategy)
+    state_f, status_f = (STATE, STATUS) if strategy == BASKET and not copy else files_of(strategy, copy)
     text, bad = report(check(load(state_f), load(status_f), ex, datetime.now(timezone.utc), rebalance_day, wd, strategy),
-                       rebalance_day, strategy, la.account_of(strategy, accounts))
+                       rebalance_day, strategy, copy or la.account_of(strategy, accounts))
     print(text)
     if "--telegram" in argv:
         sys.path.insert(0, str(ROOT / "scripts")); import watchdog
