@@ -615,6 +615,28 @@ Each filter drops an overextended candidate at the ranking close and takes the n
   "equal after 2024" is not "better".
 - **Decision:** momentum_ls stays as it is. Trend agreement is the one to watch, e.g. on paper next to the bot.
 
+### 31. The three strategies on one $500 account, in dollars (November 2026)
+
+`research/portfolio_dollars_study.py` (run on the server: it needs the open-interest files). Each study's own trades
+scaled to the portfolio's dollars a trade, fixed size (no compounding), 2022-01 → 2026-10.
+
+| portfolio ($ a leg) | %/yr | %/yr 2024 → | max DD | worst month | months up | Sharpe < 2024 / 2024 → | most margin open |
+|---|---|---|---|---|---|---|---|
+| momentum alone ($26, the real bot) | 68 | 107 | $237 (47%) | −$158 | 60% | 0.29 / 1.22 | $260 |
+| momentum $26 + crowd $20 | 90 | 140 | $291 (58%) | −$135 | 69% | 0.37 / 1.50 | $380 |
+| momentum $26 + RSI-2 $20 | 73 | 113 | $262 (52%) | −$158 | 62% | 0.34 / 1.28 | $400 |
+| **all three: $20 + $20 + $15** | 77 | 120 | **$236 (47%)** | **−$107** | **71%** | **0.41 / 1.60** | $425 |
+| crowd alone ($20) / RSI-2 alone ($20) | 22 / 4 | 33 / 6 | 22% / 6% | −$36 / −$23 | 53% / 34% | 0.24 / 0.98; 0.79 / 1.24 | |
+
+- **Weekly correlation** momentum / crowd −0.13, momentum / RSI-2 0.08, crowd / RSI-2 −0.08: the three are
+  independent, which is why the mix smooths the months.
+- **Every portfolio went through 2022–2023 below zero** (momentum alone −$194 in 2022-07, under water until
+  2023-09). The 45% drawdown kill switch would have stopped momentum alone at its worst point.
+- **All three at most $425 of margin open** — above the 80%-of-capital floor ($400) on $500: the sizes or the caps
+  need a small change before it runs live.
+- **Caveats:** the crowd strategy was found after looking (§29) and its 2026 (+$361) is most of its result; RSI-2
+  trades rarely (160 trades in 5 years). Not compounded, before slippage on small coins.
+
 ## The site now shows only the four paper bots
 
 `research/bots_stats.py` writes `lib/bot-stats.json` (the numbers the site shows); the dashboard's live section and
