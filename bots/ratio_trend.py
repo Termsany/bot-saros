@@ -62,7 +62,7 @@ def _ratio_close_pair(ex, state, key, prices, reason, fcache):
             except Exception as err: bot.log(f"funding {sym}: {err}"); fcache[(sym, since)] = 0.0
         pnl += sg * (x - e) * q - (e * q + x * q) * fee - sg * fcache[(sym, since)] * q * e
     st = state["stats"]; st["trades"] += 1; st["pnl"] += pnl; st["wins" if pnl > 0 else "losses"] += 1
-    state["history"].append({"symbol": key, "long": pr["legs"][0]["sym"], "short": pr["legs"][1]["sym"], "pnl": pnl, "reason": reason, "ranks": pr.get("ranks"),
+    state["history"].append({"symbol": key, "long": pr["legs"][0]["sym"], "short": pr["legs"][1]["sym"], "pnl": pnl, "reason": reason, "ranks": pr.get("ranks"), "peak": pr.get("peak"),
                              "opened": pr["time"], "time": datetime.now(timezone.utc).isoformat(), "type": "paper"})
     return pnl
 
@@ -182,7 +182,22 @@ def run_once_ratio(ex):
             if leg["sym"] not in prices:
                 try: prices[leg["sym"]] = float(ex.fetch_ticker(leg["sym"])["last"])
                 except Exception: pass
+    if bot.CONFIG["paper_trading"]: _ratio_track_peaks(state, prices)
     bot.write_ratio_status(state, prices)
+
+
+def _ratio_track_peaks(state, prices):
+    """Each paper pair's best running PnL (price only, no fees or funding), kept in its history row at close: shows how
+    much a pair made before the trend turned (owner, 2026-11-10; research/ratio_exit_study.py)."""
+    changed = False
+    for pr in state["pairs"].values():
+        try:
+            now = sum((1 if l["side"] == "long" else -1) * (prices[l["sym"]] - l["entry"]) * l["qty"] for l in pr["legs"])
+        except KeyError:
+            continue                                         # a price not read this cycle: next one
+        if now > pr.get("peak", float("-inf")):
+            pr["peak"] = round(now, 4); changed = True
+    if changed: bot.save_state(state)
 
 
 # ── the netted ratio trend (--ratio-net; owner 2026-11-09, docs/ratio-trend-live-plan.md §1) ──
@@ -332,7 +347,7 @@ def write_ratio_status(state, prices):
                          "entry": leg["entry"], "price": x, "qty": leg["qty"], "pnl": round(lp, 4)})
         margin = sum(l["entry"] * l["qty"] for l in legs) / max(1, int(bot.CONFIG.get("leverage", 2)))
         pairs.append({"pair": key, "long": legs[0], "short": legs[1], "pnl": round(pnl, 4), "margin": round(margin, 2), "opened": pr["time"],
-                      "ranks": pr.get("ranks")})
+                      "ranks": pr.get("ranks"), "peak": pr.get("peak")})
     st = state.get("stats", {}); at = state.get("ratio_members_at")
     data = {"updated": datetime.now(timezone.utc).isoformat(), "risk": "high", "mode": "paper" if bot.CONFIG["paper_trading"] else "live",
             "rules": bot.RATIO, "leverage": int(bot.CONFIG.get("leverage", 2)), "margin": bot.CONFIG.get("trade_amount_usdt"), "started": bot.CONFIG.get("started_at"),
@@ -343,7 +358,7 @@ def write_ratio_status(state, prices):
             "pairs": sorted(pairs, key=lambda p: p["pair"]),
             "history": [{"pair": f"{h['long'].split('/')[0]} / {h['short'].split('/')[0]}" if "long" in h else h["symbol"].split(":")[0],
                          "pnl": bot._r4(h.get("pnl")), "reason": h.get("reason", ""),
-                         "time": h.get("time"), "opened": h.get("opened"), "ranks": h.get("ranks")} for h in state.get("history", [])[-300:]][::-1]}
+                         "time": h.get("time"), "opened": h.get("opened"), "ranks": h.get("ranks"), "peak": bot._r4(h.get("peak"))} for h in state.get("history", [])[-300:]][::-1]}
     try:
         name = ratio_public_name(); d = Path(out_dir); tmp = d / f"{name}.json.tmp"
         tmp.write_text(json.dumps(data, ensure_ascii=False, default=str), encoding="utf-8"); tmp.replace(d / f"{name}.json")

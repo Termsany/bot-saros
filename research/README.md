@@ -699,6 +699,40 @@ Owner: real money for the ratio trend without BTC/ETH.
   lasted from 2021-11 to 2023-08. The 45% drawdown kill switch would stop it inside a drawdown like that one. 17
   universes were tried on the same data.
 
+### 35. Ratio trend exits: keeping the profit a reversal gives back — a wide trail helps a little (`ratio_exit_study.py`, 2026-11-10)
+Owner: "it closes at a loss when the trend turns, after it was in profit." The exit waits for the ratio to cross its
+50-day mean back, so the turn is already under way when it closes. The paper bot showed it: 44 closes from 2026-11-01
+to 2026-11-10, 38 on a turn, 6 wins, −$359. Six exits were fixed before any result. The rule was also fixed first: a
+candidate must beat A's NETTED Sharpe before 2024 on the no-BTC universe, and not be lower after. PAIRS is the paper
+bot's book. NETTED + 40% stop is the live one, charging only the change as in §25. The first rows reproduce §21/§25.
+"Up→loss" means: of the pair trades whose running PnL reached +$5 (≈5% of the pair's $104 notional), the share that
+closed at a loss.
+
+| exit (no BTC/ETH universe) | win % | PF | up→loss % | PAIRS PnL | NETTED PnL | NETTED DD | NETTED Sharpe < 2024 / 2024 → | rule |
+|---|---|---|---|---|---|---|---|---|
+| A today: the 50-day cross | 34 | 1.18 | 26 | 2,799 | 3,324 | 1,301 | 0.62 / 0.86 | — |
+| B1 trail 10% from the best close | 34 | 1.09 | **15** | 1,045 | 1,834 | 1,035 | 0.50 / 0.66 | ✗ |
+| B2 trail 20% | 34 | 1.19 | 24 | 2,606 | 3,270 | **1,180** | **0.76 / 0.92** | ✓ |
+| C exit on the 20-day mean | 32 | 1.21 | 19 | 2,970 | 3,057 | 1,472 | 0.59 / 0.89 | ✗ |
+| D break-even after +15% | 34 | 1.20 | 25 | 2,845 | 2,941 | 1,352 | 0.59 / 0.78 | ✗ |
+| E out after 30 days | 34 | 1.21 | 24 | 3,041 | **3,534** | 1,260 | 0.68 / **0.98** | ✓ |
+
+With BTC/ETH (the paper bot's universe) the order is the same: B2 0.67 / 0.71 and E 0.63 / 0.87, against A's 0.59 / 0.64.
+
+- **The give-back is the price of the edge.** The only exit that really cuts it (B1, 26% → 15%) loses 60% of the
+  PAIRS profit: the trades it closes early include the big trends that pay for the rest. The same happened to the daily
+  trend's trailing stop (§28).
+- **Checked at nearby values** (`--neighbors`, after the run, not a pick): the trail is steady. At 15–30% on the
+  no-BTC NETTED book it's 0.63–0.76 before 2024 and 0.86–0.98 after, and the drawdown is lower than A at every value.
+  The time exit isn't steady: 20 days gives 0.55 / 0.74 and 45 days 0.58 / 0.86, both below A. So 30 days is a lucky
+  number, not a rule.
+- **Caveats:** the gains are small (Sharpe +0.1) next to the noise, and the trail cuts the losing trades a reversal
+  makes by little (26% → 24%). It's the 7th exit after 17 universes on the same data.
+- **Decision:** nothing changes on a bot. The 20% trail is the one candidate, for a paper bot next to today's rule,
+  if the ratio trend goes on.
+- **The paper bot now keeps each pair's best running PnL** (`peak` in its state and history, on its page file), so
+  the forward run shows how much each pair made before the trend turned.
+
 ## The site now shows only the four paper bots
 
 `research/bots_stats.py` writes `lib/bot-stats.json` (the numbers the site shows); the dashboard's live section and
