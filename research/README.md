@@ -588,6 +588,73 @@ before any result.
   filter, X3 L3) to `lib/paper-baseline.json` in the Demo baseline's units, and the Sunday report
   (`scripts/demo_weekly.py`) puts each paper bot next to it with `demo_measure`'s rules: samples 15 and 36 trades.
 
+### 30. momentum_ls: leaving out the coins that went too far — not adopted, one to watch (November 2026)
+
+`research/momentum_filter_study.py` (owner, 2026-11-09: very strong coins go long and hit the stop, and the reverse).
+Each filter drops an overextended candidate at the ranking close and takes the next one, so the basket stays 5 + 5;
+10 variants fixed before any result; $20 x2, fees, real funding, the 40% guard. The first row matches §28.
+
+| variant | stops % 2024 → | win % 2024 → | PF 2024 → | max DD | Sharpe < 2024 | Sharpe 2024 → | PnL 2024 → |
+|---|---|---|---|---|---|---|---|
+| **today (no filter)** | 9.2 | 49.6 | 1.24 | 240 | 0.68 | **1.22** | **+1,164** |
+| 2-week return capped: long ≤ +100%, short ≥ −50% (the in-sample pick) | 6.0 | 48.5 | 1.13 | 227 | **0.89** | 0.83 | +582 |
+| capped: long ≤ +200%, short ≥ −66% | 7.2 | 48.7 | 1.18 | 233 | 0.77 | 1.05 | +836 |
+| skip the 1 / 2 most extreme of each side | 7.1 / 5.9 | 48.6 / 48.3 | 1.17 / 1.14 | 237 / 209 | 0.65 / 0.55 | 0.98 / 0.84 | +791 / +613 |
+| last day's move over 15% | 7.7 | 49.6 | 1.22 | **198** | 0.60 | 1.16 | +1,032 |
+| distance from the 20-day average: +30%/−25%; +60%/−40% | 4.5; 6.2 | 47.7; 48.6 | 1.09; 1.12 | 208; 272 | 0.75; 0.89 | 0.59; 0.71 | +385; +516 |
+| most volatile 20% left out | **3.4** | **50.1** | 1.08 | 200 | 0.59 | 0.60 | +271 |
+| **trend agreement: long above, short below the 50-day average** | 9.3 | 49.1 | **1.25** | 212 | **0.87** | 1.21 | **+1,200** |
+
+- **The stops are not where the losses are.** Every filter lowers the stops (9.2% → as low as 3.4%), but the profit
+  drops faster: the coins that went furthest are also the ones that keep going. The edge lives in the extremes (the
+  MAX effect, §4): leaving them out loses more winners than stops.
+- **The in-sample pick failed:** capping the 2-week return was the best before 2024 (0.89) and fell to 0.83 after.
+- **Nothing beat today's rule in both periods.** The closest: **trend agreement (50-day average)** — the same Sharpe
+  after 2024 (1.21 vs 1.22), better before (0.87 vs 0.68), PnL +1,822 → +2,009 overall, max DD 240 → 212, PF 1.18 →
+  1.22, 8% fewer trades (some weeks have fewer than 5 shorts below their average). Not the pick by the rule, and
+  "equal after 2024" is not "better".
+- **Decision:** momentum_ls stays as it is. Trend agreement is the one to watch, e.g. on paper next to the bot.
+
+### 31. The three strategies on one $500 account, in dollars (November 2026)
+
+`research/portfolio_dollars_study.py` (run on the server: it needs the open-interest files). Each study's own trades
+scaled to the portfolio's dollars a trade, fixed size (no compounding), 2022-01 → 2026-10.
+
+| portfolio ($ a leg) | %/yr | %/yr 2024 → | max DD | worst month | months up | Sharpe < 2024 / 2024 → | most margin open |
+|---|---|---|---|---|---|---|---|
+| momentum alone ($26, the real bot) | 68 | 107 | $237 (47%) | −$158 | 60% | 0.29 / 1.22 | $260 |
+| momentum $26 + crowd $20 | 90 | 140 | $291 (58%) | −$135 | 69% | 0.37 / 1.50 | $380 |
+| momentum $26 + RSI-2 $20 | 73 | 113 | $262 (52%) | −$158 | 62% | 0.34 / 1.28 | $400 |
+| **all three: $20 + $20 + $15** | 77 | 120 | **$236 (47%)** | **−$107** | **71%** | **0.41 / 1.60** | $425 |
+| crowd alone ($20) / RSI-2 alone ($20) | 22 / 4 | 33 / 6 | 22% / 6% | −$36 / −$23 | 53% / 34% | 0.24 / 0.98; 0.79 / 1.24 | |
+
+- **Weekly correlation** momentum / crowd −0.13, momentum / RSI-2 0.08, crowd / RSI-2 −0.08: the three are
+  independent, which is why the mix smooths the months.
+- **Every portfolio went through 2022–2023 below zero** (momentum alone −$194 in 2022-07, under water until
+  2023-09). The 45% drawdown kill switch would have stopped momentum alone at its worst point.
+- **All three at most $425 of margin open** — above the 80%-of-capital floor ($400) on $500: the sizes or the caps
+  need a small change before it runs live.
+- **Caveats:** the crowd strategy was found after looking (§29) and its 2026 (+$361) is most of its result; RSI-2
+  trades rarely (160 trades in 5 years). Not compounded, before slippage on small coins.
+
+### 32. One account or one sub-account each (`one_account_study.py`, 2026-11-09)
+
+One-way mode holds one position per coin and the risk gate refuses a coin another strategy holds, so on one account
+a trade is refused when another strategy's trade holds the coin at its entry (taken in entry order; on a tie momentum,
+then crowd, then RSI-2). Same sizes and period as §31.
+
+| portfolio | account | %/yr | %/yr 2024-> | max DD | worst month | months up | Sharpe <2024 / 2024-> |
+|---|---|---|---|---|---|---|---|
+| momentum + crowd | separate | 90 | 140 | $291 | −$135 | 69% | 0.37 / 1.50 |
+| momentum + crowd | one account | 67 | 116 | $365 | −$171 | 59% | −0.05 / 1.28 |
+| all three | separate | 77 | 120 | $236 | −$107 | 71% | 0.41 / 1.60 |
+| all three | one account | 54 | 96 | $301 | −$132 | 60% | −0.12 / 1.32 |
+
+- **On one account the profit falls by about 30%** and the drawdown rises by $65–75.
+- **The crowd strategy loses most of its edge:** 19% of its trades are refused (momentum already holds the coin) and
+  they made $405 of its $521; momentum loses 5% of its trades (+$134), RSI-2 34% (+$20).
+- **So each strategy goes on its own sub-account** (as with trend_daily, `shared_account_study.py`), never one account.
+
 ### 33. Look-ahead check — no simulator reads the future (November 2026)
 `research/lookahead_check.py` (owner, 2026-11-09; the idea of freqtrade's lookahead-analysis, written from scratch).
 - **How:** every coin's history is cut at a date T as a live bot sees it at T's open: T's bar has only its open, then
