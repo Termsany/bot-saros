@@ -89,9 +89,12 @@ def paper_lines(now, public=PUBLIC, baseline_path=PAPER_BASELINE):
 
 # The three portfolios of research/README.md §31 on paper (owner, 2026-11-09: "three bots on paper, $100 x2 a coin").
 # Each strategy is its own paper bot (one account each, §32), so a portfolio is the sum of its bots' closed trades,
-# every trade scaled to $100 of margin (a bot that ran smaller earlier counts at the same weight), from the day its
-# newest bot started.
+# every trade scaled to $100 of margin (a bot that ran smaller earlier counts at the same weight), counting the trades
+# opened from PORTFOLIO_START. A fixed date, not the bots' "started": that moves at every restart (the install of
+# 2026-11-09 moved momentum's to 17:26) and would empty the portfolios each time. The page's section
+# (deploy/vps/page/index.html, #pfSec) uses the same rule.
 PORTFOLIO_MARGIN = 100.0
+PORTFOLIO_START = datetime(2026, 11, 9, tzinfo=timezone.utc)
 PORTFOLIO_BOTS = {"momentum": "مومنتم", "retail_fade": "ضد الجمهور", "rsi2_btc": "RSI-2 + BTC"}
 PORTFOLIOS = {"مومنتم + ضد الجمهور": ("momentum", "retail_fade"),
               "مومنتم + RSI-2": ("momentum", "rsi2_btc"),
@@ -106,8 +109,9 @@ def _when(x):
         return None
 
 
-def portfolio_trades(doc, since):
-    """[(close time, PnL at $100 of margin)] of a paper bot's trades closed at or after `since`."""
+def portfolio_trades(doc, since=PORTFOLIO_START):
+    """[(close time, PnL at $100 of margin)] of a paper bot's trades opened at or after `since` (its close time when
+    the trade doesn't say when it opened)."""
     try:
         margin = float(doc.get("margin") or 0)
     except (TypeError, ValueError):
@@ -116,12 +120,12 @@ def portfolio_trades(doc, since):
         return []
     out = []
     for h in doc.get("history") or []:
-        t = _when(h.get("time"))
+        t = _when(h.get("time")); o = _when(h.get("opened")) or t
         try:
             pnl = float(h["pnl"]) * PORTFOLIO_MARGIN / margin
         except (KeyError, TypeError, ValueError):
             continue
-        if t and t >= since:
+        if t and o >= since:
             out.append((t, pnl))
     return out
 
@@ -135,18 +139,17 @@ def portfolio_lines(now, public=PUBLIC):
         except (OSError, ValueError):
             pass
     for label, bots in PORTFOLIOS.items():
-        missing = [PORTFOLIO_BOTS[b] for b in bots if b not in docs or not _when(docs[b].get("started"))]
+        missing = [PORTFOLIO_BOTS[b] for b in bots if b not in docs]
         if missing:
             lines.append(f"• {label}: ملف {' و'.join(missing)} مش موجود"); continue
-        since = max(_when(docs[b].get("started")) for b in bots)
-        trades = sorted(t for b in bots for t in portfolio_trades(docs[b], since))
+        trades = sorted(t for b in bots for t in portfolio_trades(docs[b]))
         eq = peak = dd = 0.0
         for _, pnl in trades:
             eq += pnl; peak = max(peak, eq); dd = max(dd, peak - eq)
         wins = sum(1 for _, p in trades if p > 0)
-        open_ = sum(len(docs[b].get("positions") or []) for b in bots)
-        days = max(0, (now - since).days)
-        line = f"• {label}: من {since.date()} ({days} يوم) — {len(trades)} صفقة"
+        open_ = sum(1 for b in bots for p in docs[b].get("positions") or [] if (_when(p.get("opened")) or now) >= PORTFOLIO_START)
+        days = max(0, (now - PORTFOLIO_START).days)
+        line = f"• {label}: من {PORTFOLIO_START.date()} ({days} يوم) — {len(trades)} صفقة"
         if trades:
             line += f"، كسب {wins / len(trades):.0%}، صافي ${eq:+,.0f}، أقصى تراجع ${dd:,.0f}"
         lines.append(line + f" · مفتوح دلوقتي {open_} (${open_ * PORTFOLIO_MARGIN:,.0f} مارجن)")

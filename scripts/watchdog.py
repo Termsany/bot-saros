@@ -29,9 +29,14 @@ ENV_NAME = {"demo": "Demo", "live": "فلوس حقيقية"}
 FOREIGN = "صفقات على المنصة البوت مفتحهاش"   # bot.py reconcile_live's entry block for a position it didn't open
 
 
+# Demo experiments with a unit of their own (not raqm-demo@<strategy>), watched like the Demo bots: their status folder
+# is the key's (docs/momentum-wed-demo.md)
+EXPERIMENTS = {"momentum_wed": "raqm-demo-momwed"}
+
+
 def unit(env, strategy):
-    """(enabled, active) of raqm-<env>@<strategy>."""
-    name = f"raqm-{env}@{strategy}"
+    """(enabled, active) of raqm-<env>@<strategy>, or of a Demo experiment's own unit."""
+    name = EXPERIMENTS[strategy] if env == "demo" and strategy in EXPERIMENTS else f"raqm-{env}@{strategy}"
     run = lambda *a: subprocess.run(["systemctl", *a, name], capture_output=True, text=True).stdout.strip()
     return run("is-enabled") == "enabled", run("is-active") == "active"
 
@@ -101,7 +106,7 @@ def problems(now, unit=unit, ipc=IPC, ledgers=LEDGERS, failed=None, accounts=Non
             accounts, copies = accounts or {}, copies or {}
     for env in ("demo", "live"):
         watched = set()
-        for s in STRATEGIES:
+        for s in STRATEGIES + (tuple(EXPERIMENTS) if env == "demo" else ()):
             enabled, active = unit(env, s)
             if not enabled: continue
             watched.add(live_accounts.account_of(s, accounts) if env == "live" else None)
@@ -128,6 +133,9 @@ def problems(now, unit=unit, ipc=IPC, ledgers=LEDGERS, failed=None, accounts=Non
                 out[f"ledger:{key}"] = (f"ملف المخاطر بتاع {name} مش بيتقري: {e}", 2)
     if (failed or _unit_failed)("raqm-watchdog-users.service"):      # the users' watchdog can't report its own crash
         out["watchdog-users"] = ("مراقب بوتات المستخدمين نفسه واقع (raqm-watchdog-users)", 2)
+    if (failed or _unit_failed)("raqm-users-provision.service"):     # it runs every minute; 3 checks = ~15 minutes
+        out["provision"] = ("إعداد بوتات المستخدمين بيفشل (raqm-users-provision) — السبب في: "
+                            "journalctl -u raqm-users-provision --since -10min", 3)
     return out
 
 
@@ -299,6 +307,33 @@ def server_problems(now, disk=_disk, mem=_mem, ntp=_ntp_synced, offset=_binance_
     return out
 
 
+# ── the paper bots (owner, 2026-11-09: "the new bots on paper, watched"): play money, but the three portfolios and the
+# candidates are measured on them, so a paper bot that stopped is a hole in the measurement. Each writes its page file
+# every cycle (a minute); one that hasn't for PAPER_STALE_S is stopped or stuck.
+PAPER_PUBLIC = Path(os.getenv("BOT_PUBLIC_DIR", "/var/www/bot.da3m.io"))
+PAPER_STALE_S = 900
+PAPER_BOTS = {"status": "الترند اليومي", "listing": "شورت العملات الجديدة", "momentum": "مومنتم", "retail_fade": "عكس الأغلبية",
+              "rsi2_btc": "RSI-2 + فلتر BTC", "rsi2": "RSI-2", "breakout": "بريك أوت التذبذب", "tbreak": "اختراق الترند",
+              "ratio": "Ratio trend", "ratio_nobtc": "Ratio trend من غير BTC/ETH"}
+
+
+def paper_problems(now, public=PAPER_PUBLIC, bots=PAPER_BOTS):
+    """{key: (text, checks)}: a paper bot whose page file is missing, unreadable or older than PAPER_STALE_S. Two checks
+    in a row (a restart takes a cycle)."""
+    out = {}
+    for name, label in bots.items():
+        try:
+            st = json.loads(_read_status(public / f"{name}.json", limit=8 << 20))
+            age = (now - datetime.fromisoformat(str(st["updated"]).replace("Z", "+00:00"))).total_seconds()
+        except FileNotFoundError:
+            out[f"paper:{name}"] = (f"البوت الورقي {label}: ملفه ({name}.json) مش موجود", 2); continue
+        except Exception as e:
+            out[f"paper:{name}"] = (f"البوت الورقي {label}: ملفه مش بيتقري ({type(e).__name__})", 2); continue
+        if age > PAPER_STALE_S:
+            out[f"paper:{name}"] = (f"البوت الورقي {label} ما حدّثش من {int(age // 60)} دقيقة — واقف أو معلّق", 2)
+    return out
+
+
 def checks(now, users=False):
     """problems() and the server's, or one problem saying the watchdog itself can't look: a crash here used to mean silence."""
     try:
@@ -306,6 +341,7 @@ def checks(now, users=False):
             return user_problems(now)
         out = problems(now)
         out.update(server_problems(now))
+        out.update(paper_problems(now))
         return out
     except Exception as e:
         return {"watchdog": (f"المراقب نفسه مش قادر يفحص البوتات: {type(e).__name__}: {e}", 2)}

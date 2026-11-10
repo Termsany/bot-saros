@@ -126,7 +126,7 @@ shared_dir() {   # $1 = path; its parent must be root's (/opt) or created by thi
 }
 # manual close requests and the live status (the live bot writes the status and removes the requests)
 shared_dir /opt/raqm-ipc
-for s in trend_daily vol_breakout rsi2_pullback trend_breakout listing_short momentum_ls ratio_trend; do   # one folder per live bot
+for s in trend_daily vol_breakout rsi2_pullback trend_breakout listing_short momentum_ls ratio_trend momentum_wed; do   # one folder per live bot (+ the Demo experiment)
     shared_dir "/opt/raqm-ipc/$s"; shared_dir "/opt/raqm-ipc/$s/commands"; shared_dir "/opt/raqm-ipc/$s/results"
 done
 # risk ledger + live activation record shared with the API (RAQM_RISK_DIR in both units): the dashboard's kill switch,
@@ -141,6 +141,8 @@ install -d -o root -g root -m 755 "$L/strategies"
 # the Demo unit template (raqm-demo@<strategy>); the real-money one (raqm-live@) is installed by hand when going live —
 # installing it also freezes the API's automatic updates (api/update.sh)
 install -m 644 -o root -g root "$T/deploy/vps/raqm-demo@.service" /etc/systemd/system/raqm-demo@.service
+# the momentum day experiment on Demo (docs/momentum-wed-demo.md): installed, never enabled here — the owner starts it
+install -m 644 -o root -g root "$T/deploy/vps/raqm-demo-momwed.service" /etc/systemd/system/raqm-demo-momwed.service
 # problem alerts on Telegram every 5 minutes (raqmlive, read only)
 install -m 644 -o root -g root "$T/deploy/vps/raqm-watchdog.service" /etc/systemd/system/raqm-watchdog.service
 install -m 644 -o root -g root "$T/deploy/vps/raqm-watchdog.timer" /etc/systemd/system/raqm-watchdog.timer
