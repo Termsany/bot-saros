@@ -129,7 +129,8 @@ def _paper(name):
 
 SIMS = {"trend_daily": _core("trend_daily"), "momentum_ls": _core("momentum_ls"), "listing_short": _core("listing_short"),
         "ratio_trend": _ratio, "vol_breakout": _arrays("vol_breakout"), "rsi2_pullback": _arrays("rsi2_pullback"),
-        "trend_breakout": _arrays("trend_breakout"), "rsi2_btc": _paper("rsi2_btc"), "retail_fade": _paper("retail_fade")}
+        "trend_breakout": _arrays("trend_breakout"), "rsi2_btc": _paper("rsi2_btc"), "retail_fade": _paper("retail_fade"),
+        "rsi2_btc_c2": lambda data, fund: __import__("rsi2_winrate_study").candidate(data, fund)}   # research §36
 INTRABAR = {"vol_breakout"}          # a stop order resting from the open, filled when the day trades through it
 
 
