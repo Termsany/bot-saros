@@ -3472,6 +3472,7 @@ if __name__=="__main__":
                    help="refuse to start unless BINANCE_ENV is exactly this (the testnet service passes testnet)")
     p.add_argument("--ratio-exclude", default="", help="ratio trend: coins left out of the weekly pick, e.g. BTC,ETH (research §25)")
     p.add_argument("--ratio-net", action="store_true", help="ratio trend: one position per coin, the sum of its pairs — the only way a one-way account trades all of them (docs/ratio-trend-live-plan.md §1)")
+    p.add_argument("--ratio-trail", type=float, default=0.0, help="ratio trend, paper pairs: out when the ratio is this far below its best since entry, e.g. 0.20 (research §35)")
     p.add_argument("--momentum-retail", action="store_true", help="momentum_ls ranked against the crowd's long/short ratio (paper only, research §29)")
     p.add_argument("--rsi2-btc-ma", type=int, default=0, help="RSI-2: new entries only while BTC closes above this daily average, e.g. 200 (research §28)")
     p.add_argument("--public-name", default=None, help="a second bot of the same strategy: its public file name (e.g. ratio_nobtc)")
@@ -3497,6 +3498,10 @@ if __name__=="__main__":
     if args.ratio_net:
         if args.strategy != "ratio_trend": p.error("--ratio-net: ratio_trend only")
         RATIO["net"]=True
+    if args.ratio_trail:
+        if args.strategy != "ratio_trend" or not args.paper or args.ratio_net or not 0 < args.ratio_trail < 1:
+            p.error("--ratio-trail: paper ratio_trend pairs only (not --ratio-net), a fraction like 0.20")
+        RATIO["trail"]=args.ratio_trail
     if args.momentum_retail:
         if args.strategy != "momentum_ls" or not args.paper: p.error("--momentum-retail: paper momentum_ls only")
         MOM.update(RETAIL)

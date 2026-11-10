@@ -314,7 +314,8 @@ PAPER_PUBLIC = Path(os.getenv("BOT_PUBLIC_DIR", "/var/www/bot.da3m.io"))
 PAPER_STALE_S = 900
 PAPER_BOTS = {"status": "الترند اليومي", "listing": "شورت العملات الجديدة", "momentum": "مومنتم", "retail_fade": "عكس الأغلبية",
               "rsi2_btc": "RSI-2 + فلتر BTC", "rsi2": "RSI-2", "breakout": "بريك أوت التذبذب", "tbreak": "اختراق الترند",
-              "ratio": "Ratio trend", "ratio_nobtc": "Ratio trend من غير BTC/ETH"}
+              "ratio": "Ratio trend", "ratio_nobtc": "Ratio trend من غير BTC/ETH",
+              "ratio_trail": "Ratio trend + trailing 20%"}
 
 
 def paper_problems(now, public=PAPER_PUBLIC, bots=PAPER_BOTS):
