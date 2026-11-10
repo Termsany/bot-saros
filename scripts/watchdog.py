@@ -133,6 +133,9 @@ def problems(now, unit=unit, ipc=IPC, ledgers=LEDGERS, failed=None, accounts=Non
                 out[f"ledger:{key}"] = (f"ملف المخاطر بتاع {name} مش بيتقري: {e}", 2)
     if (failed or _unit_failed)("raqm-watchdog-users.service"):      # the users' watchdog can't report its own crash
         out["watchdog-users"] = ("مراقب بوتات المستخدمين نفسه واقع (raqm-watchdog-users)", 2)
+    if (failed or _unit_failed)("raqm-users-provision.service"):     # it runs every minute; 3 checks = ~15 minutes
+        out["provision"] = ("إعداد بوتات المستخدمين بيفشل (raqm-users-provision) — السبب في: "
+                            "journalctl -u raqm-users-provision --since -10min", 3)
     return out
 
 
