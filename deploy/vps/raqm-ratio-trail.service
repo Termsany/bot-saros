@@ -1,0 +1,27 @@
+[Unit]
+Description=Raqm bot — ratio trend without BTC/ETH, out on a 20% trail (paper experiment, research §35)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=raqm
+Group=raqm
+WorkingDirectory=/opt/raqm-ratio-trail
+EnvironmentFile=-/opt/raqm-bot/.env
+Environment=PYTHONUNBUFFERED=1
+# owner, 2026-11-10: next to raqm-ratio-nobtc, the same bot ($40 x2 a leg, no BTC/ETH) with one change: a pair leaves
+# when its ratio is 20% below its best daily value since entry, and stays flat until its 50-day sign turns
+# (--ratio-trail 0.20, research §35 B2). Own state (state_ratio_trail.json / .log), page data -> ratio_trail.json,
+# Telegram messages marked [ratio trail 20%]. Paper only: no order reaches an exchange. Its own code folder
+# (deploy/vps/install-ratio-trail.sh), so installing it never changes the other paper bots' code.
+ExecStart=/opt/raqm-bot/venv/bin/python -E -s bot.py --paper --strategy ratio_trend --ratio-exclude BTC,ETH --ratio-trail 0.20 --public-name ratio_trail --label "ratio trail 20%" --amount 40 --leverage 2 --poll 60 --notify --public /var/www/bot.da3m.io --state state_ratio_trail.json
+Restart=always
+RestartSec=30
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/raqm-ratio-trail /var/www/bot.da3m.io
+
+[Install]
+WantedBy=multi-user.target

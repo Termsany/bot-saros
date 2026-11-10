@@ -9,7 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-RATIO = {"top": 7, "sma": 50, "min_days": 120, "every_days": 7, "exclude": [], "net": False, "stop": 0.40}
+RATIO = {"top": 7, "sma": 50, "min_days": 120, "every_days": 7, "exclude": [], "net": False, "stop": 0.40, "trail": 0.0}
+# trail: --ratio-trail, paper pairs only — out when the ratio is that far below its best since entry (research §35)
 # exclude: --ratio-exclude (research §25). net: --ratio-net — one position per coin, the sum of its pairs (run_once_ratio_net)
 
 def ratio_public_name():
@@ -159,11 +160,18 @@ def run_once_ratio(ex):
             state["ratio_day"] = today.isoformat(); bot.save_state(state); return
         if bot.CONFIG["paper_trading"]:
             lev = int(bot.CONFIG.get("leverage", 2))
+            blocked = state.setdefault("ratio_blocked", {})
+            for key in list(blocked):
+                if key not in wanted: blocked.pop(key)                 # left the members: a fresh start when it's back
+            if R.get("trail"): closed += _ratio_trail_exits(ex, state, prices, fcache)
             for key in sorted(wanted):
                 a, b = key.split("|")
                 try: sig = bot.ratio_signal(ex, a, b, cache)
                 except Exception as e: bot.log(f"ratio {key}: {e}"); continue
                 if not sig: continue
+                if key in blocked:
+                    if blocked[key] == sig: continue                   # trailed out: flat until the trend turns
+                    blocked.pop(key)
                 cur = state["pairs"].get(key)
                 if cur and cur["sign"] == sig: continue
                 if cur: closed += bot._ratio_close_pair(ex, state, key, prices, "الترند اتقلب", fcache); flips += 1
@@ -184,6 +192,28 @@ def run_once_ratio(ex):
                 except Exception: pass
     if bot.CONFIG["paper_trading"]: _ratio_track_peaks(state, prices)
     bot.write_ratio_status(state, prices)
+
+
+def _ratio_trail_exits(ex, state, prices, fcache):
+    """--ratio-trail (owner, 2026-11-10; research §35, B2): once a day, right after the daily close, a pair whose price
+    ratio — in its trade's direction, from the legs' entries — is `trail` below its best daily value since entry is
+    closed; it stays flat until its 50-day sign changes (state["ratio_blocked"]). Paper only."""
+    trail, closed = float(bot.RATIO["trail"]), 0.0
+    for key, pr in list(state["pairs"].items()):
+        a, b = key.split("|")
+        try:
+            for s in (a, b):
+                if s not in prices: prices[s] = float(ex.fetch_ticker(s)["last"])
+        except Exception as e:
+            bot.log(f"ratio trail {key}: {e}"); continue
+        ent = {l["sym"]: l["entry"] for l in pr["legs"]}
+        x = ((prices[a] / prices[b]) / (ent[a] / ent[b])) ** pr["sign"]   # 1 = entry, >1 = the trade's way
+        pr["best"] = max(float(pr.get("best", 1.0)), x)
+        if x <= pr["best"] * (1 - trail):
+            sign = pr["sign"]
+            closed += bot._ratio_close_pair(ex, state, key, prices, f"trailing {trail:.0%}", fcache)
+            state["ratio_blocked"][key] = sign
+    return closed
 
 
 def _ratio_track_peaks(state, prices):
