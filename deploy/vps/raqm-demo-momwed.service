@@ -1,0 +1,36 @@
+[Unit]
+# The momentum day experiment (research/README.md §23, docs/momentum-wed-demo.md): momentum_ls on Binance Demo, opening
+# on Wednesday 00:00 UTC and closing after 6 days, flat until the next Wednesday. Play money only: bot.py refuses
+# --mom-weekday / --mom-hold on the real account. The real bot (raqm-live@momentum_ls) keeps Monday and the full week.
+Description=Raqm Demo experiment: momentum_ls Wednesday + 6 days (play money)
+After=network-online.target
+Wants=network-online.target
+# one momentum_ls on the Demo ledger at a time: its risk rows are the strategy's
+Conflicts=raqm-demo@momentum_ls.service
+ConditionPathExists=/opt/raqm-live/.env.live
+
+[Service]
+User=raqmlive
+Group=raqmlive
+WorkingDirectory=/opt/raqm-live
+EnvironmentFile=-/opt/raqm-live/.env.telegram
+# the Demo account's keys, as the other Demo bots
+EnvironmentFile=/opt/raqm-live/.env.live
+Environment=BINANCE_ENV=demo
+# its own status folder: the real bot owns /opt/raqm-ipc/momentum_ls
+Environment=RAQM_IPC_DIR=/opt/raqm-ipc/momentum_wed
+Environment=RAQM_RISK_DIR=/opt/raqm-risk-demo
+Environment="RAQM_ARGS=--leverage 2 --amount 40 --poll 60"
+EnvironmentFile=-/opt/raqm-live/strategies/momentum_wed.env
+UnsetEnvironment=PYTHONPATH PYTHONHOME PYTHONSTARTUP PYTHONUSERBASE PYTHONINSPECT
+ExecStart=/opt/raqm-live/venv/bin/python -E -s -u bot.py --live --expect-env demo --strategy momentum_ls --mom-weekday 2 --mom-hold 6 $RAQM_ARGS --notify --state state/demo-momentum_wed.json
+Restart=always
+RestartSec=60
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/raqm-live/state /opt/raqm-ipc /opt/raqm-risk-demo
+
+[Install]
+WantedBy=multi-user.target

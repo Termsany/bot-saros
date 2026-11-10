@@ -29,9 +29,14 @@ ENV_NAME = {"demo": "Demo", "live": "فلوس حقيقية"}
 FOREIGN = "صفقات على المنصة البوت مفتحهاش"   # bot.py reconcile_live's entry block for a position it didn't open
 
 
+# Demo experiments with a unit of their own (not raqm-demo@<strategy>), watched like the Demo bots: their status folder
+# is the key's (docs/momentum-wed-demo.md)
+EXPERIMENTS = {"momentum_wed": "raqm-demo-momwed"}
+
+
 def unit(env, strategy):
-    """(enabled, active) of raqm-<env>@<strategy>."""
-    name = f"raqm-{env}@{strategy}"
+    """(enabled, active) of raqm-<env>@<strategy>, or of a Demo experiment's own unit."""
+    name = EXPERIMENTS[strategy] if env == "demo" and strategy in EXPERIMENTS else f"raqm-{env}@{strategy}"
     run = lambda *a: subprocess.run(["systemctl", *a, name], capture_output=True, text=True).stdout.strip()
     return run("is-enabled") == "enabled", run("is-active") == "active"
 
@@ -101,7 +106,7 @@ def problems(now, unit=unit, ipc=IPC, ledgers=LEDGERS, failed=None, accounts=Non
             accounts, copies = accounts or {}, copies or {}
     for env in ("demo", "live"):
         watched = set()
-        for s in STRATEGIES:
+        for s in STRATEGIES + (tuple(EXPERIMENTS) if env == "demo" else ()):
             enabled, active = unit(env, s)
             if not enabled: continue
             watched.add(live_accounts.account_of(s, accounts) if env == "live" else None)
