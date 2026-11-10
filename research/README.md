@@ -733,6 +733,47 @@ With BTC/ETH (the paper bot's universe) the order is the same: B2 0.67 / 0.71 an
 - **The paper bot now keeps each pair's best running PnL** (`peak` in its state and history, on its page file), so
   the forward run shows how much each pair made before the trend turned.
 
+### 36. RSI-2 + BTC filter: a higher win rate — "out on the first close above entry" wins 85–92%, a paper candidate (`rsi2_winrate_study.py`, 2026-11-10)
+Owner: "are there strategies that win 80–90%?", then "can you develop ours and reach a higher rate?". Only the
+mean-reversion bot can: the trend, momentum and ratio bots live on a few big trades (§28, §35). Eleven variants of
+the paper candidate of §28 (`raqm-rsi2-btc`), fixed before any result. The rule, also fixed first: win more often than
+today in both periods, with a Sharpe not below today's in both. $20 ×2, fees, real funding, the 40% guard. Row A
+reproduces §28 trade for trade.
+
+| variant | trades | win % < 2024 / 2024 → | avg win / avg loss $ | PF | PnL $ | Sharpe < 2024 / 2024 → | marked daily: DD $ · Sharpe | rule |
+|---|---|---|---|---|---|---|---|---|
+| A today: out above the 5-day average | 226 | 73.3 / 67.8 | 2.07 / −2.47 | 1.99 | 163 | 1.13 / 1.24 | 38 · 0.46 / 0.77 | — |
+| B1 RSI-2 below 3 | 131 | 75.9 / 75.3 | 2.26 / −2.89 | 2.42 | 132 | 0.90 / 1.20 | 22 · 0.60 / 0.85 | ✗ |
+| B2 RSI-2 below 2 | 76 | 85.7 / 78.0 | 2.59 / −2.29 | 5.01 | 128 | 1.27 / 1.20 | 22 · 1.01 / 0.75 | ✗ |
+| C1 out on the first up close | 250 | 79.2 / 67.7 | 1.55 / −2.16 | 1.95 | 138 | 1.42 / 0.57 | 25 · 1.01 / 0.39 | ✗ |
+| **C2 out on the first close above entry** | 245 | **92.3 / 85.2** | 1.47 / **−4.33** | 2.63 | **197** | **1.42 / 1.35** | **26 · 0.96 / 0.80** | ✓ |
+| C3 +3% take-profit, else today's exit | 263 | 89.1 / 79.1 | 1.11 / −2.90 | 2.02 | 124 | 1.60 / 0.86 | 32 · 0.89 / 0.54 | ✗ |
+| D two halves (add if day 1 closes lower) | 226 | 78.1 / 75.2 | 1.32 / −1.92 | 2.24 | 126 | 1.32 / 1.26 | 29 · 0.60 / 0.75 | ✗ marked |
+| E no entry when BTC fell > 5% that day | 208 | 75.3 / 69.7 | 2.11 / −2.57 | 2.13 | 168 | 1.04 / 1.35 | 36 · 0.48 / 0.91 | ✗ |
+| F1 C1 + D | 250 | 85.8 / 80.0 | 0.98 / −2.08 | 2.26 | 113 | 1.67 / 0.63 | 24 · 1.11 / 0.45 | ✗ |
+| F2 B1 + C1 | 141 | 82.8 / 71.4 | 1.73 / −2.36 | 2.40 | 109 | 1.15 / 0.72 | 22 · 0.96 / 0.58 | ✗ |
+| F3 C2 + D | 247 | 91.6 / 92.2 | 0.99 / −3.58 | 3.15 | 154 | 1.52 / 1.42 | 24 · 0.98 / 0.88 | ✓ |
+
+"Marked daily" is the same book valued at every daily close, not only when a trade closes: a rule that holds its
+losers hides them in the closed-trade numbers. C2 holds there too.
+
+- **C2 is the one:** it sells at the next open after the first daily close above the entry price, whatever the
+  5-day average says. It wins 92% / 85% of its trades, makes more ($197 vs $163), and holds 2.6 days instead of 3.8.
+  Every year is positive or flat (2020 +20, 2021 +81, 2023 +24, 2024 +28, 2025 +44, 2026 −0; no trades in 2022, BTC
+  was below its average).
+- **What the 85–92% hides: one loss costs three wins.** The average loss is −$4.33 against a +$1.47 average win,
+  because a losing trade is now held until the 10-day limit (21 trades timed out, against 2 today). The worst trade is
+  the same −$16 (the 40% stop, twice in 6 years). The win rate is how the exit is built, not a safer bet per trade.
+- **Checked at nearby settings** (`--neighbors`, after the run): the win rate is 84–94% in every setting. The edge is
+  not as steady. It holds with a 15-day limit (Sharpe 1.35 / 1.37) and without the BTC filter (1.30 / 1.35 vs 0.82 /
+  1.26). It fails with a 5-day limit (after 2024: 0.52) and a 20-day one (0.86), and with top 20 or RSI-2 below 10 it
+  doesn't beat the matching rule after 2024. So the 10-day limit matters.
+- **No look-ahead:** `lookahead_check.py --only rsi2_btc_c2` is clean on 8 cut dates.
+- **Caveats:** 245 trades in 6 years; 27 RSI-2 variants have now been tried on the same data (16 in §28, 11 here).
+  F3 passes too, but it is C2 at half size on most trades.
+- **Decision:** nothing changes on a bot. C2 is the candidate for a third RSI-2 paper bot, next to `raqm-rsi2` and
+  `raqm-rsi2-btc`, to see whether 85%+ holds live.
+
 ## The site now shows only the four paper bots
 
 `research/bots_stats.py` writes `lib/bot-stats.json` (the numbers the site shows); the dashboard's live section and
