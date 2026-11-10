@@ -1,9 +1,15 @@
 # ratio_trend: real money next to momentum_ls (plan, 2026-11-05)
 
-**Status: a plan, nothing done; a code change comes first.** The owner asked (2026-11-05) to prepare `ratio_trend`
-for real money on the same account as `momentum_ls`. Nothing here starts before the first real momentum rebalance
-(Monday 2026-11-09) is verified and `docs/after-rebalance-1.md` is through. Every step that touches the real account
-is the owner's go.
+**Status (2026-11-09): §1 is built; the Demo gate (§3) is next.** The owner chose (2026-11-09) real money for the
+version without BTC/ETH (research §25), on its own sub-account (option A below).
+- **The netted book:** `bot.py --ratio-net` (`bots/ratio_trend.py run_once_ratio_net`, tests in
+  `backend/tests/test_ratio_net.py`). Research §34 prices its close-and-reopen against §25: about 8% of the profit.
+- **Its options:** `RAQM_ARGS=--leverage 2 --amount <unit> --poll 60 --ratio-exclude BTC,ETH --ratio-net`, in
+  `/opt/raqm-live/strategies/ratio_trend.env` for Demo and `<account>-ratio_trend.env` for the sub-account.
+- **Before switching:** the netted bot refuses a state file that still holds the paired path's pairs, so the
+  Demo bot's open pairs are closed first.
+
+Every step that touches the real account is the owner's go. (The original plan of 2026-11-05 follows.)
 
 ## What the evidence says today
 
