@@ -21,9 +21,9 @@ class UserWatchdogTests(unittest.TestCase):
         (self.units / f"raqm-user@{uid}--{s}.service.d").mkdir(parents=True)
         (self.units / f"raqm-user@{uid}--{s}.service.d" / "user.conf").write_text("[Service]\n", encoding="utf-8")
         if status is not None:
-            (self.ipc / uid / s).mkdir(parents=True, exist_ok=True)
+            (self.ipc / f"{uid}--{s}").mkdir(parents=True, exist_ok=True)
             st = {"updated": NOW.isoformat(), "env": "demo", "positions": [], "review": {}, "entry_block": "", **status}
-            (self.ipc / uid / s / "live_status.json").write_text(json.dumps(st), encoding="utf-8")
+            (self.ipc / f"{uid}--{s}" / "live_status.json").write_text(json.dumps(st), encoding="utf-8")
 
     def seen(self, active=lambda u, s: True):
         return wd.user_problems(NOW, bots=wd.user_bots(self.units), active=active, ipc=self.ipc)
@@ -50,13 +50,24 @@ class UserWatchdogTests(unittest.TestCase):
 
     def test_a_status_file_replaced_by_a_link_is_not_followed(self):
         self.bot(U1, "trend_daily")
-        f = self.ipc / U1 / "trend_daily" / "live_status.json"; target = self.d / "elsewhere.json"
+        f = self.ipc / f"{U1}--trend_daily" / "live_status.json"; target = self.d / "elsewhere.json"
         target.write_text(f.read_text(encoding="utf-8"), encoding="utf-8"); f.unlink()
         try:
             f.symlink_to(target)
         except OSError:
             self.skipTest("symlinks not available here")
         self.assertEqual(set(self.seen()), {f"stale:user:{U1}:trend_daily"})
+
+    def test_it_reads_the_folder_the_provisioner_gives_each_bot(self):
+        # 2026-11-09: the watchdog read <uid>/<strategy>/ while the bot wrote <uid>--<strategy>/ (its unit's %i), so a
+        # real-money bot's kill switch reached the owner as "not writing its status". One layout, the provisioner's.
+        import provision_users
+        self.bot(U1, "momentum_ls", entry_block="Central Risk Manager kill switch is tripped — daily loss 1.27% >= limit 1.0%")
+        self.assertEqual(provision_users.ipc_instance(U1, "momentum_ls").name, f"{U1}--momentum_ls")
+        self.assertTrue((self.ipc / provision_users.ipc_instance(U1, "momentum_ls").name / "live_status.json").is_file())
+        self.assertEqual(set(self.seen()), {f"kill:user:{U1}"})
+        unit = (ROOT / "deploy" / "vps" / "raqm-user@.service").read_text(encoding="utf-8")
+        self.assertIn("ReadWritePaths=/opt/raqm-users/ipc/%i", unit)
 
     def test_the_owners_watchdog_alerts_when_the_users_one_fails(self):
         seen = wd.problems(NOW, unit=lambda e, s: (False, False), ipc=self.ipc, ledgers={}, failed=lambda n: n == "raqm-watchdog-users.service")

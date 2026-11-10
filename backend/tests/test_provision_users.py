@@ -196,8 +196,26 @@ class ApplyTests(unittest.TestCase):
     def test_one_users_failure_does_not_stop_the_rest(self):
         class Boom(FakeSystem):
             def ensure_user(self, uid): raise RuntimeError("useradd failed")
-        fs = Boom(); pu.apply([("user", U1), ("wipe_keys", U2)], {}, fs, log=self.logs.append)
+        fs = Boom(); errors = pu.apply([("user", U1), ("wipe_keys", U2)], {}, fs, log=self.logs.append)
         self.assertTrue(any("useradd failed" in l for l in self.logs))
+        self.assertEqual(errors, 1)                      # main() exits 1 on it, so the unit shows failed
+
+    def test_a_failed_command_logs_its_own_error_not_its_command_line(self):
+        # 2026-11-09: 868 runs logged the whole runuser command (the evidence JSON) and ended "exit status 1"
+        import subprocess
+        err = subprocess.CalledProcessError(1, ("runuser", "-u", "x", "--", "python", "-c", "EVIDENCE" * 200),
+                                            stderr="Traceback (most recent call last):\n  ...\n"
+                                                   "ValueError: readiness evidence is for 2b23129, deployed e1a8d6f\n")
+        class Boom(FakeSystem):
+            def set_limits(self, uid, d): raise err
+        errors = pu.apply([("limits", U1, {"a": 1})], {}, Boom(), log=self.logs.append)
+        self.assertEqual(errors, 1)
+        line = next(l for l in self.logs if l.startswith(f"limits {U1}"))
+        self.assertIn("readiness evidence is for 2b23129", line)
+        self.assertIn("exit 1", line)
+        self.assertNotIn("EVIDENCE", line)
+        self.assertLess(len(line), 500)
+        self.assertEqual(pu.apply([], {}, FakeSystem(), log=self.logs.append), 0)
 
 
 class ReadTests(unittest.TestCase):

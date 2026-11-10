@@ -152,6 +152,15 @@
     </table></div>
   </section>
 
+  <section id="pfSec" style="margin-top:44px;border-top:1px solid var(--line);padding-top:26px;display:none">
+    <div class="head"><h2>المحافظ الثلاثة — تجربة Paper</h2><span class="count" id="pfSince"></span></div>
+    <p class="sub" style="font-size:13px">من البحث (research §31): مومنتم + عكس الأغلبية، مومنتم + RSI-2، والثلاثة مع بعض. كل استراتيجية بوت Paper لوحده (كأنها حساب فرعي لوحدها، §32)، والمحفظة هي مجموع صفقاتهم، كل عملة بهامش $100 × 2، من الصفقات اللي اتفتحت من 9 نوفمبر. في الاختبار الثلاثة كانوا الأنعم، ومومنتم + عكس الأغلبية الأعلى ربح والأعلى تراجع.</p>
+    <div class="table" style="margin-top:14px"><table>
+      <thead><tr><th>المحفظة</th><th>صفقات اتقفلت</th><th>نسبة الكسب</th><th>ربح محقق</th><th>ربح المفتوح</th><th>الإجمالي</th><th>أقصى تراجع</th><th>هامش مفتوح</th></tr></thead>
+      <tbody id="pfRows"><tr><td colspan="8" class="empty">بيحمّل…</td></tr></tbody>
+    </table></div>
+  </section>
+
   <section id="listingSec" style="margin-top:44px;border-top:1px solid var(--line);padding-top:26px">
     <div class="head"><h2>شورت العملات الجديدة — تجربة Paper</h2><span class="count" id="lsUpdated"></span></div>
     <p class="sub" style="font-size:13px">بوت منفصل: بيعمل شورت على العملة الجديدة على Binance بعد 30 يوم من إدراجها، ويقفل بعد 90 يوم أو لو السعر طلع 40% فوق الدخول، وبحد أقصى 10 صفقات في نفس الوقت. فكرة من الأبحاث إن العملات الجديدة بتنزل بعد الهوجة — بنجربها Paper قبل أي قرار.</p>
@@ -379,6 +388,9 @@ const EN = {
   "عكس الأغلبية (نسبة لونج/شورت) — تجربة Paper": "Against the crowd (long/short ratio) — Paper test",
   "بوت منفصل من بحث الـ Open Interest (research §29): كل أربع على أعلى 20 عملة فوليوم على Binance، بيعمل لونج على أقل 3 عملات في نسبة لونج/شورت الحسابات (الأغلبية شورت) وشورت على أعلى 3 (الأغلبية لونج)، ويقفلهم ويبدّل بعد أسبوع (وقف 40%). في الاختبار كانت الفكرة الوحيدة اللي كسبت قبل 2024 وبعدها، ومش مرتبطة بالمومنتم — بس اتلقت بعد ما شفنا النتايج، فشغالة Paper عشان نتابعها بس.": "A separate bot from the open-interest research (research §29): every Wednesday, on the top 20 Binance coins by volume, it goes long the 3 with the lowest accounts' long/short ratio (the crowd is short) and short the 3 with the highest (the crowd is long), and rebalances after a week (40% stop). In the test it was the only idea that made money both before and after 2024, and it doesn't move with momentum — but it was found after looking at the results, so it runs on paper only, to watch it.",
   "نسبة لونج/شورت": "Long/short ratio",
+  "المحافظ الثلاثة — تجربة Paper": "The three portfolios — Paper test",
+  "من البحث (research §31): مومنتم + عكس الأغلبية، مومنتم + RSI-2، والثلاثة مع بعض. كل استراتيجية بوت Paper لوحده (كأنها حساب فرعي لوحدها، §32)، والمحفظة هي مجموع صفقاتهم، كل عملة بهامش $100 × 2، من الصفقات اللي اتفتحت من 9 نوفمبر. في الاختبار الثلاثة كانوا الأنعم، ومومنتم + عكس الأغلبية الأعلى ربح والأعلى تراجع.": "From the research (research §31): momentum + against the crowd, momentum + RSI-2, and all three. Each strategy is its own paper bot (as if on its own sub-account, §32), and a portfolio is the sum of their trades, every coin at $100 margin × 2, counting the trades opened from 9 November. In the test all three together were the smoothest, and momentum + against the crowd made the most and fell the most.",
+  "المحفظة": "Portfolio", "صفقات اتقفلت": "Closed trades", "نسبة الكسب": "Win rate", "ربح المفتوح": "Open P&L", "أقصى تراجع": "Max drawdown", "هامش مفتوح": "Margin open",
   "RSI-2 شراء الهبوط (Larry Connors) — تجربة Paper": "RSI-2 buy the dip (Larry Connors) — Paper test",
   "بوت سادس منفصل: كل يوم على أعلى 10 عملات فوليوم فوق متوسط 200 يوم، بيشتري لما RSI-2 ينزل تحت 5 (هبوط حاد في ترند صاعد)، ويقفل أول ما يقفل يومي فوق متوسط 5 أيام أو بعد 10 أيام. وقف 40%.": "A sixth, separate bot: every day, on the top 10 coins by volume above their 200-day average, it buys when RSI-2 drops below 5 (a sharp dip in an uptrend), and closes at the first daily close above the 5-day average or after 10 days. 40% stop.",
   "أقرب عملات لإشارة": "Closest coins to a signal",
@@ -692,6 +704,53 @@ async function loadRetail(){
 loadRetail()
 setInterval(loadRetail, 15000)
 setInterval(() => { if(RF) renderRetail() }, 1000)
+// ── the three portfolios (research §31, owner 2026-11-09): the sum of the momentum, crowd and RSI-2 + BTC paper bots,
+// every trade at $100 of margin, the trades opened from PF_START — the same rule as scripts/demo_weekly.py's section.
+// A fixed date, not the bots' "started": that moves at every restart and would empty the portfolios each time. ──
+const PF_MARGIN = 100, PF_START = Date.parse("2026-11-09T00:00:00Z")
+const opened = x => Date.parse(x.opened || x.time)
+const PORTFOLIOS = [                       // [name, its bots] — called at each render, so the name follows the language
+  () => [tx("مومنتم + عكس الأغلبية", "Momentum + against the crowd"), [MS, RF]],
+  () => [tx("مومنتم + RSI-2", "Momentum + RSI-2"), [MS, RB]],
+  () => [tx("الثلاثة", "All three"), [MS, RF, RB]],
+]
+function pfStats(bots){
+  const k = d => d.margin > 0 ? PF_MARGIN / d.margin : 0
+  const closed = bots.flatMap(d => (d.history || []).filter(h => opened(h) >= PF_START).map(h => ({ t: Date.parse(h.time), pnl: h.pnl * k(d) })))
+                     .sort((a, b) => a.t - b.t)
+  let eq = 0, peak = 0, dd = 0
+  for(const c of closed){ eq += c.pnl; peak = Math.max(peak, eq); dd = Math.max(dd, peak - eq) }
+  const open = bots.flatMap(d => (d.positions || []).filter(p => opened(p) >= PF_START).map(p => {
+    const price = blive[p.id] ?? p.price, sg = p.side === "short" ? -1 : 1
+    return sg * (price - p.entry) * p.qty * (p.margin > 0 ? PF_MARGIN / p.margin : k(d))
+  }))
+  return { n: closed.length, wins: closed.filter(c => c.pnl > 0).length, realized: eq, dd,
+           unreal: open.reduce((a, v) => a + v, 0), legs: open.length }
+}
+function renderPortfolios(){
+  const sec = $("pfSec")
+  if(!MS && !RF && !RB){ sec.style.display = "none"; return }
+  sec.style.display = ""
+  const names = [[MS, tx("مومنتم", "momentum")], [RF, tx("عكس الأغلبية", "against the crowd")], [RB, "RSI-2 + BTC"]]
+  $("pfRows").innerHTML = PORTFOLIOS.map(pf => {
+    const [label, bots] = pf()
+    if(bots.some(d => !d)){
+      const miss = names.filter(([d]) => bots.includes(d) && !d).map(([, n]) => n).join(tx(" و", ", "))
+      return `<tr><td class="coin">${esc(label)}</td><td colspan="7" class="empty">${tx("مستني ملف", "waiting for the file of")} ${esc(miss)}</td></tr>`
+    }
+    const s = pfStats(bots)
+    return `<tr><td class="coin">${esc(label)}</td>
+      <td class="num mono">${s.n}</td>
+      <td class="num mono">${s.n ? Math.round(s.wins / s.n * 100) + "%" : "—"}</td>
+      <td class="num mono ${tone(s.realized)}">${usd(s.realized)}</td>
+      <td class="num mono ${tone(s.unreal)}">${usd(s.unreal)}</td>
+      <td class="num mono ${tone(s.realized + s.unreal)}"><b>${usd(s.realized + s.unreal)}</b></td>
+      <td class="num mono loss">${s.dd ? usd(-s.dd) : "—"}</td>
+      <td class="num mono">$${(s.legs * PF_MARGIN).toLocaleString("en-US")}</td></tr>`
+  }).join("")
+  $("pfSince").textContent = `${tx("الصفقات اللي اتفتحت من", "trades opened since")} ${day(new Date(PF_START).toISOString())}`
+}
+setInterval(renderPortfolios, 1000)
 // ── HIGH RISK ratio trend (fourth paper bot): ratio.json every 15 s, legs priced on the same Binance stream ──
 let RS = null, RN = null
 function renderRatioInto(k, secId, d){
@@ -805,7 +864,7 @@ setInterval(loadSimple, 15000)
 function renderAll(){
   applyWords()
   if(D){ renderSettings(D); render() }
-  renderListing(); renderMomentum(); renderRetail(); renderRatio(); renderBreakout(); renderRsi2(); renderRsi2Btc(); renderTbreak()
+  renderListing(); renderMomentum(); renderRetail(); renderPortfolios(); renderRatio(); renderBreakout(); renderRsi2(); renderRsi2Btc(); renderTbreak()
 }
 $("langBtn").onclick = () => {
   L = L === "ar" ? "en" : "ar"

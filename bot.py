@@ -3443,8 +3443,9 @@ def start_dashboard_server(port=None):
         httpd.serve_forever()
 
 # ── the strategies, one file each (bots/): re-exported here — bot.<name> stays the one name the CLI, the API and the tests use ──
-from bots.momentum_ls import MOM, RETAIL, momentum_public_name, retail_ratio, momentum_due, momentum_next, momentum_mode, momentum_rank, run_once_momentum, write_momentum_status
+from bots.momentum_ls import MOM, RETAIL, momentum_public_name, retail_ratio, momentum_due, momentum_hold_over, momentum_next, momentum_mode, momentum_rank, run_once_momentum, write_momentum_status
 from bots.ratio_trend import RATIO, ratio_public_name, ratio_mode, _daily_closed, _ratio_rank, ratio_members, ratio_signal, _ratio_close_pair, run_once_ratio, write_ratio_status
+from bots.ratio_trend import ratio_targets, ratio_net_plan, run_once_ratio_net, write_ratio_net_status
 from bots.listing_short import LISTING, listing_mode, _listing_close, run_once_listing, write_listing_status
 from bots.vol_breakout import VB, breakout_mode, run_once_breakout
 from bots.rsi2_pullback import RSI2, rsi2_public_name, rsi2_btc_ok, rsi2_mode, rsi_wilder, run_once_rsi2
@@ -3470,11 +3471,15 @@ if __name__=="__main__":
     p.add_argument("--expect-env", default=None, choices=["live", "demo", "testnet"],
                    help="refuse to start unless BINANCE_ENV is exactly this (the testnet service passes testnet)")
     p.add_argument("--ratio-exclude", default="", help="ratio trend: coins left out of the weekly pick, e.g. BTC,ETH (research §25)")
+    p.add_argument("--ratio-net", action="store_true", help="ratio trend: one position per coin, the sum of its pairs — the only way a one-way account trades all of them (docs/ratio-trend-live-plan.md §1)")
     p.add_argument("--momentum-retail", action="store_true", help="momentum_ls ranked against the crowd's long/short ratio (paper only, research §29)")
     p.add_argument("--rsi2-btc-ma", type=int, default=0, help="RSI-2: new entries only while BTC closes above this daily average, e.g. 200 (research §28)")
     p.add_argument("--public-name", default=None, help="a second bot of the same strategy: its public file name (e.g. ratio_nobtc)")
     p.add_argument("--label", default=None, help="a second bot of the same strategy: its name on Telegram")
     p.add_argument("--state", default=None, help="ملف الحالة (لتشغيل أكتر من بوت في نفس المجلد) — اللوج بيبقى بنفس الاسم .log")
+    # the momentum day experiment (research/README.md §23): Demo / paper only, the real bot keeps Monday and the full week
+    p.add_argument("--mom-weekday", type=int, default=None, choices=range(7), help="مومنتم: يوم التبديل (0 = الاتنين) — Demo بس")
+    p.add_argument("--mom-hold", type=int, default=None, choices=range(1, 8), help="مومنتم: يقفل السلة بعد كام يوم — Demo بس")
     args=p.parse_args()
     if args.strategy: CONFIG["enabled_strategies"]=[s.strip() for s in args.strategy.split(",") if s.strip()]
     retired = [s for s in (CONFIG.get("enabled_strategies") or []) if s in RETIRED_STRATEGIES]
@@ -3489,6 +3494,9 @@ if __name__=="__main__":
     CONFIG["notify"]=args.notify
     if args.public: CONFIG["public_dir"]=args.public
     if args.ratio_exclude: RATIO["exclude"]=[c.strip().upper() for c in args.ratio_exclude.split(",") if c.strip()]
+    if args.ratio_net:
+        if args.strategy != "ratio_trend": p.error("--ratio-net: ratio_trend only")
+        RATIO["net"]=True
     if args.momentum_retail:
         if args.strategy != "momentum_ls" or not args.paper: p.error("--momentum-retail: paper momentum_ls only")
         MOM.update(RETAIL)
@@ -3509,6 +3517,11 @@ if __name__=="__main__":
     elif ratio_mode():
         STATE_PATH=Path(__file__).parent / "state_ratio.json"; LOG_PATH=Path(__file__).parent / "state_ratio.log"
     if args.paper and args.live: p.error("--paper و --live مع بعض؟ اختار واحد")
+    if args.mom_weekday is not None or args.mom_hold is not None:
+        if not args.paper and binance_env() not in ("demo", "testnet"):
+            p.error("--mom-weekday / --mom-hold تجربة على Demo بس — الحساب الحقيقي بيفضل على الاتنين والأسبوع كله")
+        if args.mom_weekday is not None: MOM["weekday"] = args.mom_weekday
+        if args.mom_hold is not None: MOM["hold_days"] = args.mom_hold
     if args.paper: CONFIG["paper_trading"]=True
     if args.expect_env and binance_env() != args.expect_env:
         p.error(f"BINANCE_ENV={binance_env()} لكن الخدمة متظبطة على {args.expect_env} — مش هيشتغل")

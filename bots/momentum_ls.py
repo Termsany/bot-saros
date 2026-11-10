@@ -12,7 +12,11 @@ from pathlib import Path
 # weekday 0 = Monday (owner, 2026-11-03): the rebalance follows Binance's weekly candle. The weekday is arbitrary in the
 # backtest too (every 7 days from the data's start) and the results swing with it (PF 1.08–1.22 over the 7 days,
 # Monday 1.15): Monday is a fixed, readable anchor, not a fitted one.
-MOM = {"weeks": 2, "top": 50, "n": 5, "min_days": 60, "stop": 0.40, "every_days": 7, "weekday": 0, "score": "return", "min_ranked": 20}
+MOM = {"weeks": 2, "top": 50, "n": 5, "min_days": 60, "stop": 0.40, "every_days": 7, "weekday": 0, "score": "return", "min_ranked": 20, "hold_days": 7}
+# hold_days < every_days: the basket closes that many days after it opened and stays flat until the next rebalance.
+# Only bot.py --mom-weekday / --mom-hold change these two, and only on Demo (research/README.md §23: the Wednesday-6
+# experiment, owner 2026-11-06). The real bot runs the defaults: Monday, the full week.
+
 # --momentum-retail (owner, 2026-11-07; research §29, paper only): the same weekly basket, ranked against the crowd —
 # among the top 20 by 30-day volume (150+ days listed), long the 3 whose all-accounts long/short ratio (Binance, the
 # last 3 days' hourly values) is lowest, short the 3 where it is highest; every Wednesday, as the study's weeks ran
@@ -29,6 +33,16 @@ def retail_ratio(ex, sym):
     rows = ex.fapiDataGetGlobalLongShortAccountRatio({"symbol": sym.split("/")[0] + "USDT", "period": "1h", "limit": RETAIL["ls_hours"]})
     vals = [float(r["longShortRatio"]) for r in rows or [] if r.get("longShortRatio") not in (None, "")]
     return sum(vals) / len(vals) if len(vals) >= RETAIL["ls_hours"] // 2 else None
+
+
+def momentum_hold_over(last_iso, today, hold_days=None, every_days=None):
+    """True when the basket opened at `last_iso` has been held `hold_days` and must close before the next rebalance.
+    Never with the defaults (a full week): the rebalance itself closes it."""
+    hold = int(hold_days if hold_days is not None else MOM["hold_days"])
+    every = int(every_days if every_days is not None else MOM["every_days"])
+    if not last_iso or hold >= every:
+        return False
+    return today >= datetime.fromisoformat(last_iso) + pd.Timedelta(days=hold)
 
 
 def momentum_due(last_iso, today, every_days=MOM["every_days"], weekday=MOM["weekday"]):
@@ -104,6 +118,23 @@ def run_once_momentum(ex):
     # weekly rebalance, at the first cycle after the daily close (00:00 UTC) on Monday (momentum_due)
     today = now.replace(hour=0, minute=0, second=0, microsecond=0)
     last = state.get("mom_last")
+    # the experiment's early close (Demo only, --mom-hold): flat from here until the next rebalance day
+    if state["positions"] and momentum_hold_over(last, today, M.get("hold_days"), M["every_days"]):
+        if not bot.CONFIG["paper_trading"]:
+            exits = []
+            for sym in sorted(state["positions"]):
+                px = float(ex.fetch_ticker(sym)["last"]); pos = state["positions"][sym]
+                exits.append({"symbol": sym, "side": "close_" + pos["side"], "action": "exit", "position": pos, "price": px, "order": 0,
+                              "risk_usdt": 0, "notional_usdt": 0, "correlation_group": bot._correlation_group(sym)})
+            result = bot._phase2_live_basket(ex, state, "momentum_ls", "momentum-hold-exit", exits, reserve=False)
+            if not result or result.get("status") != "filled":
+                bot.save_state(state); return
+        else:
+            for sym in list(state["positions"]):
+                try: bot._paper_close(ex, state, sym, float(ex.fetch_ticker(sym)["last"]), f"خروج بعد {M['hold_days']} أيام")
+                except Exception as e: bot.log(f"قفل {sym}: {e}")
+        bot.save_state(state)
+        bot.log(f"⏹️ مومنتم: السلة اتقفلت بعد {M['hold_days']} أيام — مفيش صفقات لحد التبديل الجاي")
     if bot.momentum_due(last, today, M["every_days"], M.get("weekday")):
         ranked = bot.momentum_rank(ex)
         if len(ranked) >= M.get("min_ranked", 20) and len(ranked) >= 2 * M["n"]:
