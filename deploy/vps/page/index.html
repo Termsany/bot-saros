@@ -243,6 +243,26 @@
       <tbody id="rsHistory"><tr><td colspan="4" class="empty">لسه مفيش أزواج اتقفلت</td></tr></tbody>
     </table></div>
   </section>
+  <section id="ratioTwSec" style="margin-top:44px;border-top:1px solid var(--line);padding-top:26px;display:none">
+    <div class="head"><h2>Ratio trend بين أكبر العملات + trailing 20% <span style="margin-inline-start:8px;font-size:11px;font-weight:700;color:var(--loss);border:1px solid rgba(255,84,112,.45);background:rgba(255,84,112,.1);border-radius:999px;padding:2px 9px">⚠️ HIGH RISK</span></h2><span class="count" id="rwUpdated"></span></div>
+    <p class="sub" style="font-size:13px">نفس بوت الـ Ratio اللي فوق (BTC وETH داخلين، 100$ هامش ×2 لكل رجل)، والفرق في الخروج بس: الزوج بيتقفل لو النسبة رجعت 20% من أحسن نقطة وصلتلها، ويفضل مقفول لحد ما الترند يتقلب. في الاختبار (research §35) كان التحسن هنا مش ثابت — شغالة Paper عشان نقارن الاتنين.</p>
+    <div class="chips" id="rwMembers"></div>
+    <div class="kpis" style="margin-top:14px">
+      <div class="card kpi"><div class="label">ربح محقق</div><div class="value mono" id="rwRealized">—</div><div class="note" id="rwWl">—</div></div>
+      <div class="card kpi"><div class="label">ربح الأزواج المفتوحة</div><div class="value mono" id="rwUnreal">—</div><div class="note">بالسعر اللحظي من Binance</div></div>
+      <div class="card kpi"><div class="label">أزواج مفتوحة</div><div class="value mono" id="rwOpen">—</div><div class="note" id="rwMargin">—</div></div>
+      <div class="card kpi"><div class="label">الإجمالي</div><div class="value mono" id="rwTotal">—</div><div class="note" id="rwNext">—</div></div>
+    </div>
+    <div class="table" style="margin-top:14px"><table>
+      <thead><tr><th>لونج</th><th>شورت</th><th>دخول لونج</th><th>دخول شورت</th><th>الربح $</th><th>من</th></tr></thead>
+      <tbody id="rwPairs"><tr><td colspan="6" class="empty">بيحمّل…</td></tr></tbody>
+    </table></div>
+    <div class="head" style="margin-top:16px"><h2 style="font-size:14px">اتقفلت</h2><span class="count" id="rwHistCount"></span></div>
+    <div class="table"><table>
+      <thead><tr><th>الزوج (لونج / شورت)</th><th>الربح $</th><th>السبب</th><th>الوقت</th></tr></thead>
+      <tbody id="rwHistory"><tr><td colspan="4" class="empty">لسه مفيش أزواج اتقفلت</td></tr></tbody>
+    </table></div>
+  </section>
   <section id="ratioNbSec" style="margin-top:44px;border-top:1px solid var(--line);padding-top:26px">
     <div class="head"><h2>Ratio trend من غير BTC/ETH <span style="margin-inline-start:8px;font-size:11px;font-weight:700;color:var(--loss);border:1px solid rgba(255,84,112,.45);background:rgba(255,84,112,.1);border-radius:999px;padding:2px 9px">⚠️ HIGH RISK</span></h2><span class="count" id="rnUpdated"></span></div>
     <p class="sub" style="font-size:13px">نسخة تجريبية تانية: نفس القاعدة، بس BTC وETH مش داخلين — أعلى 7 عملات فوليوم بعدهم، و40$ هامش ×2 لكل رجل. في الاختبار (research §25) كانت أحسن من النسخة الأصلية، بس أقصى تراجعها حوالي 50 وحدة — شغالة Paper عشان نتابعها بس.</p>
@@ -397,6 +417,8 @@ const EN = {
   "Ratio trend بين أكبر العملات": "Ratio trend between the biggest coins",
   "Ratio trend من غير BTC/ETH": "Ratio trend without BTC/ETH",
   "Ratio trend من غير BTC/ETH + trailing 20%": "Ratio trend without BTC/ETH + 20% trailing",
+  "Ratio trend بين أكبر العملات + trailing 20%": "Ratio trend between the biggest coins + 20% trailing",
+  "نفس بوت الـ Ratio اللي فوق (BTC وETH داخلين، 100$ هامش ×2 لكل رجل)، والفرق في الخروج بس: الزوج بيتقفل لو النسبة رجعت 20% من أحسن نقطة وصلتلها، ويفضل مقفول لحد ما الترند يتقلب. في الاختبار (research §35) كان التحسن هنا مش ثابت — شغالة Paper عشان نقارن الاتنين.": "The ratio bot above (BTC and ETH in, $100 margin x2 per leg), with one difference in the exit: a pair is closed when its ratio falls 20% from the best point it reached, and stays closed until the trend turns. In the test (research §35) the gain here was not steady — it runs on paper to compare the two.",
   "نفس البوت اللي فوق بالظبط، والفرق في الخروج بس: الزوج بيتقفل لو النسبة رجعت 20% من أحسن نقطة وصلتلها، ويفضل مقفول لحد ما الترند يتقلب. في الاختبار (research §35) قلّل التراجع شوية وحسّن الـ Sharpe شوية — شغالة Paper عشان نقارن الاتنين.": "Exactly the bot above, with one difference in the exit: a pair is closed when its ratio falls 20% from the best point it reached, and stays closed until the trend turns. In the test (research §35) it lowered the drawdown a little and raised the Sharpe a little — it runs on paper to compare the two.",
   "نسخة تجريبية تانية: نفس القاعدة، بس BTC وETH مش داخلين — أعلى 7 عملات فوليوم بعدهم، و40$ هامش ×2 لكل رجل. في الاختبار (research §25) كانت أحسن من النسخة الأصلية، بس أقصى تراجعها حوالي 50 وحدة — شغالة Paper عشان نتابعها بس.": "A second experimental version: the same rule, but without BTC and ETH — the top 7 coins by volume after them, $40 margin x2 per leg. In the test (research §25) it did better than the original, but its worst drawdown was about 50 units — it runs on paper only, to watch it.",
   "بوت رابع تجريبي: كل الأزواج بين أعلى 7 عملات فوليوم على Binance (21 زوج). لو نسبة سعر العملتين فوق متوسط 50 يوم: لونج الأولى وشورت التانية، والعكس.": "A fourth, experimental bot: every pair among the top 7 Binance coins by volume (21 pairs). If the ratio of the two prices is above its 50-day average: long the first and short the second, and the other way round.",
@@ -615,6 +637,7 @@ function bsubscribe(){
                ...(typeof RS !== "undefined" && RS ? RS.pairs.flatMap(p => [p.long, p.short]) : []),
                ...(typeof RN !== "undefined" && RN ? RN.pairs.flatMap(p => [p.long, p.short]) : []),
                ...(typeof RT !== "undefined" && RT ? RT.pairs.flatMap(p => [p.long, p.short]) : []),
+               ...(typeof RW !== "undefined" && RW ? RW.pairs.flatMap(p => [p.long, p.short]) : []),
                ...(typeof BO !== "undefined" && BO ? BO.positions : []), ...(typeof R2 !== "undefined" && R2 ? R2.positions : []),
                ...(typeof RB !== "undefined" && RB ? RB.positions : []),
                ...(typeof TBk !== "undefined" && TBk ? TBk.positions : [])].map(p => p.id)
@@ -775,7 +798,7 @@ function renderPortfolios(){
 }
 setInterval(renderPortfolios, 1000)
 // ── HIGH RISK ratio trend (fourth paper bot): ratio.json every 15 s, legs priced on the same Binance stream ──
-let RS = null, RN = null, RT = null
+let RS = null, RN = null, RT = null, RW = null
 function renderRatioInto(k, secId, d){
   const sec = $(secId)
   if(!d){ sec.style.display = "none"; return }
@@ -810,6 +833,7 @@ function renderRatioInto(k, secId, d){
 function renderRatio(){ renderRatioInto("rs", "ratioSec", RS) }
 function renderRatioNb(){ renderRatioInto("rn", "ratioNbSec", RN) }
 function renderRatioTr(){ renderRatioInto("rt", "ratioTrSec", RT) }
+function renderRatioTw(){ renderRatioInto("rw", "ratioTwSec", RW) }
 async function loadRatio(){
   try{ const r = await fetch(`ratio.json?t=${Date.now()}`, {cache: "no-store"}); if(!r.ok) throw 0; RS = await r.json(); renderRatio(); bsubscribe() }
   catch{ if(!RS) renderRatio() }
@@ -819,10 +843,13 @@ async function loadRatio(){
   // the same with a 20% trail (research §35): hidden until its file exists
   try{ const r = await fetch(`ratio_trail.json?t=${Date.now()}`, {cache: "no-store"}); if(!r.ok) throw 0; RT = await r.json(); renderRatioTr(); bsubscribe() }
   catch{ if(!RT) renderRatioTr() }
+  // the first ratio bot with a 20% trail (research §35): hidden until its file exists
+  try{ const r = await fetch(`ratio_trail_btc.json?t=${Date.now()}`, {cache: "no-store"}); if(!r.ok) throw 0; RW = await r.json(); renderRatioTw(); bsubscribe() }
+  catch{ if(!RW) renderRatioTw() }
 }
 loadRatio()
 setInterval(loadRatio, 15000)
-setInterval(() => { if(RS) renderRatio(); if(RN) renderRatioNb(); if(RT) renderRatioTr() }, 1000)
+setInterval(() => { if(RS) renderRatio(); if(RN) renderRatioNb(); if(RT) renderRatioTr(); if(RW) renderRatioTw() }, 1000)
 // ── volatility breakout + RSI-2 (fifth and sixth paper bots): breakout.json / rsi2.json every 15 s, Binance prices ──
 let BO = null, R2 = null, TBk = null, RB = null
 function renderSimple(key, d, watchHtml){
