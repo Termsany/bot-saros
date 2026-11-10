@@ -50,6 +50,10 @@ const SITE_PORT = "3100"     // playwright.config.ts: the site; any other localh
 
 /** Answers what the pages need, blocks every other outside request (Binance, Supabase, the API, fonts). */
 async function offline(page: Page, api?: { handler: ApiHandler, calls: ApiCall[] }){
+  // page.route doesn't see WebSockets: the paper page's live price streams (Binance, Bybit) reached the real ones from
+  // CI and priced the fixtures' legs at the market (2026-11-10: SOL at ~$168 instead of 1.1). Outside streams get a
+  // silent mock that accepts and never answers; the site's own (localhost) is left alone.
+  await page.routeWebSocket(url => url.hostname !== "localhost", () => {})
   await page.route("**/*", async route => {
     const req = route.request(), url = new URL(req.url())
     if (url.hostname === "localhost" && url.port === SITE_PORT) {
