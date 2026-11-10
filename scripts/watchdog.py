@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from backend.app import risk_manager as riskmgr
 from backend.app import live_accounts
+from backend.app import user_bots as users   # the one place the users' folder layout is written down
 
 STRATEGIES = ("trend_daily", "vol_breakout", "rsi2_pullback", "trend_breakout", "listing_short", "momentum_ls", "ratio_trend")
 LEDGERS = {"demo": Path("/opt/raqm-risk-demo"), "live": Path("/opt/raqm-risk")}
@@ -144,6 +145,8 @@ def _unit_failed(name):
 
 # ── users' bots (Phase 2, docs/phase2-design.md): run as root with only CAP_DAC_READ_SEARCH (raqm-watchdog-users), so
 # it can read every user's status and write nothing of theirs. Their kill switch shows in their status (entry_block).
+# Each bot's status is in /opt/raqm-users/ipc/<uid>--<strategy>/ (its unit's %i, the provisioner's ipc_instance): until
+# 2026-11-09 this read <uid>/<strategy>/, found no file and alerted "not writing its status" while the kill switch was on.
 USER_UNITS = Path("/etc/systemd/system")
 USER_IPC = Path("/opt/raqm-users/ipc")
 USER_STATE = Path("/var/lib/raqm-watchdog-users/state.json")
@@ -168,7 +171,7 @@ def user_problems(now, bots=None, active=_user_active, ipc=USER_IPC):
     out = {}
     for uid, s in (user_bots() if bots is None else bots):
         who = f"{s} (مستخدم {uid[:8]})"
-        st = check_bot(out, now, f"user:{uid}:{s}", who, None, active(uid, s), ipc / uid / s / "live_status.json")
+        st = check_bot(out, now, f"user:{uid}:{s}", who, None, active(uid, s), users.ipc_instance(uid, s, ipc) / "live_status.json")
         if st and "kill switch" in (st.get("entry_block") or ""):
             out[f"kill:user:{uid}"] = (f"قفل الطوارئ اشتغل على حساب المستخدم {uid[:8]}: {st['entry_block']}", 1)
     return out
@@ -301,6 +304,33 @@ def server_problems(now, disk=_disk, mem=_mem, ntp=_ntp_synced, offset=_binance_
     return out
 
 
+# ── the paper bots (owner, 2026-11-09: "the new bots on paper, watched"): play money, but the three portfolios and the
+# candidates are measured on them, so a paper bot that stopped is a hole in the measurement. Each writes its page file
+# every cycle (a minute); one that hasn't for PAPER_STALE_S is stopped or stuck.
+PAPER_PUBLIC = Path(os.getenv("BOT_PUBLIC_DIR", "/var/www/bot.da3m.io"))
+PAPER_STALE_S = 900
+PAPER_BOTS = {"status": "الترند اليومي", "listing": "شورت العملات الجديدة", "momentum": "مومنتم", "retail_fade": "عكس الأغلبية",
+              "rsi2_btc": "RSI-2 + فلتر BTC", "rsi2": "RSI-2", "breakout": "بريك أوت التذبذب", "tbreak": "اختراق الترند",
+              "ratio": "Ratio trend", "ratio_nobtc": "Ratio trend من غير BTC/ETH"}
+
+
+def paper_problems(now, public=PAPER_PUBLIC, bots=PAPER_BOTS):
+    """{key: (text, checks)}: a paper bot whose page file is missing, unreadable or older than PAPER_STALE_S. Two checks
+    in a row (a restart takes a cycle)."""
+    out = {}
+    for name, label in bots.items():
+        try:
+            st = json.loads(_read_status(public / f"{name}.json", limit=8 << 20))
+            age = (now - datetime.fromisoformat(str(st["updated"]).replace("Z", "+00:00"))).total_seconds()
+        except FileNotFoundError:
+            out[f"paper:{name}"] = (f"البوت الورقي {label}: ملفه ({name}.json) مش موجود", 2); continue
+        except Exception as e:
+            out[f"paper:{name}"] = (f"البوت الورقي {label}: ملفه مش بيتقري ({type(e).__name__})", 2); continue
+        if age > PAPER_STALE_S:
+            out[f"paper:{name}"] = (f"البوت الورقي {label} ما حدّثش من {int(age // 60)} دقيقة — واقف أو معلّق", 2)
+    return out
+
+
 def checks(now, users=False):
     """problems() and the server's, or one problem saying the watchdog itself can't look: a crash here used to mean silence."""
     try:
@@ -308,6 +338,7 @@ def checks(now, users=False):
             return user_problems(now)
         out = problems(now)
         out.update(server_problems(now))
+        out.update(paper_problems(now))
         return out
     except Exception as e:
         return {"watchdog": (f"المراقب نفسه مش قادر يفحص البوتات: {type(e).__name__}: {e}", 2)}

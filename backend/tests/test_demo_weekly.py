@@ -113,5 +113,61 @@ class RealAndExperimentTests(unittest.TestCase):
         self.assertIn("❌ الأربع أسوأ", self.text(datetime(2027, 1, 15, tzinfo=timezone.utc)))
 
 
+class PortfolioTests(unittest.TestCase):
+    """The three §31 portfolios from the paper bots' public files (owner, 2026-11-09)."""
+    def setUp(self):
+        self.td = tempfile.TemporaryDirectory(); self.pub = Path(self.td.name)
+
+    def tearDown(self):
+        self.td.cleanup()
+
+    S = dw.PORTFOLIO_START
+    LATER = S + timedelta(days=12)
+
+    def bot(self, name, margin, trades, positions=(), started=None):
+        """trades: [(opened, days after it the trade closed, pnl)]; positions: [opened]. "started" moves at every
+        restart, so it's set to the last minute here and must not matter."""
+        hist = [{"symbol": "X/USDT", "pnl": p, "opened": o.isoformat(), "time": (o + timedelta(days=d)).isoformat()} for o, d, p in trades]
+        doc = {"started": (started or self.LATER).isoformat(), "margin": margin, "history": hist,
+               "positions": [{"symbol": "X/USDT", "opened": o.isoformat()} for o in positions]}
+        (self.pub / f"{name}.json").write_text(json.dumps(doc), encoding="utf-8")
+
+    def lines(self):
+        return "\n".join(dw.portfolio_lines(self.LATER, public=self.pub))
+
+    def test_each_portfolio_sums_the_trades_opened_from_its_start_at_100_dollars(self):
+        before = self.S - timedelta(days=3)
+        # momentum: an old basket's trade closing after the start is left out; +30 and -10 opened after it count
+        self.bot("momentum", 100, [(before, 1, -50), (before, 5, 40), (self.S + timedelta(hours=1), 2, 30), (self.S + timedelta(days=3), 1, -10)],
+                 positions=[before, self.S + timedelta(days=7)])
+        self.bot("retail_fade", 20, [(self.S + timedelta(days=2), 5, 4), (self.S + timedelta(days=2), 6, -2)],   # $20: x5 -> +20, -10
+                 positions=[self.S + timedelta(days=9)] * 6)
+        self.bot("rsi2_btc", 100, [(self.S + timedelta(days=8), 2, 10)])
+        out = self.lines()
+        self.assertIn("مومنتم + ضد الجمهور: من 2026-11-09 (12 يوم) — 4 صفقة، كسب 50%، صافي $+30", out)   # +30 -10 +20 -10
+        self.assertIn("مفتوح دلوقتي 7 ($700 مارجن)", out)                 # the old basket's open leg is left out
+        self.assertIn("الثلاثة: من 2026-11-09 (12 يوم) — 5 صفقة، كسب 60%، صافي $+40", out)
+
+    def test_a_restart_does_not_empty_the_portfolios(self):
+        for b in ("retail_fade", "rsi2_btc"):
+            self.bot(b, 100, [])
+        self.bot("momentum", 100, [(self.S + timedelta(hours=2), 1, 25)], started=self.LATER - timedelta(minutes=1))
+        self.assertIn("1 صفقة، كسب 100%، صافي $+25", self.lines())
+
+    def test_the_drawdown_is_the_worst_fall_of_the_combined_closed_trades(self):
+        for b in ("retail_fade", "rsi2_btc"):
+            self.bot(b, 100, [])
+        self.bot("momentum", 100, [(self.S, 1, 50), (self.S, 2, -80), (self.S, 3, 20)])
+        self.assertIn("أقصى تراجع $80", self.lines())
+
+    def test_a_missing_bot_is_named_not_guessed(self):
+        self.bot("momentum", 100, [(self.S, 1, 5)])
+        self.assertIn("الثلاثة: ملف ضد الجمهور وRSI-2 + BTC مش موجود", self.lines())
+
+    def test_every_paper_bot_of_the_portfolios_runs_at_100_dollars(self):
+        for u in ("raqm-retail-fade.service", "raqm-momentum.service", "raqm-rsi2-btc.service"):
+            self.assertIn(" --amount 100 ", (ROOT / "deploy" / "vps" / u).read_text(encoding="utf-8"), u)
+
+
 if __name__ == "__main__":
     unittest.main()
