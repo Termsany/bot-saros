@@ -511,7 +511,7 @@ def _limits(d):
 
 def apply(actions, keys, sys_=None, log=print):
     sys_ = sys_ or System()
-    reload, failed = False, set()
+    reload, failed, errors = False, set(), 0
     for a in actions:
         kind, uid = a[0], a[1]
         if uid in failed and kind in ("keys", "limits", "ensure"):
@@ -562,11 +562,22 @@ def apply(actions, keys, sys_=None, log=print):
                 if sys_.read(path) != text:          # the API only (other users can list the folders, not read this)
                     sys_.root_dir(IPC_ROOT / uid); sys_.write(path, text, 0o640, owner="root:raqmapi")
         except Exception as e:                         # one user's failure never stops the others
-            log(f"{kind} {uid}: {type(e).__name__}: {e}")
+            log(f"{kind} {uid}: {why(e)}")
+            errors += 1
             if kind in ("user", "keys", "limits"):
                 failed.add(uid)
     if reload:
         sys_.run("systemctl", "daemon-reload")
+    return errors
+
+
+def why(e, limit=400):
+    """What went wrong, short: a failed command's own error (the last lines it printed), not the command line — that
+    one is long (the whole evidence) and said nothing (2026-11-09: 868 runs failed with only 'exit status 1')."""
+    if isinstance(e, subprocess.CalledProcessError):
+        tail = [l.strip() for l in (e.stderr or e.stdout or "").splitlines() if l.strip()][-3:]
+        return f"{e.cmd[0] if e.cmd else '?'} exit {e.returncode}: {' | '.join(tail)[-limit:] or 'no output'}"
+    return f"{type(e).__name__}: {e}"[:limit]
 
 
 def main(argv=None):
@@ -600,9 +611,12 @@ def main(argv=None):
     if dry:
         for a in actions: print(a[:3])
         return
-    apply(actions, keys, sys_)
+    errors = apply(actions, keys, sys_)
     if live_on:
         write_key_checks({u: c for u, c in checks.items() if u in running})
+    if errors:          # the unit shows failed, so the watchdog alerts (it used to end "Deactivated successfully")
+        print(f"{errors} action(s) failed")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

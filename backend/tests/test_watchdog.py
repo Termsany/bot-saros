@@ -28,6 +28,15 @@ class WatchdogTests(unittest.TestCase):
     def seen(self):
         return wd.problems(NOW, unit=lambda env, s: self.units.get((env, s), (False, False)), ipc=self.ipc, ledgers=self.ledgers)
 
+    def test_a_failing_users_provisioner_is_alerted(self):
+        # 2026-11-09/10: it failed every minute for 15 hours (readiness bound to another commit) and nobody was told
+        kw = dict(unit=lambda env, s: self.units.get((env, s), (False, False)), ipc=self.ipc, ledgers=self.ledgers)
+        out = wd.problems(NOW, failed=lambda name: name == "raqm-users-provision.service", **kw)
+        self.assertIn("provision", out)
+        self.assertIn("journalctl -u raqm-users-provision", out["provision"][0])
+        self.assertGreater(out["provision"][1], 1)          # not one blip: a few checks in a row
+        self.assertNotIn("provision", wd.problems(NOW, failed=lambda name: False, **kw))
+
     def test_a_position_the_bot_didnt_open_on_real_money_is_alerted_at_once_with_what_to_do(self):
         # owner, 2026-11-07: a manual EVAA trade on the real account stopped every entry for hours before the alert
         rm.save_risk_state(self.ledgers["live"] / "risk_state.json", rm._default_state())
