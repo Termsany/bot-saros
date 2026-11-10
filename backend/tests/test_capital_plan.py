@@ -231,6 +231,31 @@ class ApiTests(ApiAuthTests):
         self.assertEqual((demo, live), (1000, None))                                       # the demo plan never reaches real money
         self.assertEqual(self.c.post("/api/live/capital", headers=self.h("admin-token"), json={"env": "demo", "capital_usdt": 0}).json()["plan"], None)
 
+    def test_the_other_accounts_plan_asks_before_saving(self):
+        # 2026-11-03: the real account's $500 / $26 was saved on the Demo tab, and the Demo refused every entry for a day
+        post = lambda env, **kw: self.c.post("/api/live/capital", headers=self.h("admin-token"), json={"env": env, **kw})
+        self.assertEqual(post("live", capital_usdt=500, capital_margin_override_usdt=26).status_code, 200)
+        r = post("demo", capital_usdt=500, capital_margin_override_usdt=26)
+        self.assertEqual(r.status_code, 409)
+        self.assertIn("الحساب الحقيقي", r.json()["detail"])
+        demo = Path(self.tmp.name) / "demo" / "risk_state.json"
+        self.assertIsNone(rm.load_risk_state(demo)["limits"].get("capital_usdt"))             # nothing saved
+        self.assertEqual(post("demo", capital_usdt=500, capital_margin_override_usdt=26, confirm=True).status_code, 200)
+        self.assertEqual(rm.load_risk_state(demo)["limits"]["capital_usdt"], 500)
+        self.assertEqual(post("demo", capital_usdt=5000, capital_margin_override_usdt=40).status_code, 200)   # different: no question
+
+    def test_a_real_capital_far_above_the_balance_asks_before_saving(self):
+        live = Path(self.tmp.name) / "live" / "risk_state.json"
+        rm.update_limits(live, {})
+        rm._mutate_meta(live, lambda s: s.__setitem__("equity_last", 500.0))
+        post = lambda **kw: self.c.post("/api/live/capital", headers=self.h("admin-token"), json={"env": "live", **kw})
+        r = post(capital_usdt=5000, capital_margin_override_usdt=40)
+        self.assertEqual(r.status_code, 409)
+        self.assertIn("ضعف رصيد", r.json()["detail"])
+        self.assertEqual(post(capital_usdt=1000, capital_margin_override_usdt=26).status_code, 200)          # up to twice: fine
+        self.assertEqual(post(capital_usdt=5000, capital_margin_override_usdt=40, confirm=True).status_code, 200)
+        self.assertEqual(self.c.post("/api/live/capital", headers=self.h("admin-token"), json={"env": "demo", "capital_usdt": 50000}).status_code, 200)   # the Demo: no balance rule
+
 
 if __name__ == "__main__":
     unittest.main()

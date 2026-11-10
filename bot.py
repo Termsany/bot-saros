@@ -13,6 +13,10 @@ from backend.app.execution_safety import AmbiguousFill, authoritative_position_s
 from backend.app import risk_manager as riskmgr
 from backend.app.multi_leg_execution import MultiLegExecutionEngine
 from backend.app import live_activation
+import sys
+# `python bot.py` runs this file as __main__ while the strategies in bots/ `import bot`: both names must be this one
+# module, or they would load a second copy with its own CONFIG, state paths and entry block
+if __name__ == "__main__": sys.modules["bot"] = sys.modules[__name__]
 
 try:
     from dotenv import load_dotenv; load_dotenv()
@@ -151,9 +155,27 @@ def _fetch_equity_usdt(ex):
         return None
 
 
+_TRANSFERS = {"rows": None}   # the account's transfers, read by _equity_now just before the balance
+
+
+def _transfers_recent(ex, days=3):
+    """[(epoch ms, usdt)] of the futures wallet's transfers in and out (Binance income TRANSFER) of the last `days`,
+    or None when they can't be read (the risk ledger then leaves its figures as they were). Read only."""
+    if CONFIG.get("paper_trading") or not hasattr(ex, "fapiPrivateGetIncome"):
+        return None
+    try:
+        since = int((time.time() - days * 86400) * 1000)
+        rows = ex.fapiPrivateGetIncome({"incomeType": "TRANSFER", "startTime": since, "limit": 1000}) or []
+        return [(int(r["time"]), float(r["income"])) for r in rows if str(r.get("asset") or "USDT") == "USDT"]
+    except Exception as e:
+        log(f"⚠️ التحويلات مش متاحة من Binance: {type(e).__name__}"); return None
+
+
 def _equity_now(ex):
     """Equity and the instant it was observed, as one pair. The central risk gate refuses a figure with no
-    timestamp (freshness is a real gate, not a formality), so every live entry/equity check must carry both."""
+    timestamp (freshness is a real gate, not a formality), so every live entry/equity check must carry both.
+    The transfers are read first (_TRANSFERS): a transfer already in the balance is then in the list too."""
+    _TRANSFERS["rows"] = _transfers_recent(ex)
     return _fetch_equity_usdt(ex), datetime.now(timezone.utc).isoformat()
 
 def _estimate_trade_risk_usdt(margin_usdt, leverage, entry_price, sl_price):
@@ -169,14 +191,44 @@ def _estimate_trade_risk_usdt(margin_usdt, leverage, entry_price, sl_price):
     except (TypeError, ValueError):
         return None
 
+KEYS_CREDENTIAL = "binance"   # a user's bot (docs/phase2-design.md): systemd LoadCredential=binance:/etc/raqm-users/<uid>/binance
+
+def _binance_keys():
+    """(api key, secret). A service given a credential directory (a user's bot) reads its keys from the credential
+    only — BINANCE_API_KEY=... and BINANCE_SECRET=... lines — and never falls back to the environment, so it can't
+    trade on keys it was not given. Without one (the owner's bots): the environment, as before."""
+    cred = os.getenv("CREDENTIALS_DIRECTORY", "").strip()
+    if not cred:
+        return os.getenv("BINANCE_API_KEY", "").strip(), os.getenv("BINANCE_SECRET", "").strip()
+    vals = {}
+    try:
+        for line in (Path(cred) / KEYS_CREDENTIAL).read_text(encoding="utf-8").splitlines():
+            k, sep, v = line.partition("=")
+            if sep and k.strip() in ("BINANCE_API_KEY", "BINANCE_SECRET"): vals[k.strip()] = v.strip().strip('"').strip("'")
+    except OSError:
+        return "", ""
+    return vals.get("BINANCE_API_KEY", ""), vals.get("BINANCE_SECRET", "")
+
+# An Ed25519 private key as one env line: base64 of its PKCS#8 DER (always this 16-character start, 64 characters).
+# Binance's "self-generated" keys: the private key is made on the server and never shown to anyone, the site only
+# gets the public key (2026-11-03: the Demo site stopped showing HMAC secrets).
+ED25519_DER_B64_PREFIX = "MC4CAQAwBQYDK2Vw"
+
+def _secret_for_ccxt(secret):
+    """The secret as ccxt wants it: HMAC as is; an Ed25519 key as PEM without a trailing newline — ccxt signs with
+    EdDSA only when the PEM is at most 120 characters (longer means RSA), and this one is exactly 120."""
+    if secret.startswith(ED25519_DER_B64_PREFIX) and len(secret) == 64:
+        return f"-----BEGIN PRIVATE KEY-----\n{secret}\n-----END PRIVATE KEY-----"
+    return secret
+
 def get_exchange(auth=False):
     mtype = "future" if CONFIG.get("market","future")=="future" else "spot"
     # ccxt: defaultType future = USDT-M perpetual
     kwargs = {"enableRateLimit": True, "options": {"defaultType": mtype}}
     if auth:
-        ak = os.getenv("BINANCE_API_KEY","").strip(); sc = os.getenv("BINANCE_SECRET","").strip()
+        ak, sc = _binance_keys()
         if not ak or not sc: return None, "ضع مفاتيح Binance في .env"
-        kwargs["apiKey"]=ak; kwargs["secret"]=sc
+        kwargs["apiKey"]=ak; kwargs["secret"]=_secret_for_ccxt(sc)
         ex = ccxt.binanceusdm(kwargs) if mtype == "future" else ccxt.binance(kwargs)
         # BINANCE_ENV=demo: Binance Demo Trading (fake money, real exchange behaviour) — keys made in demo mode on binance.com
         env = binance_env()
@@ -278,6 +330,7 @@ def notify(text):
     connection waits out the IPv6 attempt first) never holds up the trading cycle."""
     tok, chat = os.getenv("TELEGRAM_BOT_TOKEN", ""), os.getenv("TELEGRAM_CHAT_ID", "")
     if not (CONFIG.get("notify") and tok and chat): return
+    if CONFIG.get("label"): text = f"[{CONFIG['label']}] {text}"     # a second bot of the same strategy says which
     _tg_put((tok, chat, text))
 
 def _tg_put(item):
@@ -295,7 +348,7 @@ def notify_trade(h):
     try:
         import trade_card
         env = "paper" if CONFIG.get("paper_trading") else ("live" if binance_env() == "live" else "demo")
-        card = trade_card.build(h, strategy=_current_strategy_name(), env=env, leverage=CONFIG.get("leverage", 2))
+        card = trade_card.build(h, strategy=CONFIG.get("label") or _current_strategy_name(), env=env, leverage=CONFIG.get("leverage", 2))
     except Exception as e:
         log(f"trade card: {e}")
         notify(f"🔒 قفل {h.get('symbol')} — {h.get('reason', '')}\nPnL {float(h.get('pnl') or 0):+.2f}$"); return
@@ -354,13 +407,6 @@ def write_public_status(state, analyses, symbols_allowed):
         tmp.replace(d / "status.json")   # atomic: the page never reads half a file
     except Exception as e: log(f"public status: {e}")
 
-LISTING = {"skip_days": 30, "hold_days": 90, "stop": 0.40, "max_open": 10, "catch_up_days": 3}
-
-def listing_mode():
-    """Paper short of new Binance USDT-M listings 30 days after listing, held 90 days, stop 40% above entry,
-    at most 10 at once — research/short_study.py idea 2 (README "Short side")."""
-    return "listing_short" in (CONFIG.get("enabled_strategies") or [])
-
 def listing_markets(ex):
     """[(symbol, listed_ms, age_days)] for Binance crypto USDT perpetuals (no TradFi, no stablecoins)."""
     ex.load_markets(); now = time.time() * 1000; out = []
@@ -372,136 +418,8 @@ def listing_markets(ex):
         if listed: out.append((sym, listed, (now - listed) / 86_400_000))
     return out
 
-def _listing_close(ex, state, sym, price, reason):
-    pos = state["positions"].pop(sym); q = pos["qty"]; fee = 0.0004
-    funding = 0.0
-    try:   # shorts receive positive funding and pay negative funding
-        since = int(datetime.fromisoformat(pos["time"]).timestamp() * 1000)
-        funding = sum(float(r["fundingRate"]) for r in ex.fetch_funding_rate_history(sym, since=since, limit=1000)) * q * pos["entry"]
-    except Exception as e: log(f"funding {sym}: {e}")
-    pnl = (pos["entry"] - price) * q - (pos["entry"] * q + price * q) * fee + funding
-    margin = pos["entry"] * q / max(1, int(pos.get("leverage", 2)))
-    state["history"].append({"symbol": sym, "side": "short", "entry": pos["entry"], "exit": price, "qty": q, "pnl": pnl, "opened": pos["time"],
-                             "pnl_pct": pnl / margin * 100 if margin else 0, "funding": funding, "reason": reason,
-                             "time": datetime.now(timezone.utc).isoformat(), "type": "paper"})
-    st = state["stats"]; st["trades"] += 1; st["pnl"] += pnl; st["wins" if pnl > 0 else "losses"] += 1
-    save_state(state)
-    log(f"🔒 قفل شورت {sym} — {reason} @ {price:.6g} PnL {pnl:+.4f} (funding {funding:+.4f})")
-    return pnl
-
-def run_once_listing(ex):
-    L = LISTING; state = load_state(); now = datetime.now(timezone.utc)
-    if not CONFIG["paper_trading"]:
-        # a block (recovery, kill switch, unknown position) stops entries only — the live adapters refuse them. The
-        # strategy's own exits still run: returning here left open positions without their signal exits
-        reconcile_live(state, ex)
-        if _ENTRY_BLOCK.get("reason"): log(f"⛔ دخول جديد متوقف، الخروج شغّال — {_ENTRY_BLOCK['reason']}")
-        process_manual_closes(state, ex, {})   # the site's close button (it waited unanswered for the basket bots)
-    process_paper_closes(state, ex, "listing")
-    done = state.setdefault("listing_done", {})
-    mk = listing_markets(ex); prices = {}
-    # open shorts: protective stop and the 90-day exit
-    for sym, pos in list(state["positions"].items()):
-        try:
-            price = float(ex.fetch_ticker(sym)["last"]); prices[sym] = price
-            reason = f"وقف {pos['sl']:.6g}" if price >= pos["sl"] else f"خلصت {L['hold_days']} يوم" if now >= datetime.fromisoformat(pos["exit_at"]) else None
-            if reason:
-                if CONFIG["paper_trading"]:
-                    _listing_close(ex, state, sym, price, reason)
-                else:
-                    leg = {"symbol": sym, "side": "close_short", "action": "exit", "position": pos, "price": price, "order": 0,
-                           "risk_usdt": 0, "notional_usdt": 0, "correlation_group": _correlation_group(sym)}
-                    _phase2_live_basket(ex, state, "listing_short", f"listing-exit:{sym}", [leg], reserve=False)   # booked with its PnL
-        except Exception as e: log(f"شورت {sym}: {e}")
-    # new entries: coins that just turned 30 days old (a few days of slack if the bot was down), oldest listing first;
-    # like the backtest, a coin that comes up while all 10 slots are taken is skipped for good
-    due = sorted([x for x in mk if L["skip_days"] <= x[2] < L["skip_days"] + L["catch_up_days"] and x[0] not in done], key=lambda x: x[1])
-    if not CONFIG["paper_trading"] and (_ENTRY_BLOCK.get("reason") or state.get("recovery_required")): due = []   # retried when unblocked
-    for sym, listed, age in due:
-        if CONFIG["paper_trading"]: done[sym] = now.isoformat()   # live: only once the entry filled (below)
-        if _strategy_full(state, L["max_open"]):
-            done[sym] = now.isoformat()
-            log(f"⏸️ {sym} عدّى {L['skip_days']} يوم بس الـ {L['max_open']} أماكن مليانة — اتساب زي الباك تست"); continue
-        if not CONFIG["paper_trading"]:
-            try:
-                price = float(ex.fetch_ticker(sym)["last"]); prices[sym] = price
-            except Exception as e:
-                log(f"شورت {sym}: {e}"); continue
-            leg = _phase2_leg(sym, "short", position_size(price), price, price * (1 + L["stop"]), None, "listing_short",
-                               extra={"listed": datetime.fromtimestamp(listed / 1000, timezone.utc).isoformat(), "exit_at": (now + pd.Timedelta(days=L["hold_days"])).isoformat()})
-            result = _phase2_live_basket(ex, state, "listing_short", f"listing-entry:{sym}", [leg])
-            if result and result.get("status") == "filled": done[sym] = now.isoformat()
-            continue
-
-        try:
-            price = float(ex.fetch_ticker(sym)["last"]); prices[sym] = price
-            lev = int(CONFIG.get("leverage", 2)); q = position_size(price) * lev / price
-            state["positions"][sym] = {"side": "short", "entry": price, "qty": q, "leverage": lev, "time": now.isoformat(),
-                "sl": price * (1 + L["stop"]), "tp": None, "listed": datetime.fromtimestamp(listed / 1000, timezone.utc).isoformat(),
-                "exit_at": (now + pd.Timedelta(days=L["hold_days"])).isoformat()}
-            log(f"✅ 🔴 شورت وهمي {sym} (اتدرجت من {age:.0f} يوم) @ {price:.6g} وقف {price * (1 + L['stop']):.6g}")
-            notify(f"🔴 شورت {sym.split(':')[0]} — عملة جديدة (اتدرجت من {age:.0f} يوم) · Paper\nدخول {price:.6g} · x{lev} · هامش ${position_size(price):.0f}\nوقف {price * (1 + L['stop']):.6g} · خروج بعد {L['hold_days']} يوم")
-        except Exception as e: log(f"شورت {sym}: {e}")
-    save_state(state)
-    for sym in state["positions"]:
-        if sym not in prices:
-            try: prices[sym] = float(ex.fetch_ticker(sym)["last"])
-            except Exception: pass
-    upcoming = sorted([x for x in mk if x[2] < L["skip_days"]], key=lambda x: -x[2])
-    write_listing_status(state, prices, upcoming)
-    log(f"📊 شورت مفتوح: {len(state['positions'])}/{L['max_open']} | PnL محقق {state['stats']['pnl']:+.4f} | جاي: {len(upcoming)} عملة")
-
 def _r4(x):
     return round(float(x), 4) if x is not None else None
-
-def write_listing_status(state, prices, upcoming):
-    out_dir = CONFIG.get("public_dir")
-    if not out_dir: return
-    pos = []
-    for sym, p in state["positions"].items():
-        price = prices.get(sym, p["entry"]); pnl = (p["entry"] - price) * p["qty"]
-        margin = p["entry"] * p["qty"] / max(1, int(p.get("leverage", 2)))
-        pos.append({"symbol": sym.split(":")[0], "id": sym.split("/")[0] + "USDT", "side": "short", "entry": p["entry"], "price": price,
-                    "qty": p["qty"], "margin": round(margin, 2), "sl": p["sl"], "pnl": round(pnl, 4),
-                    "pnl_pct": round(pnl / margin * 100, 2) if margin else 0, "opened": p["time"], "exit_at": p["exit_at"]})
-    st = state.get("stats", {})
-    data = {"updated": datetime.now(timezone.utc).isoformat(), "mode": "paper" if CONFIG["paper_trading"] else "live",
-            "rules": LISTING, "leverage": int(CONFIG.get("leverage", 2)), "margin": CONFIG.get("trade_amount_usdt"),
-            "started": CONFIG.get("started_at"),
-            "stats": {"closed": st.get("trades", 0), "wins": st.get("wins", 0), "losses": st.get("losses", 0),
-                      "realized": round(float(st.get("pnl", 0)), 4), "unrealized": round(sum(x["pnl"] for x in pos), 4), "open": len(pos)},
-            "positions": sorted(pos, key=lambda x: x["opened"]),
-            "upcoming": [{"symbol": s.split(":")[0], "days_left": round(LISTING["skip_days"] - age, 1)} for s, _, age in upcoming[:12]],
-            "history": [{"symbol": h["symbol"].split(":")[0], "entry": h["entry"], "exit": h["exit"], "pnl": _r4(h.get("pnl")),
-                         "reason": h.get("reason", ""), "time": h.get("time"), "opened": h.get("opened")} for h in state.get("history", [])[-200:]][::-1]}
-    try:
-        d = Path(out_dir); tmp = d / "listing.json.tmp"
-        tmp.write_text(json.dumps(data, ensure_ascii=False, default=str), encoding="utf-8"); tmp.replace(d / "listing.json")
-    except Exception as e: log(f"public listing status: {e}")
-
-MOM = {"weeks": 2, "top": 50, "n": 5, "min_days": 60, "stop": 0.40, "every_days": 7}
-
-def momentum_mode():
-    """Paper cross-sectional momentum on Binance: every 7 days rank the top 50 USDT perpetuals by 30-day volume on
-    their last 2 weeks' return, long the strongest 5 and short the weakest 5 for a week, stop 40% —
-    research/pump_momentum_study.py idea 2 (Liu, Tsyvinski & Wu 2022)."""
-    return "momentum_ls" in (CONFIG.get("enabled_strategies") or [])
-
-def momentum_rank(ex):
-    """[(symbol, return over MOM weeks)] weakest first, among the top MOM["top"] by 30-day average USDT volume
-    (crypto perpetuals with >= min_days closed daily candles)."""
-    syms = [s for s, _, _ in listing_markets(ex)]
-    tick = ex.fetch_tickers()
-    cands = sorted(syms, key=lambda s: -float((tick.get(s) or {}).get("quoteVolume") or 0))[:MOM["top"] * 3]
-    rows = []
-    for sym in cands:
-        try:
-            k = ex.fetch_ohlcv(sym, "1d", limit=70)[:-1]          # closed candles only
-            if len(k) < MOM["min_days"]: continue
-            rows.append((sum(r[4] * r[5] for r in k[-30:]) / 30, sym, k[-1][4] / k[-1 - 7 * MOM["weeks"]][4] - 1))
-        except Exception as e: log(f"momentum {sym}: {e}")
-    top = sorted(rows, reverse=True)[:MOM["top"]]
-    return [(sym, ret) for _, sym, ret in sorted(top, key=lambda r: r[2])]
 
 def _paper_close(ex, state, sym, price, reason):
     """Close a paper position with fees and the real funding paid/received since entry (longs pay positive funding)."""
@@ -519,304 +437,6 @@ def _paper_close(ex, state, sym, price, reason):
                              "time": datetime.now(timezone.utc).isoformat(), "type": "paper"})
     st = state["stats"]; st["trades"] += 1; st["pnl"] += pnl; st["wins" if pnl > 0 else "losses"] += 1
     return pnl
-
-def run_once_momentum(ex):
-    M = MOM; state = load_state(); now = datetime.now(timezone.utc); prices = {}
-    if not CONFIG["paper_trading"]:
-        # a block (recovery, kill switch, unknown position) stops entries only — the live adapters refuse them. The
-        # strategy's own exits still run: returning here left open positions without their signal exits
-        reconcile_live(state, ex)
-        if _ENTRY_BLOCK.get("reason"): log(f"⛔ دخول جديد متوقف، الخروج شغّال — {_ENTRY_BLOCK['reason']}")
-        process_manual_closes(state, ex, {})   # the site's close button (it waited unanswered for the basket bots)
-    process_paper_closes(state, ex, "momentum")
-    # protective stops during the week (paper; live, the stop order is on the exchange and reconcile_live books its fill —
-    # _paper_close here dropped the live position from the books without closing it on the exchange)
-    for sym, pos in (list(state["positions"].items()) if CONFIG["paper_trading"] else []):
-        try:
-            price = float(ex.fetch_ticker(sym)["last"]); prices[sym] = price
-            hit = price >= pos["sl"] if pos["side"] == "short" else price <= pos["sl"]
-            if hit:
-                pnl = _paper_close(ex, state, sym, price, f"وقف {pos['sl']:.6g}"); save_state(state)
-                log(f"🔒 وقف {pos['side']} {sym} @ {price:.6g} PnL {pnl:+.4f}")
-        except Exception as e: log(f"مومنتم {sym}: {e}")
-    # weekly rebalance, at the first cycle after the daily close (00:00 UTC) once 7 days have passed
-    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    last = state.get("mom_last")
-    if last is None or today - datetime.fromisoformat(last) >= pd.Timedelta(days=M["every_days"]):
-        ranked = momentum_rank(ex)
-        if len(ranked) >= 20:
-            closed = 0.0
-            lev = int(CONFIG.get("leverage", 2)); picks = [(s, r, "short") for s, r in ranked[:M["n"]]] + [(s, r, "long") for s, r in ranked[-M["n"]:]]
-            if not CONFIG["paper_trading"]:
-                exits = []
-                for sym in sorted(state["positions"]):
-                    px = float(ex.fetch_ticker(sym)["last"]); pos = state["positions"][sym]
-                    exits.append({"symbol": sym, "side": "close_" + pos["side"], "action": "exit", "position": pos, "price": px, "order": 0,
-                                  "risk_usdt": 0, "notional_usdt": 0, "correlation_group": _correlation_group(sym)})
-                if exits:
-                    closed_result = _phase2_live_basket(ex, state, "momentum_ls", "momentum-rebalance-exit", exits, reserve=False)
-                    if not closed_result or closed_result.get("status") != "filled":
-                        save_state(state); return
-                entries = []
-                for sym, ret, side in picks:
-                    px = float(ex.fetch_ticker(sym)["last"]); prices[sym] = px
-                    stop = px * (1 + M["stop"]) if side == "short" else px * (1 - M["stop"])
-                    entries.append(_phase2_leg(sym, side, position_size(px), px, stop, None, "momentum_ls", extra={"ret": ret}))
-                result = _phase2_live_basket(ex, state, "momentum_ls", "momentum-rebalance-entry", entries)
-                if result and result.get("status") == "filled":
-                    state["mom_last"] = today.isoformat(); state["mom_ranking"] = [{"symbol": s.split(":")[0], "ret": round(r * 100, 1)} for s, r in ranked]; save_state(state)
-                return
-            for sym in list(state["positions"]):
-                try:
-                    price = float(ex.fetch_ticker(sym)["last"]); closed += _paper_close(ex, state, sym, price, "تبديل أسبوعي")
-                except Exception as e: log(f"قفل {sym}: {e}")
-            for sym, ret, side in picks:
-                try:
-                    price = float(ex.fetch_ticker(sym)["last"]); prices[sym] = price; q = position_size(price) * lev / price
-                    sl = price * (1 + M["stop"]) if side == "short" else price * (1 - M["stop"])
-                    state["positions"][sym] = {"side": side, "entry": price, "qty": q, "leverage": lev, "time": now.isoformat(),
-                                               "sl": sl, "tp": None, "ret": ret}
-                except Exception as e: log(f"فتح {sym}: {e}")
-            state["mom_last"] = today.isoformat()
-            state["mom_ranking"] = [{"symbol": s.split(":")[0], "ret": round(r * 100, 1)} for s, r in ranked]
-            save_state(state)
-            longs = ", ".join(f"{s.split('/')[0]} {r * 100:+.0f}%" for s, r, sd in picks if sd == "long")
-            shorts = ", ".join(f"{s.split('/')[0]} {r * 100:+.0f}%" for s, r, sd in picks if sd == "short")
-            log(f"🔄 مومنتم: تبديل أسبوعي — قفل {closed:+.4f} | لونج: {longs} | شورت: {shorts}")
-            notify(f"🔄 مومنتم — تبديل أسبوعي (Paper)\nالأسبوع اللي فات: {closed:+.2f}$\n🟢 لونج الأقوى: {longs}\n🔴 شورت الأضعف: {shorts}")
-        else: log(f"مومنتم: {len(ranked)} عملة بس في القائمة — مفيش تبديل")
-    for sym in state["positions"]:
-        if sym not in prices:
-            try: prices[sym] = float(ex.fetch_ticker(sym)["last"])
-            except Exception: pass
-    write_momentum_status(state, prices)
-    log(f"📊 مومنتم: {len(state['positions'])} مفتوحة | PnL محقق {state['stats']['pnl']:+.4f}")
-
-def write_momentum_status(state, prices):
-    out_dir = CONFIG.get("public_dir")
-    if not out_dir: return
-    pos = []
-    for sym, p in state["positions"].items():
-        price = prices.get(sym, p["entry"]); sg = 1 if p["side"] == "long" else -1
-        pnl = sg * (price - p["entry"]) * p["qty"]; margin = p["entry"] * p["qty"] / max(1, int(p.get("leverage", 2)))
-        pos.append({"symbol": sym.split(":")[0], "id": sym.split("/")[0] + "USDT", "side": p["side"], "entry": p["entry"], "price": price,
-                    "qty": p["qty"], "margin": round(margin, 2), "sl": p["sl"], "pnl": round(pnl, 4),
-                    "pnl_pct": round(pnl / margin * 100, 2) if margin else 0, "ret": round(p.get("ret", 0) * 100, 1), "opened": p["time"]})
-    st = state.get("stats", {}); last = state.get("mom_last")
-    data = {"updated": datetime.now(timezone.utc).isoformat(), "mode": "paper" if CONFIG["paper_trading"] else "live", "rules": MOM,
-            "leverage": int(CONFIG.get("leverage", 2)), "margin": CONFIG.get("trade_amount_usdt"), "started": CONFIG.get("started_at"),
-            "last_rebalance": last, "next_rebalance": (datetime.fromisoformat(last) + pd.Timedelta(days=MOM["every_days"])).isoformat() if last else None,
-            "stats": {"closed": st.get("trades", 0), "wins": st.get("wins", 0), "losses": st.get("losses", 0),
-                      "realized": round(float(st.get("pnl", 0)), 4), "unrealized": round(sum(x["pnl"] for x in pos), 4), "open": len(pos)},
-            "positions": sorted(pos, key=lambda x: (x["side"], -x["ret"])),
-            "history": [{"symbol": h["symbol"].split(":")[0], "side": h.get("side"), "entry": h["entry"], "exit": h["exit"], "pnl": _r4(h.get("pnl")),
-                         "reason": h.get("reason", ""), "time": h.get("time"), "opened": h.get("opened"), "ret": h.get("ret")}
-                        for h in state.get("history", [])[-300:]][::-1]}
-    try:
-        d = Path(out_dir); tmp = d / "momentum.json.tmp"
-        tmp.write_text(json.dumps(data, ensure_ascii=False, default=str), encoding="utf-8"); tmp.replace(d / "momentum.json")
-    except Exception as e: log(f"public momentum status: {e}")
-
-RATIO = {"top": 7, "sma": 50, "min_days": 120, "every_days": 7}
-
-def ratio_mode():
-    """HIGH RISK paper experiment: ratio trend on every pair among the top 7 Binance crypto perpetuals by 30-day volume
-    (membership refreshed weekly): ratio above its 50-day average -> long the first coin / short the second, below ->
-    the reverse; a pair closes when a coin leaves the list. research/ratio_fairness.py (fair version: Sharpe 0.77 after
-    2024, max drawdown 795 on $20 x2 legs — it lowered the three bots' combined result, run only to watch it)."""
-    return "ratio_trend" in (CONFIG.get("enabled_strategies") or [])
-
-def _daily_closed(ex, sym, cache):
-    if sym not in cache: cache[sym] = ex.fetch_ohlcv(sym, "1d", limit=200)[:-1]   # closed candles only
-    return cache[sym]
-
-_ratio_rank = {}
-
-def ratio_members(ex, cache):
-    syms = [x for x, _, _ in listing_markets(ex)]
-    tick = ex.fetch_tickers()
-    cands = sorted(syms, key=lambda x: -float((tick.get(x) or {}).get("quoteVolume") or 0))[:RATIO["top"] * 3]
-    rows = []
-    for sym in cands:
-        try:
-            k = _daily_closed(ex, sym, cache)
-            if len(k) >= RATIO["min_days"]: rows.append((sum(r[4] * r[5] for r in k[-30:]) / 30, sym))
-        except Exception as e: log(f"ratio {sym}: {e}")
-    top = [sym for _, sym in sorted(rows, reverse=True)[:RATIO["top"]]]
-    _ratio_rank.clear(); _ratio_rank.update({sym: i + 1 for i, sym in enumerate(top)})      # 1 = most volume
-    return sorted(top)
-
-def ratio_signal(ex, a, b, cache):
-    ka, kb = {r[0]: r[4] for r in _daily_closed(ex, a, cache)}, {r[0]: r[4] for r in _daily_closed(ex, b, cache)}
-    ts = sorted(set(ka) & set(kb))
-    if len(ts) < RATIO["sma"] + 1: return 0
-    r = [ka[t] / kb[t] for t in ts]
-    return 1 if r[-1] > sum(r[-RATIO["sma"]:]) / RATIO["sma"] else -1
-
-def _ratio_close_pair(ex, state, key, prices, reason, fcache):
-    pr = state["pairs"].pop(key); pnl = 0.0; fee = 0.0004
-    for leg in pr["legs"]:
-        sym, sg, e, q = leg["sym"], (1 if leg["side"] == "long" else -1), leg["entry"], leg["qty"]
-        x = prices.get(sym) or float(ex.fetch_ticker(sym)["last"]); prices[sym] = x
-        since = int(datetime.fromisoformat(pr["time"]).timestamp() * 1000)
-        if (sym, since) not in fcache:
-            try: fcache[(sym, since)] = sum(float(r["fundingRate"]) for r in ex.fetch_funding_rate_history(sym, since=since, limit=1000))
-            except Exception as err: log(f"funding {sym}: {err}"); fcache[(sym, since)] = 0.0
-        pnl += sg * (x - e) * q - (e * q + x * q) * fee - sg * fcache[(sym, since)] * q * e
-    st = state["stats"]; st["trades"] += 1; st["pnl"] += pnl; st["wins" if pnl > 0 else "losses"] += 1
-    state["history"].append({"symbol": key, "long": pr["legs"][0]["sym"], "short": pr["legs"][1]["sym"], "pnl": pnl, "reason": reason, "ranks": pr.get("ranks"),
-                             "opened": pr["time"], "time": datetime.now(timezone.utc).isoformat(), "type": "paper"})
-    return pnl
-
-def run_once_ratio(ex):
-    R = RATIO; state = load_state(); state.setdefault("pairs", {}); now = datetime.now(timezone.utc)
-    if not CONFIG["paper_trading"]:
-        # a block (recovery, kill switch, unknown position) stops entries only — the live adapters refuse them. The
-        # strategy's own exits still run: returning here left open positions without their signal exits
-        reconcile_live(state, ex)
-        if _ENTRY_BLOCK.get("reason"): log(f"⛔ دخول جديد متوقف، الخروج شغّال — {_ENTRY_BLOCK['reason']}")
-        process_manual_closes(state, ex, {})   # the site's close button (it waited unanswered for the basket bots)
-    process_paper_closes(state, ex, "ratio")
-    # every cycle: a leg the exchange closed (its stop, or by hand) leaves the other one unhedged until handled
-    if not CONFIG["paper_trading"]:
-        # reconcile_live books a leg the exchange closed but leaves the pair: the other leg is then an unhedged
-        # position the strategy no longer manages, and the pair's next exit failed for good on the missing leg
-        for key, pair in list(state["pairs"].items()):
-            held = [leg for leg in pair["legs"] if leg["sym"] in state["positions"]]
-            if len(held) == len(pair["legs"]): continue
-            if held:
-                out = [{"symbol": leg["sym"], "side": "close_" + leg["side"], "action": "exit", "position": state["positions"][leg["sym"]],
-                        "price": float(ex.fetch_ticker(leg["sym"])["last"]), "order": i, "risk_usdt": 0, "notional_usdt": 0,
-                        "correlation_group": _correlation_group(leg["sym"])} for i, leg in enumerate(held)]
-                result = _phase2_live_basket(ex, state, "ratio_trend", f"ratio-orphan-exit:{key}", out, reserve=False)
-                if not result or result.get("status") != "filled": continue
-                notify(f"⚠️ ratio {key}: رجل اتقفلت على المنصة — الرجل التانية اتقفلت كمان")
-            state["pairs"].pop(key, None)
-        save_state(state)
-    today = now.replace(hour=0, minute=0, second=0, microsecond=0); prices = {}
-    if state.get("ratio_day") != today.isoformat():          # once a day, right after the daily close
-        cache, fcache = {}, {}
-        last = state.get("ratio_members_at")
-        if last is None or today - datetime.fromisoformat(last) >= pd.Timedelta(days=R["every_days"]):
-            members = ratio_members(ex, cache)
-            if len(members) == R["top"]:
-                state["ratio_members"], state["ratio_members_at"] = members, today.isoformat()
-                state["ratio_rank"] = dict(_ratio_rank)
-                log(f"🔝 ratio: أعلى {R['top']}: {', '.join(m.split('/')[0] for m in members)}")
-        members = state.get("ratio_members") or []
-        wanted = {f"{a}|{b}" for i, a in enumerate(members) for b in members[i + 1:]}
-        closed = 0.0; flips = 0
-        for key in list(state["pairs"]):
-            if CONFIG["paper_trading"] and key not in wanted: closed += _ratio_close_pair(ex, state, key, prices, "عملة خرجت من القائمة", fcache)
-        if not CONFIG["paper_trading"]:
-            # Live pairs are always opened and closed through one durable basket intent.
-            exits = []
-            for key, pair in list(state["pairs"].items()):
-                if key not in wanted:
-                    for leg in pair["legs"]:
-                        if leg["sym"] not in state["positions"]: continue   # already closed and booked
-                        exits.append({"symbol": leg["sym"], "side": "close_" + leg["side"], "action": "exit", "position": state["positions"][leg["sym"]],
-                                      "price": float(ex.fetch_ticker(leg["sym"])["last"]), "order": len(exits), "risk_usdt": 0, "notional_usdt": 0,
-                                      "correlation_group": _correlation_group(leg["sym"])})
-            if exits:
-                result = _phase2_live_basket(ex, state, "ratio_trend", "ratio-rebalance-exit", exits, reserve=False)
-                if result and result.get("status") == "held":
-                    # a leg under review stays open: its pair stays on the books, the others are done and the flips
-                    # below still run (returning here froze every pair's exits until a person cleared the mark)
-                    for key in list(state["pairs"]):
-                        if key not in wanted and not any(l["sym"] in state["positions"] for l in state["pairs"][key]["legs"]):
-                            state["pairs"].pop(key, None)
-                elif not result or result.get("status") != "filled":
-                    save_state(state); return
-                else:
-                    for key in list(state["pairs"]):
-                        if key not in wanted: state["pairs"].pop(key, None)
-            for key in sorted(wanted):
-                a, b = key.split("|")
-                try: sig = ratio_signal(ex, a, b, cache)
-                except Exception as e: log(f"ratio {key}: {e}"); continue
-                cur = state["pairs"].get(key)
-                if not sig or (cur and cur["sign"] == sig): continue
-                if cur:
-                    legs_out = []
-                    for leg in cur["legs"]:
-                        if leg["sym"] not in state["positions"]: continue   # already closed and booked
-                        legs_out.append({"symbol": leg["sym"], "side": "close_" + leg["side"], "action": "exit", "position": state["positions"][leg["sym"]],
-                                         "price": float(ex.fetch_ticker(leg["sym"])["last"]), "order": len(legs_out), "risk_usdt": 0, "notional_usdt": 0,
-                                         "correlation_group": _correlation_group(leg["sym"])})
-                    result = _phase2_live_basket(ex, state, "ratio_trend", f"ratio-flip-exit:{key}", legs_out, reserve=False)
-                    if result and result.get("status") == "held": continue   # this pair waits for its review; the others go on
-                    if not result or result.get("status") != "filled": save_state(state); return
-                    state["pairs"].pop(key, None)
-                ordered = ((a, "long"), (b, "short")) if sig == 1 else ((b, "long"), (a, "short"))
-                new_legs = []
-                for i, (sym, side) in enumerate(ordered):
-                    px = float(ex.fetch_ticker(sym)["last"]); prices[sym] = px
-                    new_legs.append(_phase2_leg(sym, side, position_size(px), px, px * (1 - 0.40) if side == "long" else px * (1 + 0.40), None, "ratio_trend", i))
-                result = _phase2_live_basket(ex, state, "ratio_trend", f"ratio-entry:{key}", new_legs)
-                if not result or result.get("status") != "filled": continue
-                state["pairs"][key] = {"sign": sig, "time": now.isoformat(), "legs": [{"sym": l["symbol"], "side": l["side"], "entry": state["positions"][l["symbol"]]["entry"], "qty": state["positions"][l["symbol"]]["qty"]} for l in new_legs], "ranks": [(state.get("ratio_rank") or {}).get(a), (state.get("ratio_rank") or {}).get(b)]}
-            state["ratio_day"] = today.isoformat(); save_state(state); return
-        if CONFIG["paper_trading"]:
-            lev = int(CONFIG.get("leverage", 2))
-            for key in sorted(wanted):
-                a, b = key.split("|")
-                try: sig = ratio_signal(ex, a, b, cache)
-                except Exception as e: log(f"ratio {key}: {e}"); continue
-                if not sig: continue
-                cur = state["pairs"].get(key)
-                if cur and cur["sign"] == sig: continue
-                if cur: closed += _ratio_close_pair(ex, state, key, prices, "الترند اتقلب", fcache); flips += 1
-                legs = []
-                for sym, side in ((a, "long"), (b, "short")) if sig == 1 else ((b, "long"), (a, "short")):
-                    x = prices.get(sym) or float(ex.fetch_ticker(sym)["last"]); prices[sym] = x
-                    legs.append({"sym": sym, "side": side, "entry": x, "qty": position_size(x) * lev / x})
-                rk = state.get("ratio_rank") or {}
-                state["pairs"][key] = {"sign": sig, "time": now.isoformat(), "legs": legs, "ranks": [rk.get(a), rk.get(b)]}
-        state["ratio_day"] = today.isoformat(); save_state(state)
-        log(f"🔄 ratio: {len(state['pairs'])} زوج مفتوح | قفل اليوم {closed:+.4f} | قلب {flips}")
-        if closed or flips:
-            notify(f"⚠️ HIGH RISK — ratio trend (Paper)\nأزواج مفتوحة {len(state['pairs'])} · اتقلب {flips}\nمقفول النهارده {closed:+.2f}$ · إجمالي محقق {state['stats']['pnl']:+.2f}$")
-    for pr in state["pairs"].values():
-        for leg in pr["legs"]:
-            if leg["sym"] not in prices:
-                try: prices[leg["sym"]] = float(ex.fetch_ticker(leg["sym"])["last"])
-                except Exception: pass
-    write_ratio_status(state, prices)
-
-def write_ratio_status(state, prices):
-    out_dir = CONFIG.get("public_dir")
-    if not out_dir: return
-    pairs = []
-    for key, pr in state.get("pairs", {}).items():
-        legs, pnl = [], 0.0
-        for leg in pr["legs"]:
-            x = prices.get(leg["sym"], leg["entry"]); sg = 1 if leg["side"] == "long" else -1
-            lp = sg * (x - leg["entry"]) * leg["qty"]; pnl += lp
-            legs.append({"symbol": leg["sym"].split(":")[0], "id": leg["sym"].split("/")[0] + "USDT", "side": leg["side"],
-                         "entry": leg["entry"], "price": x, "qty": leg["qty"], "pnl": round(lp, 4)})
-        margin = sum(l["entry"] * l["qty"] for l in legs) / max(1, int(CONFIG.get("leverage", 2)))
-        pairs.append({"pair": key, "long": legs[0], "short": legs[1], "pnl": round(pnl, 4), "margin": round(margin, 2), "opened": pr["time"],
-                      "ranks": pr.get("ranks")})
-    st = state.get("stats", {}); at = state.get("ratio_members_at")
-    data = {"updated": datetime.now(timezone.utc).isoformat(), "risk": "high", "mode": "paper" if CONFIG["paper_trading"] else "live",
-            "rules": RATIO, "leverage": int(CONFIG.get("leverage", 2)), "margin": CONFIG.get("trade_amount_usdt"), "started": CONFIG.get("started_at"),
-            "members": [m.split("/")[0] for m in sorted(state.get("ratio_members", []), key=lambda m: (state.get("ratio_rank") or {}).get(m, 99))],
-            "next_members": (datetime.fromisoformat(at) + pd.Timedelta(days=RATIO["every_days"])).isoformat() if at else None,
-            "stats": {"closed": st.get("trades", 0), "wins": st.get("wins", 0), "losses": st.get("losses", 0),
-                      "realized": round(float(st.get("pnl", 0)), 4), "unrealized": round(sum(p["pnl"] for p in pairs), 4), "open": len(pairs)},
-            "pairs": sorted(pairs, key=lambda p: p["pair"]),
-            "history": [{"pair": f"{h['long'].split('/')[0]} / {h['short'].split('/')[0]}" if "long" in h else h["symbol"].split(":")[0],
-                         "pnl": _r4(h.get("pnl")), "reason": h.get("reason", ""),
-                         "time": h.get("time"), "opened": h.get("opened"), "ranks": h.get("ranks")} for h in state.get("history", [])[-300:]][::-1]}
-    try:
-        d = Path(out_dir); tmp = d / "ratio.json.tmp"
-        tmp.write_text(json.dumps(data, ensure_ascii=False, default=str), encoding="utf-8"); tmp.replace(d / "ratio.json")
-    except Exception as e: log(f"public ratio status: {e}")
-
-def trend_mode():
-    """Daily trend runs alone on daily candles, long only, exits when the trend turns (strategies_trend.py)."""
-    return "trend_daily" in (CONFIG.get("enabled_strategies") or [])
 
 def wave_mode():
     """Wave Flats runs alone with its own entries, stops and targets (strategies_wave.py)."""
@@ -969,7 +589,8 @@ def _capital_plan():
     """The owner's capital plan from the shared risk ledger (dashboard), capped by the last account equity; None = no
     plan set. A ledger that can't be read raises: the entry is refused rather than sized with the service's default."""
     state = riskmgr.load_risk_state(RISK_PATH)
-    return riskmgr.capital_plan(state["limits"], state.get("equity_last"))
+    # sized with the same ceilings the gate applies, so a capped risk per trade gives a smaller trade, not a refused one
+    return riskmgr.capital_plan(riskmgr.capped_limits(state["limits"]), state.get("equity_last"))
 
 def _strategies_sharing():
     """How many strategies share the account's open-trade count: the ones switched on for it (live: the activation
@@ -1104,18 +725,6 @@ def analyze_wave(symbol, df):
             "sl":sig.get("stop",price*(1-CONFIG["stop_loss_pct"])),"tp":(sig.get("tgt2") or sig.get("tgt1") or price*(1+CONFIG["take_profit_pct"])),
             "rsi":rsi_info["rsi"],"supports":sr_info["supports"],"resistances":sr_info["resistances"],
             "wave":sig or None,"time":datetime.now(timezone.utc).isoformat()}
-
-def analyze_trend(symbol, df):
-    """Daily trend on the closed daily candles (the last row from the exchange is still forming)."""
-    import strategies_trend as stt
-    closed=df.iloc[:-1]; on,size=stt.signal_now(list(closed.close)); exit_below=stt.exit_level(list(closed.close))
-    price=float(df.close.iloc[-1]); lev=int(CONFIG.get("leverage",2))
-    sr_info=sr_signal(df)[2]; rsi_info=rsi_macd_signal(df)[2]
-    reason=f"ترند صاعد — حجم {size*100:.0f}%" if on else "مفيش ترند صاعد"
-    return {"symbol":symbol,"price":price,"total":1.0 if on else 0.0,"decision":"شراء" if on else "انتظار",
-            "breakdown":{"trend_daily":(1.0 if on else 0.0,reason)},"amount_mult":1.0,
-            "sl":price*(1-stt.STOP_SHARE/lev),"tp":None,"rsi":rsi_info["rsi"],"supports":sr_info["supports"],"resistances":sr_info["resistances"],
-            "trend":{"on":on,"size":size,"ts":int(closed.ts.iloc[-1].value//10**6),"exit_below":exit_below},"time":datetime.now(timezone.utc).isoformat()}
 
 def analyze(symbol, df=None, timeframe=None):
     if df is None: df=fetch_ohlcv(symbol, timeframe or CONFIG["timeframe"], limit=candles_needed())
@@ -2263,7 +1872,7 @@ def reconcile_live(state, ex):
         log(f"⚠️ {_ENTRY_BLOCK['reason']}")
     else:
         try:
-            tripped, kill_reason = riskmgr.update_equity_and_check_kill_switch(RISK_PATH, equity, equity_observed_at=equity_at)
+            tripped, kill_reason = riskmgr.update_equity_and_check_kill_switch(RISK_PATH, equity, equity_observed_at=equity_at, transfers=_TRANSFERS["rows"])
             if tripped:
                 _ENTRY_BLOCK["reason"] = f"Central Risk Manager kill switch is tripped — {kill_reason}"
                 log(f"🛑 {_ENTRY_BLOCK['reason']}")
@@ -2382,6 +1991,7 @@ def reconcile_live(state, ex):
                 state["recovery_required"][sym] = {"reason": f"الكمية على المنصة {q} مش {pos['qty']}", "at": datetime.now(timezone.utc).isoformat()}
                 notify(f"🚨 {sym}: الكمية على المنصة {q} مختلفة عن البوت {pos['qty']} — راجعها. البوت وقف أي دخول جديد.")
     _protect_pending(ex, state, live)
+    _audit_stops(ex, state, live)
     mine = {k.split(":")[0] for k in state["positions"]}
     unknown = sorted(set(live) - mine - _held_by_other_strategies())
     if unknown:
@@ -2391,6 +2001,59 @@ def reconcile_live(state, ex):
         state["_unknown_seen"] = unknown
     else:
         state.pop("_unknown_seen", None)
+    save_state(state)
+
+STOP_AUDIT_S = 3600
+AUDIT_REASON = "stop missing on the exchange (hourly stop check)"
+
+def _audit_stops(ex, state, live, now=None):
+    """reconcile_live, hourly (owner, 2026-11-08): every open position's recorded stop must still be on the exchange.
+    A stop cancelled by hand in the Binance app, or dropped by the exchange, used to leave the position open with no
+    protection while the bot's book still said "protected". Missing on two readings in a row (one read can lag; the
+    second runs on the next cycle) = the position is marked sl_unverified, which stops new entries and makes the
+    watchdog alert, plus a recovery_required entry and one Telegram message. Read only: it places and cancels nothing,
+    a person decides. When the stop is seen again, its own mark is cleared (and nobody else's)."""
+    now = now or datetime.now(timezone.utc)
+    audit = state.setdefault("_stop_audit", {})
+    pending = audit.get("missing") or {}
+    try:
+        recent = audit.get("at") and (now - datetime.fromisoformat(audit["at"])).total_seconds() < STOP_AUDIT_S
+    except (TypeError, ValueError):
+        recent = False
+    if recent and not pending:
+        return
+    from backend.app.oco import _owned_orders, _oco_id
+    missing = {}
+    for sym, pos in state["positions"].items():
+        ids = pos.get("oco_ids") or {}
+        want = {x for x in (ids.get("sl"), _oco_id(ids["pos_id"], "sl") if ids.get("pos_id") else None) if x}
+        if not want or not live.get(sym.split(":")[0]) or pos.get("unprotected"):
+            continue                                            # no stop of its own, flat, or already flagged
+        if pos.get("sl_unverified") and not pos.get("stop_audit_missing"):
+            continue                                            # the stop machinery is already handling this one
+        try:
+            found, complete = _owned_orders(ex, sym, want)
+        except Exception:
+            found, complete = {}, False
+        if not complete:
+            if sym in pending: missing[sym] = pending[sym]      # inconclusive: neither a miss nor a clear
+            continue
+        if found:
+            if pos.pop("stop_audit_missing", None):
+                pos.pop("sl_unverified", None)
+                if (state.get("recovery_required") or {}).get(sym, {}).get("reason") == AUDIT_REASON:
+                    state["recovery_required"].pop(sym, None)
+                notify(f"✅ {sym}: وقف الخسارة رجع ظاهر على المنصة")
+            continue
+        missing[sym] = pending.get(sym, 0) + 1
+        if missing[sym] >= 2 and not pos.get("stop_audit_missing"):
+            pos["stop_audit_missing"] = now.isoformat(); pos["sl_unverified"] = True
+            state.setdefault("recovery_required", {}).setdefault(sym, {"reason": AUDIT_REASON, "at": now.isoformat()})
+            notify(f"🚨 {sym}: وقف الخسارة مش موجود على Binance (اتلغى؟). الصفقة مفتوحة من غير حماية، والبوت وقف أي دخول "
+                   f"جديد. حط وقف بإيدك عند {pos.get('sl')} أو اقفل الصفقة.")
+    audit["missing"] = {k: v for k, v in missing.items() if v < 2}
+    if not audit["missing"]:
+        audit["at"] = now.isoformat()
     save_state(state)
 
 def _expect_stop(state, symbol, side, sl, cid):
@@ -2659,11 +2322,17 @@ def write_live_status(state, prices, analyses=None):
         cs = _position_contract_size(p)
         funding = _funding_pnl(p)
         fee = _fee_rate(p)
+        # fee and funding not verified yet (the usual case while a position is open): an estimate for the page only —
+        # the entry's fee rate on both sides, no funding — marked as such; the recorded PnL still needs the evidence
+        estimated = funding is None or fee is None
+        if estimated:
+            try: fee, funding = float(p.get("entry_fee_rate") or 0.0004), 0.0
+            except (TypeError, ValueError): fee, funding = 0.0004, 0.0
         live_pnl = futures_net_pnl(p["entry"], px, p["qty"], cs, p.get("side", "long"), fee_rate=fee, funding_pnl=funding) if px and cs and funding is not None and fee is not None else None
         loss_at_sl = None
         if p.get("sl") and cs and funding is not None and fee is not None:
             loss_at_sl = futures_net_pnl(p["entry"], float(p["sl"]), p["qty"], cs, p.get("side", "long"), fee_rate=fee, funding_pnl=funding)
-        pos.append({"symbol": sym.split(":")[0], "entry": p["entry"], "qty": p["qty"], "contract_size": cs, "sl": p.get("sl"), "price": px,
+        pos.append({"symbol": sym.split(":")[0], "side": p.get("side", "long"), "pnl_estimated": estimated, "entry": p["entry"], "qty": p["qty"], "contract_size": cs, "sl": p.get("sl"), "price": px,
                     "exit_below": exit_below, "tp": p.get("tp"),
                     "loss_at_sl": round(loss_at_sl, 2) if loss_at_sl is not None else None,
                     "pnl": round(live_pnl, 4) if live_pnl is not None else None, "opened": p.get("time"),
@@ -2676,72 +2345,22 @@ def write_live_status(state, prices, analyses=None):
             "review": state.get("recovery_required") or {}, "entry_block": _ENTRY_BLOCK["reason"], "manual_hold": list(state.get("manual_hold", {})),
             "last_block": dict(_LAST_BLOCK) or None})
     except Exception as e: log(f"live status: {e}")
+    _write_closed(d, state)
 
-def try_enter_trend(symbol, analysis, state, ex):
-    """Daily trend: buy at market when the last closed daily candle turns the trend on; sell when it turns off.
-    Live: market buy, then a stop on the exchange at the protective level (no target — the exit is the signal)."""
-    import strategies_trend as stt
-    sig=analysis.get("trend"); price=analysis["price"]
-    if not sig: return
-    live = not CONFIG["paper_trading"]
-    if in_position(state, symbol):
-        if sig["on"]: return
-        pos=state["positions"][symbol]
-        if live:
-            try:
-                res = close_live_position(ex, symbol, pos, price)
-                _require_verified_close(res)
-            except Exception as e:
-                log(f"⚠️ {symbol}: الترند وقف بس القفل فشل — هيحاول تاني الدورة الجاية: {e}")
-                notify(f"⚠️ {symbol}: الترند وقف بس أمر القفل فشل — البوت هيحاول تاني. الوقف لسه على المنصة."); return
-            exit_px, qty = res["price"], res["qty"]
-        else:
-            exit_px, qty = price, pos["qty"]
-        if live:
-            cs = _position_contract_size(pos)
-            if cs is None:
-                raise RuntimeError("missing contract_size for live PnL")
-            pnl = futures_net_pnl(pos["entry"], exit_px, qty, cs, pos.get("side", "long"), fee_rate=_fee_rate(pos, required=True), funding_pnl=_funding_pnl(pos, required=True))
-            margin = pos["entry"] * qty * cs / max(1, int(pos.get("leverage", CONFIG.get("leverage", 1))))
-        else:
-            pnl = (exit_px-pos["entry"])*qty
-            margin = pos["entry"] * qty
-        mode = _live_label() if live else "Paper"
-        log(f"📉 اغلاق {symbol} — الترند وقف @ {exit_px:.6g} PnL {pnl:+.4f}")
-        state["history"].append({"symbol":symbol,"side":"long","entry":pos["entry"],"exit":exit_px,"qty":qty,"pnl":pnl,"pnl_pct":pnl/margin*100 if margin else 0,"reason":"الترند وقف","time":datetime.now(timezone.utc).isoformat(),"type":"live" if live else "paper","opened":pos.get("time"),"rank":pos.get("rank")})
-        state["stats"]["trades"]+=1; state["stats"]["pnl"]+=float(pnl); state["stats"]["wins" if pnl>0 else "losses"]+=1
-        state["positions"].pop(symbol,None); state["last_trade"][symbol]=datetime.now(timezone.utc).isoformat()
-        if live: _closed_cleanly(state, symbol)
-        save_state(state)
-        if live: _release_position_risk(symbol, pos)
-        return
-    # paper: a coin closed by hand waits for its trend to turn off and on again. Live (the owner's account): a manual
-    # close frees the slot and the strategy keeps trading as usual — it may buy the coin again on its next signal
-    hold = state.get("manual_hold", {}) if not live else {}
-    if symbol in hold:   # closed by hand: wait for the trend to turn off, then a new signal may buy it again
-        if not sig["on"]: hold.pop(symbol, None); save_state(state)
-        return
-    if not analysis.get("in_universe", True): return   # not in the volume top list today: no new trade
-    seen=state.setdefault("trend_seen",{})
-    if not sig["on"] or seen.get(symbol)==sig["ts"]: return   # one entry per closed daily candle, like the backtest
-    if live and _ENTRY_BLOCK["reason"]:
-        log(f"⛔ {symbol} مفيش دخول — {_ENTRY_BLOCK['reason']}"); return   # retried next cycle (trend_seen not marked)
-    seen[symbol]=sig["ts"]; save_state(state)
-    if _strategy_full(state, CONFIG["max_open_positions"]) or not daily_pnl_ok(state): return
-    lev=int(CONFIG.get("leverage",2))
-    margin=position_size(price, ex, stop_price=sig.get("stop"))*sig["size"]
-    if not live:
-        try:
-            res=place_order(ex,symbol,"long",margin,price)
-            sl=res["price"]*(1-stt.STOP_SHARE/lev)
-            state["positions"][symbol]={"side":"long","entry":res["price"],"qty":res["qty"],"cost":res["cost"],"notional":res.get("notional"),"contract_size":res.get("contract_size", 1.0),"contract_size_verified":res.get("contract_size_verified", False),"entry_fee_rate":res.get("entry_fee_rate"),"entry_fee_cost":res.get("entry_fee_cost"),"leverage":res.get("leverage",lev),
-                "time":datetime.now(timezone.utc).isoformat(),"sl":sl,"tp":None,"breakeven":False,"trend":True,"rank":analysis.get("rank")}
-            state["last_trade"][symbol]=datetime.now(timezone.utc).isoformat(); save_state(state)
-            log(f"✅ 🟢 لونج وهمي {symbol} ترند يومي x{lev} @ {res['price']:.6g} حجم {sig['size']*100:.0f}% وقف حماية {sl:.6g}")
-            notify(f"🟢 لونج {symbol} — ترند يومي x{lev} (Paper)\nدخول {res['price']:.6g} · حجم {sig['size']*100:.0f}% من ${position_size(price, ex)*lev:.0f}\nوقف حماية {sl:.6g} · الخروج لما الترند يقف")
-        except Exception as e: log(f"فشل long {symbol}: {e}")
-        return
-    _enter_trend_live(symbol, analysis, state, ex, margin, lev, price)
+_CLOSED_WRITTEN = {"n": None}   # how many closed trades closed.json holds: rewritten only when a trade closes
+
+def _write_closed(d, state):
+    """Every closed real-orders trade of this bot for the admin page's Demo-vs-baseline table (backend/app/demo_measure.py):
+    live_status.json keeps only the last 30. Rewritten when the count changes, and on the bot's first cycle."""
+    rows = [h for h in state.get("history", []) if h.get("type") == "live"]
+    if _CLOSED_WRITTEN["n"] == len(rows): return
+    try:
+        _write_json_atomic(d / "closed.json", {"updated": datetime.now(timezone.utc).isoformat(), "env": binance_env(),
+            # entry/exit/qty/funding_pnl: the user's monthly statement (backend/app/user_statement.py, owner 2026-11-08)
+            "closed": [{k: h.get(k) for k in ("symbol", "side", "opened", "time", "entry", "exit", "qty", "pnl", "pnl_pct",
+                                              "funding_pnl", "reason", "by")} for h in rows]})
+        _CLOSED_WRITTEN["n"] = len(rows)
+    except Exception as e: log(f"closed trades: {e}")
 
 def _enter_trend_live(symbol, analysis, state, ex, margin, lev, price):
     import strategies_trend as stt
@@ -3156,29 +2775,8 @@ def try_enter(symbol, analysis, state, ex):
             log(f"فشل {side} {symbol}: {e}")
 
 
-# ── Williams volatility breakout + Connors RSI-2: two paper bots on Binance's public market (research/traders_study.py,
-#    traders_robustness.py, breakout_stop_hourly.py) ──
-VB = {"top": 10, "k": 0.7, "ma": 20, "stop": 0.40, "slip": 0.001}
-RSI2 = {"top": 10, "below": 5, "trend_ma": 200, "exit_ma": 5, "max_days": 10, "stop": 0.40}
-
-def breakout_mode():
-    """Paper volatility breakout (Larry Williams): each UTC day, among the top 10 by 30-day volume whose close is above
-    its 20-day average, buy when the price trades 0.7 x yesterday's range above today's open; sell at the next day's
-    open. No intraday stop (it cut profit in every hourly test), only the 40% guard before liquidation."""
-    return "vol_breakout" in (CONFIG.get("enabled_strategies") or [])
-
-def rsi2_mode():
-    """Paper RSI-2 pullback (Larry Connors): at each daily close, among the top 10 by 30-day volume above their 200-day
-    average, buy when the 2-day RSI is below 5; sell after a close above the 5-day average or 10 days, stop 40%."""
-    return "rsi2_pullback" in (CONFIG.get("enabled_strategies") or [])
-
 def _utc_day(now):
     return now.replace(hour=0, minute=0, second=0, microsecond=0)
-
-def rsi_wilder(closes, n=2):
-    s = pd.Series(closes, dtype=float); d = s.diff().fillna(0)
-    up = d.clip(lower=0).ewm(alpha=1 / n, adjust=False).mean(); dn = (-d.clip(upper=0)).ewm(alpha=1 / n, adjust=False).mean()
-    return float(100.0 if dn.iloc[-1] == 0 else 100 - 100 / (1 + up.iloc[-1] / dn.iloc[-1]))
 
 def _paper_open(state, sym, price, now, extra):
     lev = int(CONFIG.get("leverage", 2)); q = position_size(price) * lev / price
@@ -3277,7 +2875,7 @@ def _phase2_live_basket(ex, state, strategy, intent, legs, *, reserve=True):
     if equity is None and not is_exit:
         _ENTRY_BLOCK["reason"] = "account equity unavailable — blocking new entries"; return None
     if not is_exit:
-        tripped, reason = riskmgr.update_equity_and_check_kill_switch(RISK_PATH, equity, equity_observed_at=equity_at)
+        tripped, reason = riskmgr.update_equity_and_check_kill_switch(RISK_PATH, equity, equity_observed_at=equity_at, transfers=_TRANSFERS["rows"])
         if tripped:
             _ENTRY_BLOCK["reason"] = f"Central Risk Manager kill switch is tripped — {reason}"; return None
     equity = equity or 1.0
@@ -3473,7 +3071,7 @@ def _single_leg_live_entry(ex, state, symbol, side, margin, price, sl, tp, strat
         _ENTRY_BLOCK["reason"] = "account equity unavailable — blocking new entries"
         return None
     try:
-        tripped, reason = riskmgr.update_equity_and_check_kill_switch(RISK_PATH, equity, equity_observed_at=equity_at)
+        tripped, reason = riskmgr.update_equity_and_check_kill_switch(RISK_PATH, equity, equity_observed_at=equity_at, transfers=_TRANSFERS["rows"])
     except Exception as exc:
         _ENTRY_BLOCK["reason"] = f"risk ledger unavailable — blocking new entries: {exc}"
         return None
@@ -3636,192 +3234,6 @@ def _guard_stops(ex, state, prices, label):
                     _single_leg_live_exit(ex, state, sym, price, reason)
         except Exception as e: log(f"{label} {sym}: {e}")
 
-def run_once_breakout(ex):
-    V = VB; state = load_state(); now = datetime.now(timezone.utc); day = _utc_day(now); prices = {}
-    if not CONFIG["paper_trading"]:
-        # a block (recovery, kill switch, unknown position) stops entries only — the live adapters refuse them. The
-        # strategy's own exits still run: returning here left open positions without their signal exits
-        reconcile_live(state, ex)
-        if _ENTRY_BLOCK.get("reason"): log(f"⛔ دخول جديد متوقف، الخروج شغّال — {_ENTRY_BLOCK['reason']}")
-    process_paper_closes(state, ex, "breakout")
-    if not CONFIG["paper_trading"]:
-        process_manual_closes(state, ex, prices); _retry_due_exits(ex, state, "بريك أوت")
-    _guard_stops(ex, state, prices, "بريك أوت")
-    if state.get("vb_day") != day.isoformat():
-        # a new UTC day: yesterday's trades close at today's open, then today's triggers
-        day_ms = int(day.timestamp() * 1000); closed = 0.0; n = 0
-        for sym in list(state["positions"]):
-            try:
-                k = ex.fetch_ohlcv(sym, "1d", limit=2)
-                px_open = float(k[-1][1]) if k and k[-1][0] == day_ms else float(ex.fetch_ticker(sym)["last"])
-                if CONFIG.get("paper_trading"):
-                    closed += _paper_close(ex, state, sym, px_open, "خروج افتتاح اليوم")
-                    n += 1
-                elif _single_leg_live_exit(ex, state, sym, px_open, "خروج افتتاح اليوم"):
-                    closed += 1.0; n += 1
-            except Exception as e: log(f"بريك أوت قفل {sym}: {e}")
-        plan = {}
-        for sym in volume_universe(ex, V["top"]):
-            try:
-                k = ex.fetch_ohlcv(sym, "1d", limit=V["ma"] + 3)
-                if not k or k[-1][0] != day_ms: continue                  # today's candle not open yet
-                closes = [r[4] for r in k[:-1]]; prev = k[-2]; rng = prev[2] - prev[3]
-                avg = sum(closes[-V["ma"]:]) / V["ma"]
-                plan[sym] = {"open": k[-1][1], "trigger": k[-1][1] + V["k"] * rng if rng > 0 else None, "above_ma": closes[-1] > avg,
-                             "range": rng}
-            except Exception as e: log(f"بريك أوت {sym}: {e}")
-        state.update(vb_day=day.isoformat(), vb_plan=plan, vb_done=[]); save_state(state)
-        armed = [f"{s.split('/')[0]} {p['trigger']:.6g}" for s, p in plan.items() if p["above_ma"] and p["trigger"]]
-        log(f"📐 بريك أوت: يوم جديد — قفل {n} صفقة {closed:+.2f}$ | مستني اختراق: {', '.join(armed) or 'ولا عملة فوق متوسط 20'}")
-        if n: notify(f"📐 بريك أوت (Paper): قفل {n} صفقة امبارح على افتتاح النهارده — {closed:+.2f}$")
-    _guard_stops(ex, state, prices, "بريك أوت")
-    plan = state.get("vb_plan") or {}
-    for sym, p in plan.items():
-        if not (p.get("above_ma") and p.get("trigger")) or sym in state["positions"] or sym in state.get("vb_done", []): continue
-        try:
-            price = prices.get(sym) or float(ex.fetch_ticker(sym)["last"]); prices[sym] = price
-            if price < p["trigger"]: continue
-            fill = price * (1 + V["slip"])
-            if CONFIG.get("paper_trading"):
-                _paper_open(state, sym, fill, now, {"sl": fill * (1 - V["stop"]), "trigger": p["trigger"],
-                                                    "exit_at": (day + pd.Timedelta(days=1)).isoformat()})
-                state.setdefault("vb_done", []).append(sym); save_state(state)
-            else:
-                pos = _single_leg_live_entry(ex, state, sym, "long", position_size(price, ex),
-                    fill, fill * (1 - V["stop"]), None, "vol_breakout",
-                    {"trigger": p["trigger"], "exit_at": (day + pd.Timedelta(days=1)).isoformat()})
-                if not pos: continue
-                state.setdefault("vb_done", []).append(sym); save_state(state)
-            log(f"✅ 🟢 بريك أوت {sym} @ {fill:.6g} (الاختراق {p['trigger']:.6g})")
-            notify(f"🟢 بريك أوت {sym.split(':')[0]} (Paper)\nاخترق {p['trigger']:.6g} — دخول {fill:.6g}\nخروج: افتتاح بكرة 00:00 UTC · وقف أمان {fill * (1 - V['stop']):.6g}")
-        except Exception as e: log(f"بريك أوت دخول {sym}: {e}")
-    write_simple_status("breakout", state, prices, V, {"day": state.get("vb_day"),
-        "plan": [{"symbol": s.split(":")[0], "open": p["open"], "trigger": p["trigger"], "above_ma": p["above_ma"],
-                  "entered": s in state.get("vb_done", []), "price": prices.get(s)} for s, p in plan.items()]})
-    log(f"📊 بريك أوت: {len(state['positions'])} مفتوحة | PnL محقق {state['stats']['pnl']:+.4f}")
-
-def run_once_rsi2(ex):
-    R = RSI2; state = load_state(); now = datetime.now(timezone.utc); day = _utc_day(now); prices = {}
-    if not CONFIG["paper_trading"]:
-        # a block (recovery, kill switch, unknown position) stops entries only — the live adapters refuse them. The
-        # strategy's own exits still run: returning here left open positions without their signal exits
-        reconcile_live(state, ex)
-        if _ENTRY_BLOCK.get("reason"): log(f"⛔ دخول جديد متوقف، الخروج شغّال — {_ENTRY_BLOCK['reason']}")
-    process_paper_closes(state, ex, "rsi2")
-    if not CONFIG["paper_trading"]:
-        process_manual_closes(state, ex, prices); _retry_due_exits(ex, state, "RSI-2")
-    _guard_stops(ex, state, prices, "RSI-2")
-    if state.get("rsi2_day") != day.isoformat():
-        # once per closed daily candle: exits first, then new entries at about today's open
-        universe = volume_universe(ex, R["top"]); watch = []
-        for sym in sorted(set(universe) | set(state["positions"])):
-            try:
-                k = ex.fetch_ohlcv(sym, "1d", limit=R["trend_ma"] + 15)[:-1]   # closed candles only
-                c = [r[4] for r in k]
-                if len(c) < R["exit_ma"] + 1: continue
-                price = float(ex.fetch_ticker(sym)["last"]); prices[sym] = price
-                if sym in state["positions"]:
-                    pos = state["positions"][sym]
-                    held = (day - _utc_day(datetime.fromisoformat(pos["time"]))).days
-                    if c[-1] > sum(c[-R["exit_ma"]:]) / R["exit_ma"] or held >= R["max_days"]:
-                        why = f"قفل فوق متوسط {R['exit_ma']} يوم" if c[-1] > sum(c[-R["exit_ma"]:]) / R["exit_ma"] else f"{R['max_days']} أيام"
-                        if CONFIG.get("paper_trading"):
-                            pnl = _paper_close(ex, state, sym, price, why)
-                        else:
-                            _single_leg_live_exit(ex, state, sym, price, why)
-                        if sym in state["positions"]:
-                            continue
-                        log(f"📉 RSI-2: قفل {sym} @ {price:.6g} ({why}) PnL {pnl:+.4f}" if CONFIG.get("paper_trading") else f"📉 RSI-2: قفل {sym} @ {price:.6g} ({why})")
-                    continue
-                if sym not in universe or len(c) < R["trend_ma"]: continue
-                r2 = rsi_wilder(c, 2); ma = sum(c[-R["trend_ma"]:]) / R["trend_ma"]
-                watch.append({"symbol": sym.split(":")[0], "rsi2": round(r2, 1), "above_200": c[-1] > ma, "price": price})
-                if r2 < R["below"] and c[-1] > ma:
-                    sl = price * (1 - R["stop"])
-                    if CONFIG.get("paper_trading"):
-                        _paper_open(state, sym, price, now, {"sl": sl, "rsi2": round(r2, 1),
-                                                             "exit_at": (day + pd.Timedelta(days=R["max_days"])).isoformat()})
-                    elif not _single_leg_live_entry(ex, state, sym, "long", position_size(price, ex),
-                            price, sl, None, "rsi2_pullback", {"rsi2": round(r2, 1),
-                            "exit_at": (day + pd.Timedelta(days=R["max_days"])).isoformat()}):
-                        continue
-                    log(f"✅ 🟢 RSI-2 {sym} @ {price} (RSI-2 {r2:.1f} في ترند صاعد)")
-                    notify(f"🟢 RSI-2 {sym.split(':')[0]} (Paper)\nRSI-2 {r2:.1f} وفوق متوسط 200 يوم — دخول {price:.6g}\nخروج: أول قفل يومي فوق متوسط 5 أيام (أقصى {R['max_days']} أيام) · وقف {price * (1 - R['stop']):.6g}")
-            except Exception as e: log(f"RSI-2 {sym}: {e}")
-        state.update(rsi2_day=day.isoformat(), rsi2_watch=watch); save_state(state)
-    for sym in state["positions"]:
-        if sym not in prices:
-            try: prices[sym] = float(ex.fetch_ticker(sym)["last"])
-            except Exception: pass
-    write_simple_status("rsi2", state, prices, R, {"day": state.get("rsi2_day"), "watch": state.get("rsi2_watch", [])})
-    log(f"📊 RSI-2: {len(state['positions'])} مفتوحة | PnL محقق {state['stats']['pnl']:+.4f}")
-
-# ── trend-template breakout: what was left of Minervini / Darvas after research/vcp_deep.py (the contraction and the
-#    breakout-volume conditions only hurt). Paper experiment — it added profit but not risk-adjusted return. ──
-TB = {"top": 100, "L": 20, "exit_ma": 20, "stop": 0.40, "slip": 0.0005}
-
-def tbreak_mode():
-    """Paper trend-template breakout: at each daily close, among the top 100 by 30-day volume in a stage-2 uptrend
-    (close > 50 > 150 > 200-day averages), buy when the close breaks the previous 20 days' high; sell after a close
-    below the 20-day average; stop 40%."""
-    return "trend_breakout" in (CONFIG.get("enabled_strategies") or [])
-
-def run_once_tbreak(ex):
-    T = TB; state = load_state(); now = datetime.now(timezone.utc); day = _utc_day(now); prices = {}
-    if not CONFIG["paper_trading"]:
-        # a block (recovery, kill switch, unknown position) stops entries only — the live adapters refuse them. The
-        # strategy's own exits still run: returning here left open positions without their signal exits
-        reconcile_live(state, ex)
-        if _ENTRY_BLOCK.get("reason"): log(f"⛔ دخول جديد متوقف، الخروج شغّال — {_ENTRY_BLOCK['reason']}")
-    process_paper_closes(state, ex, "tbreak")
-    if not CONFIG["paper_trading"]:
-        process_manual_closes(state, ex, prices); _retry_due_exits(ex, state, "اختراق الترند")
-    _guard_stops(ex, state, prices, "اختراق الترند")
-    if state.get("tb_day") != day.isoformat():
-        universe = volume_universe(ex, T["top"]); watch = []; opened = []
-        sma = lambda xs, n: sum(xs[-n:]) / n
-        for sym in sorted(set(universe) | set(state["positions"])):
-            try:
-                k = ex.fetch_ohlcv(sym, "1d", limit=215)[:-1]          # closed candles only
-                c = [r[4] for r in k]; h = [r[2] for r in k]
-                if len(c) < T["exit_ma"] + 1: continue
-                if sym in state["positions"]:
-                    if c[-1] < sma(c, T["exit_ma"]):
-                        price = float(ex.fetch_ticker(sym)["last"]); prices[sym] = price
-                        if CONFIG.get("paper_trading"):
-                            pnl = _paper_close(ex, state, sym, price, f"قفل تحت متوسط {T['exit_ma']} يوم")
-                            log(f"📉 اختراق الترند: قفل {sym} @ {price:.6g} PnL {pnl:+.4f}")
-                        else:
-                            _single_leg_live_exit(ex, state, sym, price, f"قفل تحت متوسط {T['exit_ma']} يوم")
-                        if sym in state["positions"]:
-                            continue
-                        log(f"📉 اختراق الترند: قفل {sym} @ {price:.6g}" if not CONFIG.get("paper_trading") else "")
-                    continue
-                if sym not in universe or len(c) < 201: continue
-                m50, m150, m200 = sma(c, 50), sma(c, 150), sma(c, 200); hi = max(h[-T["L"] - 1:-1])
-                if not (c[-1] > m50 > m150 > m200): continue
-                watch.append({"symbol": sym.split(":")[0], "close": c[-1], "high": hi, "gap_pct": round((hi / c[-1] - 1) * 100, 1)})
-                if c[-1] > hi:
-                    price = float(ex.fetch_ticker(sym)["last"]) * (1 + T["slip"]); prices[sym] = price
-                    if CONFIG.get("paper_trading"):
-                        _paper_open(state, sym, price, now, {"sl": price * (1 - T["stop"]), "breakout": hi})
-                    elif not _single_leg_live_entry(ex, state, sym, "long", position_size(price, ex),
-                            price, price * (1 - T["stop"]), None, "trend_breakout", {"breakout": hi}):
-                        continue
-                    opened.append(f"{sym.split('/')[0]} {price:.6g}")
-                    log(f"✅ 🟢 اختراق الترند {sym} @ {price:.6g} (قفل {c[-1]:.6g} فوق أعلى {T['L']} يوم {hi:.6g})")
-            except Exception as e: log(f"اختراق الترند {sym}: {e}")
-        if opened:
-            notify(f"🟢 اختراق الترند (Paper) — {len(opened)} صفقة جديدة\n" + "\n".join(opened) +
-                   f"\nخروج: قفل يومي تحت متوسط {T['exit_ma']} يوم · وقف 40%")
-        state.update(tb_day=day.isoformat(), tb_watch=sorted(watch, key=lambda w: w["gap_pct"])[:15]); save_state(state)
-    for sym in state["positions"]:
-        if sym not in prices:
-            try: prices[sym] = float(ex.fetch_ticker(sym)["last"])
-            except Exception: pass
-    write_simple_status("tbreak", state, prices, T, {"day": state.get("tb_day"), "watch": state.get("tb_watch", [])})
-    log(f"📊 اختراق الترند: {len(state['positions'])} مفتوحة | PnL محقق {state['stats']['pnl']:+.4f}")
-
 def write_simple_status(name, state, prices, rules, extra):
     """Public <name>.json for a long-only paper bot, in the shape the site reads for momentum.json. Live, it also writes
     the admin page's live status (RAQM_IPC_DIR), so the site's live close button reaches this bot."""
@@ -3962,8 +3374,12 @@ def run_loop():
         notify(f"▶️ ⚠️ HIGH RISK — بوت ratio trend اشتغل ({mode})\nكل الأزواج بين أعلى {R['top']} عملة فوليوم · تجربة لمتابعة الأداء بس")
     elif momentum_mode():
         M=MOM
-        log(f"=== مومنتم: لونج أقوى {M['n']} وشورت أضعف {M['n']} من أعلى {M['top']} فوليوم (عائد {M['weeks']} أسبوع) — {mode} — تبديل كل {M['every_days']} أيام، وقف {M['stop']:.0%} | هامش {CONFIG['trade_amount_usdt']} USDT x{CONFIG.get('leverage',2)} ===")
-        notify(f"▶️ بوت المومنتم اشتغل ({mode})\nكل أسبوع: لونج أقوى {M['n']} وشورت أضعف {M['n']} من أعلى {M['top']} عملة فوليوم")
+        if M.get("score") == "retail":
+            log(f"=== عكس الأغلبية: لونج أقل {M['n']} وشورت أعلى {M['n']} في نسبة لونج/شورت الحسابات من أعلى {M['top']} فوليوم — {mode} — تبديل كل أربع 00:00 UTC، وقف {M['stop']:.0%} | هامش {CONFIG['trade_amount_usdt']} USDT x{CONFIG.get('leverage',2)} ===")
+            notify(f"▶️ بوت عكس الأغلبية اشتغل ({mode})\nكل أربع: لونج أقل {M['n']} وشورت أعلى {M['n']} في نسبة لونج/شورت من أعلى {M['top']} عملة فوليوم")
+        else:
+            log(f"=== مومنتم: لونج أقوى {M['n']} وشورت أضعف {M['n']} من أعلى {M['top']} فوليوم (عائد {M['weeks']} أسبوع) — {mode} — تبديل كل اتنين 00:00 UTC، وقف {M['stop']:.0%} | هامش {CONFIG['trade_amount_usdt']} USDT x{CONFIG.get('leverage',2)} ===")
+            notify(f"▶️ بوت المومنتم اشتغل ({mode})\nكل أسبوع: لونج أقوى {M['n']} وشورت أضعف {M['n']} من أعلى {M['top']} عملة فوليوم")
     elif listing_mode():
         L=LISTING
         log(f"=== شورت العملات الجديدة — {mode} — دخول بعد {L['skip_days']} يوم، خروج بعد {L['hold_days']} يوم، وقف {L['stop']:.0%}، أقصى {L['max_open']} | هامش {CONFIG['trade_amount_usdt']} USDT x{CONFIG.get('leverage',2)} ===")
@@ -4026,6 +3442,15 @@ def start_dashboard_server(port=None):
         except: pass
         httpd.serve_forever()
 
+# ── the strategies, one file each (bots/): re-exported here — bot.<name> stays the one name the CLI, the API and the tests use ──
+from bots.momentum_ls import MOM, RETAIL, momentum_public_name, retail_ratio, momentum_due, momentum_hold_over, momentum_next, momentum_mode, momentum_rank, run_once_momentum, write_momentum_status
+from bots.ratio_trend import RATIO, ratio_public_name, ratio_mode, _daily_closed, _ratio_rank, ratio_members, ratio_signal, _ratio_close_pair, run_once_ratio, write_ratio_status
+from bots.listing_short import LISTING, listing_mode, _listing_close, run_once_listing, write_listing_status
+from bots.vol_breakout import VB, breakout_mode, run_once_breakout
+from bots.rsi2_pullback import RSI2, rsi2_public_name, rsi2_btc_ok, rsi2_mode, rsi_wilder, run_once_rsi2
+from bots.trend_breakout import TB, tbreak_mode, run_once_tbreak
+from bots.trend_daily import trend_mode, analyze_trend, try_enter_trend
+
 if __name__=="__main__":
     import argparse
     p=argparse.ArgumentParser(description="Crypto Bot 20 pairs")
@@ -4044,7 +3469,15 @@ if __name__=="__main__":
     p.add_argument("--public", default=None, help="مجلد يتكتب فيه status.json لصفحة البوت العامة (صفقات ونتايج بس)")
     p.add_argument("--expect-env", default=None, choices=["live", "demo", "testnet"],
                    help="refuse to start unless BINANCE_ENV is exactly this (the testnet service passes testnet)")
+    p.add_argument("--ratio-exclude", default="", help="ratio trend: coins left out of the weekly pick, e.g. BTC,ETH (research §25)")
+    p.add_argument("--momentum-retail", action="store_true", help="momentum_ls ranked against the crowd's long/short ratio (paper only, research §29)")
+    p.add_argument("--rsi2-btc-ma", type=int, default=0, help="RSI-2: new entries only while BTC closes above this daily average, e.g. 200 (research §28)")
+    p.add_argument("--public-name", default=None, help="a second bot of the same strategy: its public file name (e.g. ratio_nobtc)")
+    p.add_argument("--label", default=None, help="a second bot of the same strategy: its name on Telegram")
     p.add_argument("--state", default=None, help="ملف الحالة (لتشغيل أكتر من بوت في نفس المجلد) — اللوج بيبقى بنفس الاسم .log")
+    # the momentum day experiment (research/README.md §23): Demo / paper only, the real bot keeps Monday and the full week
+    p.add_argument("--mom-weekday", type=int, default=None, choices=range(7), help="مومنتم: يوم التبديل (0 = الاتنين) — Demo بس")
+    p.add_argument("--mom-hold", type=int, default=None, choices=range(1, 8), help="مومنتم: يقفل السلة بعد كام يوم — Demo بس")
     args=p.parse_args()
     if args.strategy: CONFIG["enabled_strategies"]=[s.strip() for s in args.strategy.split(",") if s.strip()]
     retired = [s for s in (CONFIG.get("enabled_strategies") or []) if s in RETIRED_STRATEGIES]
@@ -4058,6 +3491,17 @@ if __name__=="__main__":
         CONFIG["max_open_positions"]=max(int(CONFIG["max_open_positions"]), args.universe)
     CONFIG["notify"]=args.notify
     if args.public: CONFIG["public_dir"]=args.public
+    if args.ratio_exclude: RATIO["exclude"]=[c.strip().upper() for c in args.ratio_exclude.split(",") if c.strip()]
+    if args.momentum_retail:
+        if args.strategy != "momentum_ls" or not args.paper: p.error("--momentum-retail: paper momentum_ls only")
+        MOM.update(RETAIL)
+    if args.rsi2_btc_ma:
+        if not 20 <= args.rsi2_btc_ma <= 400: p.error("--rsi2-btc-ma: 20..400 days")
+        RSI2["btc_ma"]=args.rsi2_btc_ma
+    if args.public_name:
+        if not re.fullmatch(r"[a-z][a-z0-9_]{1,30}", args.public_name): p.error("--public-name: lowercase letters, digits, _")
+        CONFIG["public_name"]=args.public_name
+    if args.label: CONFIG["label"]=args.label[:40]
     if args.state:
         STATE_PATH=Path(__file__).parent / args.state
         LOG_PATH=STATE_PATH.with_suffix(".log")   # next to the state (the live bot keeps both in state/, its code folder is read-only)
@@ -4068,6 +3512,11 @@ if __name__=="__main__":
     elif ratio_mode():
         STATE_PATH=Path(__file__).parent / "state_ratio.json"; LOG_PATH=Path(__file__).parent / "state_ratio.log"
     if args.paper and args.live: p.error("--paper و --live مع بعض؟ اختار واحد")
+    if args.mom_weekday is not None or args.mom_hold is not None:
+        if not args.paper and binance_env() not in ("demo", "testnet"):
+            p.error("--mom-weekday / --mom-hold تجربة على Demo بس — الحساب الحقيقي بيفضل على الاتنين والأسبوع كله")
+        if args.mom_weekday is not None: MOM["weekday"] = args.mom_weekday
+        if args.mom_hold is not None: MOM["hold_days"] = args.mom_hold
     if args.paper: CONFIG["paper_trading"]=True
     if args.expect_env and binance_env() != args.expect_env:
         p.error(f"BINANCE_ENV={binance_env()} لكن الخدمة متظبطة على {args.expect_env} — مش هيشتغل")
@@ -4080,6 +3529,11 @@ if __name__=="__main__":
         if binance_env() == "live" and not os.getenv("RAQM_RISK_DIR", "").strip():
             # without it the dashboard's kill switch, limits and revoke act on a ledger this process never reads
             p.error("فلوس حقيقية محتاجة RAQM_RISK_DIR — نفس فولدر دفتر المخاطرة اللي الـ API بيستخدمه")
+        if binance_env() == "live":
+            # the dashboard's limits are written by the API: real money needs root's ceilings over them (allow-live.env)
+            try: riskmgr.hard_caps(required=True)
+            except ValueError as e:
+                p.error(f"فلوس حقيقية محتاجة سقف المخاطرة من root في allow-live.env ({', '.join(riskmgr.HARD_CAP_ENV.values())}): {e}")
         try:   # fail at start, not at the first trade: the ledger and the activation record must open read-write
             riskmgr.load_risk_state(RISK_PATH); live_activation.active_record(ACTIVATION_PATH)
         except Exception as e:

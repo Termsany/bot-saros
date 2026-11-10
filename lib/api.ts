@@ -52,6 +52,14 @@ export async function apiSaveSettings(body: { capital: number; strategy: string 
   if(!r.ok) throw new Error(d.detail || "ما اتحفظش")
   return d
 }
+/** The signed-in user as the API sees them: admin or not, and for the admin the 2FA state (null: not signed in or
+ *  the API can't be reached). */
+export async function apiMe(): Promise<{ admin: boolean, mfa?: { enrolled: boolean, aal: string, required: boolean } } | null>{
+  try{
+    const headers = await signedInHeaders(); if(!headers) return null
+    const r=await fetch(`${API}/api/user/me`, { headers, cache: "no-store" }); return r.ok ? await r.json() : null
+  }catch{ return null }
+}
 /** Is the signed-in user the admin (shows the admin buttons; every admin endpoint checks again). */
 export async function apiIsAdmin(): Promise<boolean>{
   try{
@@ -65,6 +73,8 @@ async function postJson(path: string, body: any){
   if(!r.ok) throw new Error(d.detail || "الطلب ما اتبعتش")
   return d
 }
+/** Admin: approve (or remove) an account for its own Demo bots — the provisioner on the server still checks the rest. */
+export const apiAdminApproveUser = (uid: string, on: boolean) => postJson(`/api/admin/user-bots/${encodeURIComponent(uid)}/approve`, { on })
 /** Close one trade in the caller's own paper portfolio (at the bot's current price, on the server). */
 export const apiPortfolioClose = (label: string, opened: string) => postJson("/api/user/portfolio/close", { label, opened })
 /** Admin: ask a paper bot to close one of its positions; the result comes from apiPaperCloseResult. */
@@ -81,22 +91,51 @@ export async function apiLiveStatus(): Promise<any|null>{
     const r=await fetch(`${API}/api/live/status`, { headers, cache: "no-store" }); return r.ok ? r.json() : null
   }catch{ return null }
 }
-export async function apiLiveStrategies(env: "live"|"demo" = "live"): Promise<any|null>{
+/** The Demo measurement: each strategy's own closed Demo trades against the backtest baseline (app/demo_measure.py). */
+export async function apiLiveMeasurement(): Promise<any|null>{
   try{
     const headers = await signedInHeaders(); if(!headers) return null
-    const r=await fetch(`${API}/api/live/strategies?env=${env}`, { headers, cache: "no-store" }); return r.ok ? r.json() : null
+    const r=await fetch(`${API}/api/live/measurement`, { headers, cache: "no-store" }); return r.ok ? r.json() : null
   }catch{ return null }
 }
-export async function apiSetLiveStrategies(env: "live"|"demo", account: string, strategies: string[]): Promise<any>{
-  const r=await fetch(`${API}/api/live/strategies`, { method:"POST", headers: await authHeaders(JSON_CT), body: JSON.stringify({ env, account, strategies }) })
+/** `acct`: a live strategy's own Binance sub-account (backend/app/live_accounts.py); "" = the main account. Sent only
+ *  when set: the frontend deploys before the API, and an API without `acct` refuses unknown fields on some routes. */
+const subAccount = (env: "live"|"demo", acct: string) => env === "live" && acct ? { acct } : {}
+export async function apiLiveStrategies(env: "live"|"demo" = "live", acct = ""): Promise<any|null>{
+  try{
+    const headers = await signedInHeaders(); if(!headers) return null
+    const q = new URLSearchParams({ env, ...(env === "live" && acct ? { acct } : {}) })
+    const r=await fetch(`${API}/api/live/strategies?${q}`, { headers, cache: "no-store" }); return r.ok ? r.json() : null
+  }catch{ return null }
+}
+export async function apiSetLiveStrategies(env: "live"|"demo", account: string, strategies: string[], acct = ""): Promise<any>{
+  const r=await fetch(`${API}/api/live/strategies`, { method:"POST", headers: await authHeaders(JSON_CT), body: JSON.stringify({ env, account, strategies, ...subAccount(env, acct) }) })
   const d = await r.json().catch(()=>({}))
   if(!r.ok) throw new Error(typeof d.detail === "string" ? d.detail : "ما اتحفظش")
   return d
 }
-export async function apiSetCapital(env: "live"|"demo", capital_usdt: number, capital_margin_override_usdt: number): Promise<any>{
-  const r=await fetch(`${API}/api/live/capital`, { method:"POST", headers: await authHeaders(JSON_CT), body: JSON.stringify({ env, capital_usdt, capital_margin_override_usdt }) })
+/** A save the server asks about first (409: the plan looks like the other account's) — confirm, then send again. */
+export class CapitalQuestion extends Error {}
+export async function apiSetCapital(env: "live"|"demo", capital_usdt: number, capital_margin_override_usdt: number, confirm = false, acct = ""): Promise<any>{
+  const r=await fetch(`${API}/api/live/capital`, { method:"POST", headers: await authHeaders(JSON_CT), body: JSON.stringify({ env, capital_usdt, capital_margin_override_usdt, confirm, ...subAccount(env, acct) }) })
+  const d = await r.json().catch(()=>({}))
+  if(r.status === 409 && typeof d.detail === "string") throw new CapitalQuestion(d.detail)
+  if(!r.ok) throw new Error(typeof d.detail === "string" ? d.detail : "ما اتحفظش")
+  return d
+}
+/** An account's risk limits (% of its equity): per trade, aggregate, correlated, daily loss, drawdown. */
+export async function apiSetLimits(env: "live"|"demo", limits: Record<string, number>, acct = ""): Promise<any>{
+  const r=await fetch(`${API}/api/live/limits`, { method:"POST", headers: await authHeaders(JSON_CT), body: JSON.stringify({ env, ...limits, ...subAccount(env, acct) }) })
   const d = await r.json().catch(()=>({}))
   if(!r.ok) throw new Error(typeof d.detail === "string" ? d.detail : "ما اتحفظش")
+  return d
+}
+/** A real account's kill switch: trip stops every strategy's entries on it, reset lets them enter again. */
+export async function apiKillSwitch(action: "trip"|"reset", acct = ""): Promise<any>{
+  const r=await fetch(`${API}/api/admin/risk/kill-switch`, { method:"POST", headers: await authHeaders(JSON_CT),
+    body: JSON.stringify({ action, ...subAccount("live", acct), confirm: true, reason: action === "trip" ? "operator action (dashboard)" : null }) })
+  const d = await r.json().catch(()=>({}))
+  if(!r.ok) throw new Error(typeof d.detail === "string" ? d.detail : "ما اتنفذش")
   return d
 }
 export async function apiLiveClose(strategy: string, symbol: string): Promise<{ id: string }>{
@@ -109,6 +148,78 @@ export async function apiLiveCloseResult(strategy: string, id: string): Promise<
   const r=await fetch(`${API}/api/live/close/${strategy}/${id}`, { headers: await authHeaders(), cache: "no-store" })
   return r.ok ? r.json() : { done: false }
 }
+/** The signed-in account's own activity (security plan item 10): sign-in sessions and sensitive changes, newest first. */
+export type ActivityItem = { at: string, kind: "session" | "account" | "real_money" | "admin", what: string,
+  ip: string | null, device: string | null, details: Record<string, unknown> | null }
+export async function apiUserActivity(): Promise<{ items: ActivityItem[], keep_days: number }|null>{
+  try{
+    const headers = await signedInHeaders(); if(!headers) return null
+    const r=await fetch(`${API}/api/user/activity`, { headers, cache: "no-store" }); return r.ok ? r.json() : null
+  }catch{ return null }
+}
+/** A user's monthly statement (GET /api/user/statement): their own bots' closed trades in one month. */
+export type StatementSummary = { trades: number, wins: number, losses: number, unknown: number, net_usdt: number,
+  funding_usdt: number | null, best_usdt: number | null, worst_usdt: number | null }
+export type StatementTrade = { strategy: string, env: string, symbol: string, side: string, opened: string | null, time: string,
+  entry: number | null, exit: number | null, qty: number | null, pnl: number | null, funding_pnl: number | null, reason: string | null }
+export type Statement = { month: string, env: string | null, months: string[], total: StatementSummary,
+  strategies: Record<string, StatementSummary & { env: string }>, trades: StatementTrade[] }
+export async function apiUserStatement(month: string, env: "live" | "demo"): Promise<Statement|null>{
+  try{
+    const headers = await signedInHeaders(); if(!headers) return null
+    const q = new URLSearchParams({ env, ...(month ? { month } : {}) })
+    const r=await fetch(`${API}/api/user/statement?${q}`, { headers, cache: "no-store" }); return r.ok ? r.json() : null
+  }catch{ return null }
+}
+// ── a user's own bots (Phase 2): what they ask for, their bots' status, closing — always the signed-in user's own
+export async function apiUserBots(): Promise<any|null>{
+  try{
+    const headers = await signedInHeaders(); if(!headers) return null
+    const r=await fetch(`${API}/api/user/bots`, { headers, cache: "no-store" }); return r.ok ? r.json() : null
+  }catch{ return null }
+}
+/** A real-money plan's risk before the user accepts it (GET /api/user/bots/risk): one stop, the worst week, the level. */
+export type LiveRisk = { one_stop_usdt: number, per_trade_pct: number, legs: number, worst_usdt: number, aggregate_pct: number,
+  level: "low" | "medium" | "high" | "very_high", ok: boolean, why: string | null,
+  reserve_pct: number, max_open: number, fits: boolean, max_margin: number }   // the whole basket after the reserve
+export async function apiUserBotsRisk(capital: number, margin: number, reserve = 40, strategies: string[] = ["momentum_ls"]): Promise<LiveRisk | null>{
+  try{
+    const headers = await signedInHeaders(); if(!headers) return null
+    const q = new URLSearchParams({ capital: String(capital), margin: String(margin), reserve: String(reserve), strategies: strategies.join(",") })
+    const r = await fetch(`${API}/api/user/bots/risk?${q}`, { headers, cache: "no-store" })
+    return r.ok ? r.json() : null
+  }catch{ return null }
+}
+export async function apiSetUserBots(body: any): Promise<any>{
+  let r: Response | undefined
+  try{ r = await fetch(`${API}/api/user/bots`, { method:"POST", headers: await authHeaders(JSON_CT), body: JSON.stringify(body) }) }
+  catch{ r = undefined }
+  // a server error answered without CORS headers reaches the page as no answer at all (2026-11-07: "reading 'json'")
+  if(!r) throw new Error("الطلب ما وصلش للسيرفر أو السيرفر وقع — جرّب تاني بعد شوية، ولو اتكرر بلّغ")
+  const d = await r.json().catch(()=>({}))
+  if(!r.ok) throw new Error(d.detail || (r.status >= 500 ? "حصل خطأ في السيرفر — ما اتحفظش" : "ما اتحفظش"))
+  return d
+}
+export async function apiUserBotClose(strategy: string, symbol: string): Promise<{ id: string }>{
+  const r=await fetch(`${API}/api/user/bots/close`, { method:"POST", headers: await authHeaders(JSON_CT), body: JSON.stringify({ strategy, symbol }) })
+  const d = await r.json().catch(()=>({}))
+  if(!r.ok) throw new Error(d.detail || "الطلب ما اتبعتش")
+  return d
+}
+export async function apiAdminUserBots(): Promise<any|null>{
+  try{
+    const headers = await signedInHeaders(); if(!headers) return null
+    const r=await fetch(`${API}/api/admin/user-bots`, { headers, cache: "no-store" }); return r.ok ? r.json() : null
+  }catch{ return null }
+}
+/** Admin: the owner's switch for real money for invited users (root's main lock on the server is needed too). */
+export async function apiAdminUsersLive(): Promise<{ on: boolean, by: string | null, at: string | null } | null>{
+  try{
+    const headers = await signedInHeaders(); if(!headers) return null
+    const r=await fetch(`${API}/api/admin/users-live`, { headers, cache: "no-store" }); return r.ok ? r.json() : null
+  }catch{ return null }
+}
+export const apiSetAdminUsersLive = (on: boolean) => postJson("/api/admin/users-live", { on, confirm: true })
 export function chartUrl(file:string){ return `${API}/api/chart?file=${encodeURIComponent(file)}` }
 /** The chart needs the user's login (it's theirs only) — an <img src> can't send it, so fetch it and show a local copy. */
 export async function apiChartObjectUrl(file:string): Promise<string|null>{

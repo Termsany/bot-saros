@@ -2,6 +2,10 @@
 from __future__ import annotations
 import math
 import os
+import re
+import copy
+import hashlib
+import json
 
 ALL_STRATEGIES = (
     "trend_daily", "listing_short", "momentum_ls", "ratio_trend",
@@ -9,20 +13,54 @@ ALL_STRATEGIES = (
 )
 
 EVIDENCE_FIELDS = ("adapter_implemented", "recovery_tests", "security_approved", "testnet_validated")
+_SHA40 = re.compile(r"^[0-9a-f]{40}$")
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
-def build_admin_readiness(*, strategies, evidence=None, live_locked, environment=None):
+def _canonical_json(document):
+    return json.dumps(document, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+
+
+def evidence_artifact_sha256(evidence):
+    """Digest the complete evidence document with its digest field blanked."""
+    document = copy.deepcopy(evidence)
+    document.setdefault("provenance", {})["evidence_artifact_sha256"] = ""
+    return hashlib.sha256(_canonical_json(document)).hexdigest()
+
+
+def _valid_v2_provenance(provenance, evidence, expected_reviewed_commit_sha):
+    if not isinstance(provenance, dict) or set(provenance) != {
+        "reviewed_commit_sha", "evidence_artifact_sha256", "evidence_id", "producer", "owner", "independent_review"
+    }:
+        return False
+    review = provenance["independent_review"]
+    return (
+        isinstance(provenance["reviewed_commit_sha"], str) and bool(_SHA40.fullmatch(provenance["reviewed_commit_sha"]))
+        and isinstance(provenance["evidence_artifact_sha256"], str) and bool(_SHA256.fullmatch(provenance["evidence_artifact_sha256"]))
+        and isinstance(provenance["evidence_id"], str) and bool(provenance["evidence_id"].strip())
+        and all(isinstance(provenance[k], str) and bool(provenance[k].strip()) for k in ("producer", "owner"))
+        and isinstance(review, dict) and set(review) == {"reviewers", "open_findings"}
+        and isinstance(review["reviewers"], list)
+                and all(isinstance(r, str) and r.strip() for r in review["reviewers"])
+                and len(set(review["reviewers"])) >= 2
+        and type(review["open_findings"]) is int and review["open_findings"] == 0
+        and isinstance(expected_reviewed_commit_sha, str)
+        and bool(_SHA40.fullmatch(expected_reviewed_commit_sha))
+        and provenance["reviewed_commit_sha"] == expected_reviewed_commit_sha
+        and provenance["evidence_artifact_sha256"] == evidence_artifact_sha256(evidence)
+    )
+
+
+def build_admin_readiness(*, strategies, evidence=None, live_locked, environment=None, expected_reviewed_commit_sha=None):
     """Build readiness only from a versioned, provenance-bearing evidence document."""
     evidence = evidence if isinstance(evidence, dict) else {}
     provenance = evidence.get("provenance")
     valid_document = (
-        evidence.get("schema_version") == 1
-        and isinstance(provenance, dict)
-        and provenance.get("source") == "trusted-readiness"
-        and provenance.get("verified") is True
+        evidence.get("schema_version") == 2
+        and _valid_v2_provenance(provenance, evidence, expected_reviewed_commit_sha)
         and isinstance(evidence.get("strategies"), dict)
         and set(evidence) == {"schema_version", "provenance", "strategies"}
-        and set(provenance) == {"source", "verified"}
+
     )
     env = environment if environment is not None else os.getenv("BINANCE_ENV", "")
     rows = {}
@@ -49,7 +87,7 @@ def build_admin_readiness(*, strategies, evidence=None, live_locked, environment
     }
 
 
-def build_live_activation_readiness(*, strategies, evidence=None, live_enabled):
+def build_live_activation_readiness(*, strategies, evidence=None, live_enabled, expected_reviewed_commit_sha=None):
     """Server-derived readiness for the live activation record: bool per strategy.
 
     Unlike build_admin_readiness, this does not require the current process to be running on testnet. The evidence
@@ -59,7 +97,8 @@ def build_live_activation_readiness(*, strategies, evidence=None, live_enabled):
     """
     if not live_enabled:
         return {s: False for s in strategies or []}
-    report = build_admin_readiness(strategies=strategies, evidence=evidence, live_locked=False, environment="testnet")
+    report = build_admin_readiness(strategies=strategies, evidence=evidence, live_locked=False, environment="testnet",
+                                   expected_reviewed_commit_sha=expected_reviewed_commit_sha)
     return {s: bool(report["strategies"].get(s, {}).get("live_ready")) for s in strategies or []}
 
 

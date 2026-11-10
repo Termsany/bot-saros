@@ -1,14 +1,19 @@
 import "./globals.css"
-import { Cairo, JetBrains_Mono } from "next/font/google"
+// Self-hosted (npm @fontsource, bundled into /_next/static): next/font/google downloaded the fonts from Google at build
+// time, and a bad answer from there failed the build (CI, 2026-11-03, twice in an hour). globals.css names them in the
+// --font-cairo / --font-geist / --font-mono variables the tailwind.config.js / globals.css tokens use.
+import "@fontsource-variable/cairo"
+import "@fontsource-variable/geist"
+import "@fontsource/jetbrains-mono/500.css"
+import "@fontsource/jetbrains-mono/700.css"
+import { headers } from "next/headers"
 import { BRAND } from "@/lib/brand"
-
-// The tokens in tailwind.config.js / globals.css name these variables; without next/font they were never defined and
-// every page fell back to the system font
-const cairo = Cairo({ subsets: ["arabic", "latin"], weight: ["400", "500", "600", "700", "800", "900"], variable: "--font-cairo", display: "swap" })
-const mono = JetBrains_Mono({ subsets: ["latin"], weight: ["500", "700"], variable: "--font-mono", display: "swap" })
+import { LocaleProvider } from "@/lib/i18n/locale"
 
 export const metadata = { title: `${BRAND.nameCaps} ${BRAND.nameAr} — AI Crypto Trading`, description: `${BRAND.nameAr} — ${BRAND.taglineAr}: 4 بوتات تداول مختبرة، لونج وشورت، مباشر` }
 
-export default function RootLayout({children}:{children:React.ReactNode}){
-  return <html lang="ar" dir="rtl" className={`${cairo.variable} ${mono.variable}`}><body className="bg-void text-ink antialiased font-sans">{children}</body></html>
+export default async function RootLayout({children}:{children:React.ReactNode}){
+  // the page's language: middleware.ts says which (the landing pages, and the bilingual pages by the visitor's choice)
+  const en = (await headers()).get("x-raqm-locale") === "en"
+  return <html lang={en ? "en" : "ar"} dir={en ? "ltr" : "rtl"} suppressHydrationWarning><body className="bg-void text-ink antialiased font-sans"><LocaleProvider locale={en ? "en" : "ar"}>{children}</LocaleProvider></body></html>
 }

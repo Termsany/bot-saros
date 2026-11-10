@@ -25,7 +25,7 @@ class OcoTests(unittest.TestCase):
         # SL succeeds, TP fails
         def create_order(sym, typ, side, qty, price, params):
             if "stopLossPrice" in params:
-                return {"id": "sl-1", "clientOrderId": params.get("clientOrderId")}
+                return {"id": "sl-1", "clientOrderId": params.get("clientOrderId"), "status": "open"}
             raise Exception("tp rejected")
         ex.create_order.side_effect = create_order
         ex.cancel_order = mock.Mock()
@@ -50,8 +50,8 @@ class CancelOwnershipTests(unittest.TestCase):
         # two open orders: one owned, one manual
         owned = f"{OCO_PREFIX}-abcd1234-sl"
         ex.fetch_open_orders.return_value = [
-            {"id": "1", "clientOrderId": owned, "type": "STOP_MARKET"},
-            {"id": "2", "clientOrderId": "manual-xyz", "type": "STOP_MARKET"},
+            {"id": "1", "clientOrderId": owned, "type": "STOP_MARKET", "status": "open"},
+            {"id": "2", "clientOrderId": "manual-xyz", "type": "STOP_MARKET", "status": "open"},
         ]
         ex.cancel_order = mock.Mock()
         cancel_oco_orders(ex, "BTC/USDT", pos_id="abcd1234")

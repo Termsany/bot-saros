@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 from fastapi.testclient import TestClient
 
-from app import auth, keys_vault
+from app import auth, user_keys_vault
 from app.main import app, _get_exchange_for_cycle
 from app.llm_sandbox import validate_code, UnsafeCode, run_backtest_sandboxed
 
@@ -61,7 +61,7 @@ class ApiAuthTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.patches = [
             mock.patch.object(auth, "_verify_token", fake_verify),
-            mock.patch.object(keys_vault, "VAULT_PATH", Path(self.tmp.name) / "vault.json"),
+            mock.patch.object(user_keys_vault, "VAULT_PATH", Path(self.tmp.name) / "user_vault.json"),
             mock.patch.dict(os.environ, {"ADMIN_EMAILS": ADMIN["email"], "CRON_SECRET": "cron-s3cret",
                                          "VAULT_MASTER_KEY": "", "ALLOW_LIVE_TRADING": ""}),
         ]
@@ -80,9 +80,10 @@ class ApiAuthTests(unittest.TestCase):
         # /api/plans: the plan prices the pricing page shows; /api/invites/{id}: an invitation's offer for its page
         # (the email masked, the id an unguessable secret) — accepting it needs login
         public = {"/api/health", "/api/chart", "/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc",
-                  "/api/plans", "/api/invites/{invite_id}"}
+                  "/api/plans", "/api/invites/{invite_id}", "/api/health/bots"}
         checked = 0
-        for r in app.routes:
+        from app.routes import all_routes
+        for r in all_routes(app):          # the routers' endpoints too (development-plan 3.2)
             if not hasattr(r, "methods") or r.path in public:
                 continue
             for m in r.methods - {"HEAD", "OPTIONS"}:
@@ -92,7 +93,7 @@ class ApiAuthTests(unittest.TestCase):
         self.assertGreaterEqual(checked, 20)
 
     def test_admin_endpoints_reject_normal_user(self):
-        for m, path in [("GET", "/api/keys/status"), ("POST", "/api/keys/paper"), ("GET", "/api/trades"),
+        for m, path in [("GET", "/api/admin/activation"), ("GET", "/api/trades"),
                         ("POST", "/api/bot/stop"), ("GET", "/api/bot/status"), ("POST", "/api/llm/generate"),
                         ("POST", "/api/evolve"), ("POST", "/api/telegram/test")]:
             resp = self.c.request(m, path, headers=self.h("user-token"), json={})
@@ -100,11 +101,11 @@ class ApiAuthTests(unittest.TestCase):
 
     def test_admin_fails_closed_without_admin_emails(self):
         with mock.patch.dict(os.environ, {"ADMIN_EMAILS": ""}):
-            self.assertEqual(self.c.get("/api/keys/status", headers=self.h("admin-token")).status_code, 403)
+            self.assertEqual(self.c.get("/api/admin/activation", headers=self.h("admin-token")).status_code, 403)
 
     def test_unconfirmed_admin_email_is_not_admin(self):
-        self.assertEqual(self.c.get("/api/keys/status", headers=self.h("squat-token")).status_code, 403)
-        self.assertEqual(self.c.get("/api/keys/status", headers=self.h("admin-token")).status_code, 200)
+        self.assertEqual(self.c.get("/api/admin/activation", headers=self.h("squat-token")).status_code, 403)
+        self.assertEqual(self.c.get("/api/admin/activation", headers=self.h("admin-token")).status_code, 200)
 
     def test_backtest_plan_limits_enforced_server_side(self):
         from app import main
@@ -156,22 +157,13 @@ class ApiAuthTests(unittest.TestCase):
         r = self.c.post("/api/evolve", headers={"X-Cron-Secret": "cron-s3cret"})
         self.assertEqual(r.status_code, 200)  # auto_optimizer.py missing -> ok:false, but authorized
 
-    def test_new_keys_start_in_paper_and_live_needs_kill_switch(self):
-        r = self.c.post("/api/keys/save", headers=self.h("admin-token"),
-                        json={"exchange": "bybit", "apiKey": "APIKEY-XYZ", "secret": "SECRET-XYZ"})
-        self.assertEqual(r.status_code, 200)
-        st = self.c.get("/api/keys/status", headers=self.h("admin-token")).json()
-        self.assertTrue(st["bybit"]["configured"])
-        self.assertTrue(st["bybit"]["paper"])
-        self.assertNotIn("XYZ", str(st))  # secrets never returned
-        r = self.c.post("/api/keys/paper", headers=self.h("admin-token"), json={"exchange": "bybit", "paper": False})
-        self.assertEqual(r.status_code, 400)
+    def test_the_admin_keys_endpoints_are_gone(self):
+        """2026-11-04: they fed only the paper dashboard loop; keys are the users' Demo vault or a file on the server."""
+        for m, path in [("GET", "/api/keys/status"), ("POST", "/api/keys/save"), ("POST", "/api/keys/delete"),
+                        ("POST", "/api/keys/paper"), ("GET", "/api/keys/live")]:
+            self.assertEqual(self.c.request(m, path, headers=self.h("admin-token"), json={}).status_code, 404, f"{m} {path}")
         with mock.patch.dict(os.environ, {"ALLOW_LIVE_TRADING": "true"}):
-            r = self.c.post("/api/keys/paper", headers=self.h("admin-token"), json={"exchange": "bybit", "paper": False})
-            self.assertEqual(r.status_code, 200)
-            # re-saving keys keeps LIVE (doesn't silently flip mode)
-            self.c.post("/api/keys/save", headers=self.h("admin-token"), json={"exchange": "bybit", "apiKey": "k2", "secret": "s2"})
-            self.assertFalse(self.c.get("/api/keys/status", headers=self.h("admin-token")).json()["bybit"]["paper"])
+            self.assertIsNone(_get_exchange_for_cycle(paper=False))      # the dashboard loop never trades for real
 
     def test_bot_live_start_blocked_without_kill_switch(self):
         r = self.c.post("/api/bot/start", headers=self.h("admin-token"), json={"paper": False})

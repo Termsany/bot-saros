@@ -1,0 +1,321 @@
+"""Real-money preflight: every check that must pass before a raqm-live@<strategy> unit is started.
+
+Read only — it never sends an order, never changes a setting and never prints a key. Each line says what is wrong
+and what to do; the exit code is 0 only when everything passes. The Binance checks use the real account's keys
+(.env.real) on read-only endpoints: the key must have withdrawals off and be restricted to this server's IP, the
+account must be in one-way mode (the bot's orders assume it), and the strategy's whole basket must fit root's risk
+ceilings at the plan's margin.
+
+  sudo /opt/raqm-live/venv/bin/python -I /opt/raqm-live/scripts/live_preflight.py --strategy momentum_ls
+"""
+import argparse, json, os, re, stat, sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+from backend.app import risk_manager as riskmgr
+from backend.app import testnet_readiness
+from backend.app import live_accounts
+
+PATHS = {
+    "live": Path("/opt/raqm-live"),
+    "api_env": Path("/opt/raqm-api/.env"),
+    "evidence": Path("/opt/raqm-api/app/readiness_evidence.json"),   # the API's BOT_DIR
+    "ledger": Path("/opt/raqm-risk/risk_state.json"),
+    "unit": Path("/etc/systemd/system/raqm-live@.service"),
+    "units": Path("/etc/systemd/system"),
+    "registry": live_accounts.REGISTRY, "accounts_dir": live_accounts.ACCOUNTS_DIR, "risk_root": live_accounts.RISK_ROOT,
+}
+# legs a strategy opens at once and its protective stop (bot.py: MOM, the single-leg adapters' 40% plan stop)
+BASKET = {"momentum_ls": 10, "ratio_trend": 2}
+STOP_DISTANCE = riskmgr.PLAN_STOP_LOSS
+SHA40 = re.compile(r"^[0-9a-f]{40}$")
+SRC = Path("/root/raqm-src")                       # setup-live.sh's root-owned clone: what each commit contained
+REQUIREMENTS = "deploy/vps/live-requirements.txt"  # the bot's pinned packages (the venv setup-live.sh builds)
+
+
+def parse_env(path):
+    """KEY=VALUE lines of an EnvironmentFile (quotes stripped); {} when it can't be read."""
+    out = {}
+    try:
+        for line in Path(path).read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line: continue
+            k, v = line.split("=", 1)
+            out[k.strip()] = v.strip().strip("'\"")
+    except OSError:
+        pass
+    return out
+
+
+def _owner(path):
+    try:
+        import pwd
+        return pwd.getpwuid(os.stat(path).st_uid).pw_name
+    except (ImportError, KeyError, OSError):
+        return None
+
+
+def _mode(path):
+    return stat.S_IMODE(os.stat(path).st_mode)
+
+
+def file_ok(path, owner, mode=0o600):
+    """(ok, why): a regular file, not a link, owned by `owner`, with exactly `mode`."""
+    p = Path(path)
+    if p.is_symlink(): return False, f"{p} is a symlink"
+    if not p.is_file(): return False, f"{p} is missing"
+    have = _mode(p)
+    if have != mode: return False, f"{p} has mode {have:o}, needs {mode:o}"
+    who = _owner(p)
+    if who != owner: return False, f"{p} is owned by {who}, needs {owner}"
+    return True, f"{p} ({owner}, {mode:o})"
+
+
+def trading_files(live):
+    """The code a real-money bot runs, as setup-live.sh installs it: the top-level modules, the backend modules,
+    bots/ (one file per strategy, when present). scripts/ are tools that place no order and are not in it."""
+    live = Path(live)
+    files = [p for p in sorted(live.glob("*.py")) + sorted((live / "backend" / "app").glob("*.py")) + sorted((live / "bots").glob("*.py"))
+             if p.is_file() and not p.is_symlink()]
+    return [p.relative_to(live).as_posix() for p in files]
+
+
+def trading_code_diff(src, reviewed, live, deployed):
+    """[] when every trading file under `live` is byte for byte the reviewed commit's and the pinned packages are the
+    same; else the paths that differ (or are new since the review); a str when git can't tell."""
+    import subprocess
+    def show(rev, path):
+        r = subprocess.run(["git", "-C", str(src), "show", f"{rev}:{path}"], capture_output=True)
+        return r.stdout if r.returncode == 0 else None
+    try:
+        for rev in (reviewed, deployed):
+            if subprocess.run(["git", "-C", str(src), "cat-file", "-e", f"{rev}^{{commit}}"], capture_output=True).returncode:
+                return f"commit {rev[:12]} not in {src}"
+        out = [rel for rel in trading_files(live) if show(reviewed, rel) != (Path(live) / rel).read_bytes()]
+        if show(reviewed, REQUIREMENTS) != show(deployed, REQUIREMENTS):
+            out.append(REQUIREMENTS)
+        return out
+    except (OSError, ValueError) as e:
+        return f"{type(e).__name__}: {e}"
+
+
+def account(paths, strategy, copy=None):
+    """Where `strategy` trades (backend/app/live_accounts.py): the main account's files, or its own account's; with
+    `copy`, its copy on that copy account. Raises live_accounts.RegistryError on a registry that can't be trusted, or a
+    copy that isn't registered (run() turns it into a failed check)."""
+    reg = paths.get("registry", live_accounts.REGISTRY)
+    if copy is not None:
+        if strategy not in live_accounts.load_copies(reg).get(copy, []):
+            raise live_accounts.RegistryError(f"{strategy} has no copy on '{copy}' (live_account.py add-copy {copy} {strategy})")
+        p = live_accounts.paths(copy, paths.get("accounts_dir", live_accounts.ACCOUNTS_DIR), paths.get("risk_root", live_accounts.RISK_ROOT))
+        return {"name": copy, "copy": True, "keys": p["keys"], "keys_owner": "root", "allow": p["allow"], "ledger": p["risk"] / "risk_state.json"}
+    accounts = live_accounts.load(reg)
+    name = live_accounts.account_of(strategy, accounts)
+    if name is None:
+        return {"name": None, "keys": paths["live"] / ".env.real", "keys_owner": "raqmlive", "allow": paths["live"] / "allow-live.env",
+                "ledger": paths["ledger"]}
+    p = live_accounts.paths(name, paths.get("accounts_dir", live_accounts.ACCOUNTS_DIR), paths.get("risk_root", live_accounts.RISK_ROOT))
+    return {"name": name, "keys": p["keys"], "keys_owner": "root", "allow": p["allow"], "ledger": p["risk"] / "risk_state.json"}
+
+
+def check_account(paths, strategy, acct):
+    """A strategy on its own account: its unit's drop-in is the one live_account.py writes, and its key is not the main
+    account's (two strategies on one Binance account block each other's coins — the reason it has its own)."""
+    if acct["name"] is None:
+        return [("account", True, "main (/opt/raqm-live/.env.real)")]
+    rows = [("account", True, f"'{acct['name']}'{' (a copy)' if acct.get('copy') else ''} ({acct['keys'].parent})")]
+    units = Path(paths.get("units", "/etc/systemd/system"))
+    adir, rroot = paths.get("accounts_dir", live_accounts.ACCOUNTS_DIR), paths.get("risk_root", live_accounts.RISK_ROOT)
+    if acct.get("copy"):
+        d, what = units / f"raqm-live-{acct['name']}@.service", f"raqm-live-{acct['name']}@ unit"
+        want, fix = live_accounts.copy_unit_text(acct["name"], adir, rroot), f"live_account.py add-copy {acct['name']} {strategy}"
+    else:
+        d, what = units / f"raqm-live@{strategy}.service.d" / "account.conf", f"raqm-live@{strategy} drop-in for '{acct['name']}'"
+        want, fix = live_accounts.dropin_text(acct["name"], strategy, adir, rroot), f"live_account.py add {acct['name']} {strategy}"
+    have = d.read_text(encoding="utf-8") if d.is_file() else None
+    rows.append((what, have == want, "as live_account.py writes it" if have == want else f"{d} {'missing' if have is None else 'changed'}: run {fix}"))
+    mine, main = parse_env(acct["keys"]).get("BINANCE_API_KEY"), parse_env(paths["live"] / ".env.real").get("BINANCE_API_KEY")
+    rows.append(("its key is not the main account's", bool(mine) and mine != main,
+                 "different keys (not shown)" if mine and mine != main else "the same key as .env.real: give this bot its own sub-account" if mine else "no key yet"))
+    return rows
+
+
+def check_files(paths, strategy, acct=None):
+    acct = acct or account(paths, strategy)
+    live = paths["live"]; rows = []
+    sha = (live / "DEPLOYED_COMMIT").read_text(encoding="utf-8").strip() if (live / "DEPLOYED_COMMIT").is_file() else ""
+    rows.append(("deployed commit", bool(SHA40.match(sha)), sha or "no DEPLOYED_COMMIT: run setup-live.sh <sha>"))
+
+    ok, why = file_ok(acct["keys"], acct["keys_owner"])
+    keys = parse_env(acct["keys"])
+    if ok and not (keys.get("BINANCE_API_KEY") and keys.get("BINANCE_SECRET")):
+        ok, why = False, f"{acct['keys'].name} has no BINANCE_API_KEY / BINANCE_SECRET line"
+    rows.append(("real account keys file", ok, why if not ok else "keys present (not shown)"))
+
+    ok, why = file_ok(acct["allow"], "root")
+    allow = parse_env(acct["allow"])
+    rows.append(("allow-live.env (root, 600)", ok, why))
+    rows.append(("ALLOW_LIVE_TRADING=true for the bot", allow.get("ALLOW_LIVE_TRADING", "").lower() == "true", "in allow-live.env"))
+    rows.append(("BINANCE_LIVE_ACCOUNT", bool(allow.get("BINANCE_LIVE_ACCOUNT")), allow.get("BINANCE_LIVE_ACCOUNT") or "set a name in allow-live.env; the dashboard's activation uses the same"))
+    caps = None
+    saved = {k: os.environ.pop(k, None) for k in riskmgr.HARD_CAP_ENV.values()}
+    try:
+        os.environ.update({k: allow[k] for k in riskmgr.HARD_CAP_ENV.values() if k in allow})
+        caps = riskmgr.hard_caps(required=True)
+        rows.append(("risk ceilings (RAQM_CAP_*_PCT)", True, ", ".join(f"{k} {v:g}%" for k, v in caps.items())))
+    except ValueError as e:
+        rows.append(("risk ceilings (RAQM_CAP_*_PCT)", False, f"{e} — all five in allow-live.env (deploy/vps/README.md)"))
+    finally:
+        for k, v in saved.items():
+            os.environ.pop(k, None)
+            if v is not None: os.environ[k] = v
+
+    unit = paths["unit"].read_text(encoding="utf-8") if paths["unit"].is_file() else ""
+    exec_line = next((l for l in unit.splitlines() if l.startswith("ExecStart=")), "")
+    rows.append(("raqm-live@ unit installed", "--expect-env live" in exec_line,
+                 "installed" if exec_line else "install deploy/vps/raqm-live@.service (README, Real money step 3)"))
+
+    api = parse_env(paths["api_env"])
+    rows.append(("ALLOW_LIVE_TRADING=true for the API", api.get("ALLOW_LIVE_TRADING", "").lower() == "true", "in /opt/raqm-api/.env (the dashboard's yes/no needs it)"))
+    expected = api.get("READINESS_EXPECTED_COMMIT_SHA", "").lower()
+    if not (SHA40.match(expected) and SHA40.match(sha)):
+        rows.append(("readiness bound to the deployed code", False, f"READINESS_EXPECTED_COMMIT_SHA={expected or '(unset)'} vs deployed {sha or '(none)'}"))
+    elif expected == sha:
+        rows.append(("readiness bound to the deployed code", True, f"reviewed commit = deployed {sha[:12]}"))
+    else:
+        # a deploy of scripts, docs or the site moves DEPLOYED_COMMIT without touching what trades: compare the code itself
+        diff = trading_code_diff(paths.get("src", SRC), expected, live, sha)
+        rows.append(("readiness bound to the deployed code", diff == [],
+                     f"trading code of reviewed {expected[:12]} = deployed {sha[:12]} (only other files differ)" if diff == [] else
+                     f"can't compare reviewed {expected[:12]} with deployed {sha[:12]}: {diff}" if isinstance(diff, str) else
+                     f"trading code changed since reviewed {expected[:12]}: {', '.join(diff)} — review it, then bind the evidence to {sha[:12]}"))
+    try:
+        evidence = json.loads(paths["evidence"].read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        evidence = None
+    ready = testnet_readiness.build_live_activation_readiness(strategies=[strategy], evidence=evidence or {}, live_enabled=True,
+                                                              expected_reviewed_commit_sha=expected or None)
+    rows.append((f"readiness evidence for {strategy}", ready.get(strategy) is True,
+                 "valid v2 evidence for this commit" if ready.get(strategy) else
+                 f"{paths['evidence']} {'missing' if evidence is None else 'not valid for this strategy/commit'}: needs the Demo results and two independent reviewers"))
+    return rows, caps
+
+
+def check_ledger(paths, ledger=None):
+    ledger = ledger or paths["ledger"]
+    if not live_accounts.ledger_exists(Path(ledger).parent):   # never made here, as root: the bot or the API makes it
+        return [("real-money risk ledger", False, f"{Path(ledger).parent} has no ledger yet: set the account's capital and limits on the dashboard")], None
+    try:
+        st = riskmgr.load_risk_state(ledger)
+    except Exception as e:
+        return [("real-money risk ledger", False, f"{ledger}: {e}")], None
+    ks = st.get("kill_switch") or {}
+    return [("real-money risk ledger", True, str(ledger)),
+            ("kill switch clear", not ks.get("tripped"), ks.get("reason") or "clear")], st
+
+
+def basket_fits(strategy, margin, leverage, base, limits, caps):
+    """(ok, why): the strategy's whole basket, every leg at its stop, inside the limits the gate applies — the lower of
+    the dashboard's and root's ceiling, as a % of the gate's basis (the capital when a plan is set, ≤ the equity). Half
+    the legs share a side (momentum_ls: 5 longs, 5 shorts) and a correlation group (the picks are alts), so that half
+    counts against the correlated limit."""
+    legs = BASKET.get(strategy, 1)
+    leg_pct = margin * leverage * STOP_DISTANCE / base * 100.0
+    total, side = leg_pct * legs, leg_pct * -(-legs // 2)
+    why = f"{legs} leg(s) × {leg_pct:.2f}% = {total:.2f}% at margin ${margin:g} x{leverage} on ${base:,.0f}"
+    for value, key, what in ((leg_pct, "risk_per_trade_pct", "one leg"), (total, "max_aggregate_risk_pct", "the basket"),
+                             (side, "max_correlated_risk_pct", "one side of the basket")):
+        limit = float(limits[key])
+        if value > limit + 1e-9:
+            by = "root's ceiling" if limit >= float(caps[key]) else "the dashboard's limit (الإدارة ← المخاطر)"
+            return False, why + f" — {what} ({value:.2f}%) is above {key} {limit:g}%, set by {by}"
+    return True, why
+
+
+def check_binance(keys, strategy, caps, ledger_state, args_line, clients=None):
+    """The real account, on read-only endpoints. `clients` = (futures, spot) for tests; ccxt otherwise."""
+    rows = []
+    if not (keys.get("BINANCE_API_KEY") and keys.get("BINANCE_SECRET")):
+        return [("Binance real account", False, "skipped: no keys in the account's keys file")]
+    if clients is None:
+        import ccxt
+        conf = {"apiKey": keys["BINANCE_API_KEY"], "secret": keys["BINANCE_SECRET"], "enableRateLimit": True}
+        clients = (ccxt.binanceusdm(dict(conf)), ccxt.binance(dict(conf)))
+    fut, spot = clients
+    try:
+        r = spot.sapi_get_account_apirestrictions()
+        rows.append(("key: withdrawals OFF", r.get("enableWithdrawals") is False, "enableWithdrawals=" + str(r.get("enableWithdrawals"))))
+        rows.append(("key: restricted to this server's IP", r.get("ipRestrict") is True, "ipRestrict=" + str(r.get("ipRestrict"))))
+        rows.append(("key: futures trading on", r.get("enableFutures") is True, "enableFutures=" + str(r.get("enableFutures"))))
+    except Exception as e:
+        rows.append(("key permissions readable", False, f"{type(e).__name__}: {str(e)[:160]}"))
+    try:
+        hedged = fut.fetch_position_mode().get("hedged")
+        rows.append(("account in one-way mode", hedged is False, "hedge mode is ON: switch the futures account to one-way" if hedged else "one-way"))
+    except Exception as e:
+        rows.append(("account position mode readable", False, f"{type(e).__name__}: {str(e)[:160]}"))
+    try:
+        usdt = fut.fetch_balance().get("USDT") or {}
+        equity = float(usdt.get("total") or 0)
+        rows.append(("USDT on the futures account", equity > 0, f"${equity:,.2f}"))
+    except Exception as e:
+        rows.append(("futures balance readable", False, f"{type(e).__name__}: {str(e)[:160]}")); equity = 0.0
+    # the account is the bot's alone: next to a position it didn't open it blocks every entry, and on a one-way account
+    # its own trade on that coin would merge with it (2026-11-03: the key was the owner's main account, 5 positions)
+    try:
+        own = {str(r.get("symbol") or "").split(":")[0] for r in ((ledger_state or {}).get("open_risk") or {}).values()}
+        foreign = sorted(str(p.get("symbol")).split(":")[0] for p in fut.fetch_positions()
+                         if float(p.get("contracts") or 0) and str(p.get("symbol")).split(":")[0] not in own)
+        rows.append(("no positions the bot didn't open", not foreign,
+                     "none" if not foreign else f"{len(foreign)} on the account: {', '.join(foreign[:8])} — use a sub-account for the bot alone"))
+    except Exception as e:
+        rows.append(("account positions readable", False, f"{type(e).__name__}: {str(e)[:160]}"))
+    if caps and equity > 0:
+        # sized as the bot sizes it: the dashboard's capital plan under root's ceilings, else the unit's --amount
+        limits = {**riskmgr.DEFAULT_LIMITS, **((ledger_state or {}).get("limits") or {})}
+        for k, c in caps.items():
+            limits[k] = min(float(limits.get(k) if limits.get(k) is not None else c), c)
+        plan = riskmgr.capital_plan(limits, equity) if ledger_state else None
+        margin = float(plan["margin"]) if plan else _arg(args_line, "--amount", 100.0)
+        rows.append((f"{strategy} basket fits the risk limits", *basket_fits(strategy, margin, int(_arg(args_line, "--leverage", 2)),
+                                                                              riskmgr.risk_basis(limits, equity), limits, caps)))
+    return rows
+
+
+def _arg(line, name, default):
+    m = re.search(re.escape(name) + r"\s+([0-9.]+)", line or "")
+    return float(m.group(1)) if m else float(default)
+
+
+def run(paths, strategy, clients=None, copy=None):
+    try:
+        acct = account(paths, strategy, copy)
+    except live_accounts.RegistryError as e:
+        return [("accounts registry", False, f"{e} — fix it with deploy/vps/tools/live_account.py")]
+    rows = check_account(paths, strategy, acct)
+    file_rows, caps = check_files(paths, strategy, acct)
+    rows += file_rows
+    ledger_rows, ledger_state = check_ledger(paths, acct["ledger"])
+    rows += ledger_rows
+    opts = f"{copy}-{strategy}.env" if copy else f"{strategy}.env"          # a copy's options are its own (its unit)
+    args_line = parse_env(paths["live"] / "strategies" / opts).get("RAQM_ARGS", "--leverage 2 --amount 100")
+    rows += check_binance(parse_env(acct["keys"]), strategy, caps, ledger_state, args_line, clients)
+    return rows
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--strategy", default="momentum_ls")
+    ap.add_argument("--account", default=None, help="a copy account (live_account.py add-copy): check that copy")
+    a = ap.parse_args()
+    rows = run(PATHS, a.strategy, copy=a.account)
+    for name, ok, why in rows:
+        print(f"{'✅' if ok else '❌'} {name} — {why}")
+    bad = sum(1 for _, ok, _ in rows if not ok)
+    print(f"\n{len(rows) - bad}/{len(rows)} passed" + ("" if not bad else f" — {bad} to fix before real money"))
+    sys.exit(0 if not bad else 1)
+
+
+if __name__ == "__main__":
+    main()

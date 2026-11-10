@@ -18,6 +18,8 @@ EnvironmentFile=-/opt/raqm-live/.env.telegram
 EnvironmentFile=/opt/raqm-live/.env.real
 # root-owned, chmod 600: ALLOW_LIVE_TRADING=true and BINANCE_LIVE_ACCOUNT=<the account name of the dashboard's activation>.
 # Which strategies may enter is the dashboard's yes/no (the activation record); an off strategy still exits.
+# Also root's ceilings over the dashboard's risk limits (RAQM_CAP_*_PCT, deploy/vps/README.md): required, the bot
+# refuses to start without them.
 EnvironmentFile=/opt/raqm-live/allow-live.env
 Environment=BINANCE_ENV=live
 # this strategy's own folder for the admin page: live_status.json out, manual close requests in

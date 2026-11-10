@@ -1,0 +1,26 @@
+# Problem alerts for the users' bots (scripts/watchdog.py --users), Phase 2. Root with ONE capability: it can read
+# every user's status file; without CAP_DAC_OVERRIDE it can't write what root doesn't own (users' files), and the
+# read-only file system leaves it only its own state folder. Read only; the owner's watchdog alerts if
+# this unit fails.
+[Unit]
+Description=Raqm watchdog: Telegram alerts for the users' bots
+After=network-online.target
+
+[Service]
+Type=oneshot
+TimeoutStartSec=120
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+User=root
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+StateDirectory=raqm-watchdog-users
+StateDirectoryMode=0700
+WorkingDirectory=/opt/raqm-live
+EnvironmentFile=-/opt/raqm-live/.env.telegram
+UnsetEnvironment=PYTHONPATH PYTHONHOME PYTHONSTARTUP PYTHONUSERBASE PYTHONINSPECT
+ExecStart=/opt/raqm-live/venv/bin/python -E -s scripts/watchdog.py --users

@@ -32,11 +32,11 @@ def _mock_ex_for_place(ex_id="binance", hedge=False, fail_sl=False, fail_tp=Fals
         if params and "stopLossPrice" in params:
             if fail_sl: raise Exception("sl rejected")
             cid = params.get("clientOrderId","sl")
-            return {"id": f"id-{cid}", "clientOrderId": cid, "orderLinkId": cid, "filled": qty, "average": 50000}
+            return {"id": f"id-{cid}", "clientOrderId": cid, "orderLinkId": cid, "filled": qty, "average": 50000, "status": "open"}
         if params and "takeProfitPrice" in params:
             if fail_tp: raise Exception("tp rejected")
             cid = params.get("clientOrderId","tp")
-            return {"id": f"id-{cid}", "clientOrderId": cid, "orderLinkId": cid, "filled": qty, "average": 50000}
+            return {"id": f"id-{cid}", "clientOrderId": cid, "orderLinkId": cid, "filled": qty, "average": 50000, "status": "open"}
         cid = params.get("clientOrderId","raqm-entry") if params else "raqm-entry"
         return {"id": f"id-{cid}", "clientOrderId": cid, "orderLinkId": cid, "filled": qty, "average": 50000}
     ex.create_order.side_effect = create_order
@@ -311,7 +311,7 @@ class G_BothLegsFailedTests(unittest.TestCase):
         self.assertTrue(res.get("protection_missing"))
     def test_one_missing_verify_is_fail_closed(self):
         cid_sl = f"{OCO_PREFIX}-abcd1234-sl"
-        ex = _mock_ex_for_place(ex_id="binance", fail_sl=False, fail_tp=False, open_orders=[{"clientOrderId": cid_sl, "id":"ex-sl"}])
+        ex = _mock_ex_for_place(ex_id="binance", fail_sl=False, fail_tp=False, open_orders=[{"clientOrderId": cid_sl, "id":"ex-sl", "status":"open"}])
         res = place_oco_orders(ex, "BTC/USDT","long",0.01,49000,51000, paper=False, pos_id="abcd1234")
         self.assertNotIn("protection_missing", res)
         self.assertTrue(res.get("tp_unverified"))
@@ -321,8 +321,8 @@ class H_IdOnlyCancelTests(unittest.TestCase):
     def test_cancel_without_ids_does_nothing(self):
         ex = _mock_ex_for_place(ex_id="binance")
         ex.fetch_open_orders.return_value = [
-            {"id":"1","clientOrderId":f"{OCO_PREFIX}-aaaa-sl"},
-            {"id":"2","clientOrderId":f"{OCO_PREFIX}-bbbb-tp"},
+            {"id":"1","clientOrderId":f"{OCO_PREFIX}-aaaa-sl", "status":"open"},
+            {"id":"2","clientOrderId":f"{OCO_PREFIX}-bbbb-tp", "status":"open"},
             {"id":"3","clientOrderId":"manual-order"},
         ]
         cancel_oco_orders(ex, "BTC/USDT")
@@ -332,9 +332,9 @@ class H_IdOnlyCancelTests(unittest.TestCase):
         owned_sl = f"{OCO_PREFIX}-abcd1234-sl"
         owned_tp = f"{OCO_PREFIX}-abcd1234-tp"
         ex.fetch_open_orders.return_value = [
-            {"id":"1","clientOrderId": owned_sl},
-            {"id":"2","clientOrderId": owned_tp},
-            {"id":"3","clientOrderId": f"{OCO_PREFIX}-other-sl"},
+            {"id":"1","clientOrderId": owned_sl, "status":"open"},
+            {"id":"2","clientOrderId": owned_tp, "status":"open"},
+            {"id":"3","clientOrderId": f"{OCO_PREFIX}-other-sl", "status":"open"},
         ]
         cancel_oco_orders(ex, "BTC/USDT", pos_id="abcd1234")
         self.assertEqual(ex.cancel_order.call_count, 2)

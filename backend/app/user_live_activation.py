@@ -45,44 +45,89 @@ def _connect(path):
         consent_text TEXT NOT NULL, consented_at TEXT NOT NULL, actor TEXT NOT NULL, ip TEXT,
         disabled_at TEXT, disabled_reason TEXT
     )""")
+    # which money the consent is for (Phase 2): records from before it was recorded were real-money ones
+    cols = {r[1] for r in con.execute("PRAGMA table_info(user_live_activation)")}
+    if "environment" not in cols:
+        con.execute("ALTER TABLE user_live_activation ADD COLUMN environment TEXT NOT NULL DEFAULT 'live'")
+    # real money (owner, 2026-11-05): the capital and margin the user saw the risk of and accepted; a change asks again
+    for c in ("capital_usdt", "margin_usdt"):
+        if c not in cols:
+            con.execute(f"ALTER TABLE user_live_activation ADD COLUMN {c} REAL")
+    # the real-money strategies whose worst case the user accepted (owner, 2026-11-07); NULL = momentum (before the choice)
+    if "strategies" not in cols:
+        con.execute("ALTER TABLE user_live_activation ADD COLUMN strategies TEXT")
     return con
 
 
+def consent_strategies(rec):
+    """The real-money strategies a consent record covers: what it lists, or momentum for a record from before the
+    choice; () for a record that can't be read (it covers nothing)."""
+    import json
+    from .user_bots import LIVE_DEFAULT, live_strategies
+    try:
+        return live_strategies(json.loads(rec.get("strategies"))) if rec and rec.get("strategies") else LIVE_DEFAULT
+    except (TypeError, ValueError):
+        return ()
+
+
+ENVIRONMENTS = ("demo", "live")
+
+
 def enable_user_live(path, *, user_id, exchange, confirm, actor, ip=None,
-                      leverage=None, risk_per_trade_pct=None, max_aggregate_risk_pct=None):
-    """Record an audited per-user consent to go LIVE on `exchange` with their own keys.
+                      leverage=None, risk_per_trade_pct=None, max_aggregate_risk_pct=None, environment="demo",
+                      capital_usdt=None, margin_usdt=None, strategies=None):
+    """Record an audited per-user consent to trade on `exchange` with their own keys — on Binance Demo (play money)
+    or real money (`environment`). A Demo consent never counts for real money.
 
     `confirm` must exactly equal CONSENT_TEXT: this is the explicit confirmation step,
     not a bare boolean checkbox, so the audit trail proves what the user agreed to.
+
+    Real money (owner, 2026-11-05): the consent is for the user's own capital and margin — the risk level they were
+    shown is computed from them here (user_bots.live_risk), and the provisioner starts a real bot only while the
+    desired capital and margin are exactly the accepted ones.
     """
     if not user_id or not exchange:
         raise ValueError("user_id and exchange are required")
+    if environment not in ENVIRONMENTS:
+        raise ValueError("environment must be demo or live")
     if confirm != CONSENT_TEXT:
         raise PermissionError("explicit consent text does not match — live trading was not enabled")
-    lev = int(leverage) if leverage is not None else DEFAULT_LEVERAGE
-    rpt = float(risk_per_trade_pct) if risk_per_trade_pct is not None else DEFAULT_RISK_PER_TRADE_PCT
-    agg = float(max_aggregate_risk_pct) if max_aggregate_risk_pct is not None else DEFAULT_MAX_AGGREGATE_RISK_PCT
-    if not (1 <= lev <= MAX_LEVERAGE):
-        raise ValueError(f"leverage must be between 1 and {MAX_LEVERAGE}")
-    if not (0 < rpt <= MAX_RISK_PER_TRADE_PCT):
-        raise ValueError(f"risk_per_trade_pct must be between 0 and {MAX_RISK_PER_TRADE_PCT}")
-    if not (0 < agg <= MAX_AGGREGATE_RISK_PCT_CAP):
-        raise ValueError(f"max_aggregate_risk_pct must be between 0 and {MAX_AGGREGATE_RISK_PCT_CAP}")
-    if rpt > agg:
-        raise ValueError("risk_per_trade_pct cannot exceed max_aggregate_risk_pct")
+    cap = mar = chosen = None
+    if environment == "live":
+        import json
+        from .user_bots import _validate_live, live_strategies, LIVE_DEFAULT
+        picked = live_strategies(strategies if strategies is not None else list(LIVE_DEFAULT))
+        chosen = json.dumps(list(picked))
+        # the reserve is the bots' setting (it changes how many trades fit, not what a stop costs): not checked here
+        clean = _validate_live("live", True, list(picked), {"capital_usdt": capital_usdt, "capital_margin_override_usdt": margin_usdt}, fit=False)
+        lev, rpt, agg = clean["leverage"], clean["risk_per_trade_pct"], clean["max_aggregate_risk_pct"]
+        cap, mar = clean["capital_usdt"], clean["capital_margin_override_usdt"]
+    else:
+        lev = int(leverage) if leverage is not None else DEFAULT_LEVERAGE
+        rpt = float(risk_per_trade_pct) if risk_per_trade_pct is not None else DEFAULT_RISK_PER_TRADE_PCT
+        agg = float(max_aggregate_risk_pct) if max_aggregate_risk_pct is not None else DEFAULT_MAX_AGGREGATE_RISK_PCT
+        if not (1 <= lev <= MAX_LEVERAGE):
+            raise ValueError(f"leverage must be between 1 and {MAX_LEVERAGE}")
+        if not (0 < rpt <= MAX_RISK_PER_TRADE_PCT):
+            raise ValueError(f"risk_per_trade_pct must be between 0 and {MAX_RISK_PER_TRADE_PCT}")
+        if not (0 < agg <= MAX_AGGREGATE_RISK_PCT_CAP):
+            raise ValueError(f"max_aggregate_risk_pct must be between 0 and {MAX_AGGREGATE_RISK_PCT_CAP}")
+        if rpt > agg:
+            raise ValueError("risk_per_trade_pct cannot exceed max_aggregate_risk_pct")
     con = _connect(path)
     try:
         con.execute("BEGIN IMMEDIATE")
         con.execute("""INSERT INTO user_live_activation
             (user_id, exchange, enabled, leverage, risk_per_trade_pct, max_aggregate_risk_pct,
-             consent_text, consented_at, actor, ip, disabled_at, disabled_reason)
-            VALUES(?,?,1,?,?,?,?,?,?,?,NULL,NULL)
+             consent_text, consented_at, actor, ip, disabled_at, disabled_reason, environment, capital_usdt, margin_usdt, strategies)
+            VALUES(?,?,1,?,?,?,?,?,?,?,NULL,NULL,?,?,?,?)
             ON CONFLICT(user_id) DO UPDATE SET
               exchange=excluded.exchange, enabled=1, leverage=excluded.leverage,
               risk_per_trade_pct=excluded.risk_per_trade_pct, max_aggregate_risk_pct=excluded.max_aggregate_risk_pct,
               consent_text=excluded.consent_text, consented_at=excluded.consented_at,
-              actor=excluded.actor, ip=excluded.ip, disabled_at=NULL, disabled_reason=NULL
-            """, (user_id, exchange, lev, rpt, agg, confirm, _now(), actor, ip))
+              actor=excluded.actor, ip=excluded.ip, disabled_at=NULL, disabled_reason=NULL, environment=excluded.environment,
+              capital_usdt=excluded.capital_usdt, margin_usdt=excluded.margin_usdt, strategies=excluded.strategies
+            """, (user_id, exchange, lev, rpt, agg, confirm, _now(), actor, ip, environment, cap, mar, chosen))
         con.execute("COMMIT")
     except Exception:
         con.execute("ROLLBACK")

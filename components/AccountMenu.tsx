@@ -1,6 +1,6 @@
 "use client"
 import { useEffect, useRef, useState } from "react"
-import { Bot, ChevronDown, KeyRound, LayoutDashboard, LogOut, ShieldCheck } from "lucide-react"
+import { Bot, ChevronDown, History, LayoutDashboard, LogOut, MonitorX, Receipt, ShieldCheck } from "lucide-react"
 import { Pill } from "@/components/ui"
 import { apiIsAdmin } from "@/lib/api"
 import { getMyTier, supabase } from "@/lib/supabase"
@@ -30,6 +30,14 @@ export async function signOut(){
   try { await supabase?.auth.signOut() } finally { window.location.href = "/" }
 }
 
+/** Security plan item 9 (owner, 2026-11-08): every session of this account ends — on this device and all others.
+ *  Supabase revokes all of the account's refresh tokens; the API checks each token with Supabase (cached 60 s), so a
+ *  stolen session stops working within about a minute. */
+export async function signOutEverywhere(){
+  if (!confirm("تخرج من حسابك على كل الأجهزة (الموبايل والكمبيوتر وأي مكان تاني)؟\nهتحتاج تدخل تاني بالإيميل والباسورد والـ 2FA.")) return
+  try { await supabase?.auth.signOut({ scope: "global" }) } finally { window.location.href = "/" }
+}
+
 /** Avatar button + menu: the account's email and plan, the main account pages, and sign out. */
 export function AccountMenu({ email, tier, isAdmin, compact = false }: { email: string, tier: string, isAdmin: boolean, compact?: boolean }){
   const [open, setOpen] = useState(false)
@@ -44,8 +52,9 @@ export function AccountMenu({ email, tier, isAdmin, compact = false }: { email: 
   const initial = (email.trim()[0] || "?").toUpperCase()
   const links = [
     { href: "/dashboard", label: "لوحة التحكم", icon: LayoutDashboard },
-    { href: "/settings/keys", label: "مفاتيح المنصات", icon: KeyRound },
-    { href: "/settings/live", label: "التداول الحقيقي", icon: Bot },
+    { href: "/settings/live", label: "بوتاتي على Binance (Demo)", icon: Bot },
+    { href: "/settings/statement", label: "كشف الحساب الشهري", icon: Receipt },
+    { href: "/settings/activity", label: "نشاط الحساب", icon: History },
     ...(isAdmin ? [{ href: "/admin", label: "الإدارة", icon: ShieldCheck }] : []),
   ]
   return (
@@ -76,6 +85,9 @@ export function AccountMenu({ email, tier, isAdmin, compact = false }: { email: 
             <button onClick={signOut} role="menuitem" className="flex w-full items-center gap-2.5 rounded-[10px] px-3 py-2 text-[14px] text-loss transition hover:bg-loss/10">
               <LogOut size={17} strokeWidth={1.8} />تسجيل الخروج
             </button>
+            <button onClick={signOutEverywhere} role="menuitem" data-testid="sign-out-everywhere" className="flex w-full items-center gap-2.5 rounded-[10px] px-3 py-2 text-[13px] text-muted transition hover:bg-loss/10 hover:text-loss">
+              <MonitorX size={17} strokeWidth={1.8} />اخرج من كل الأجهزة
+            </button>
           </div>
         </div>
       )}
@@ -84,15 +96,16 @@ export function AccountMenu({ email, tier, isAdmin, compact = false }: { email: 
 }
 
 /** The landing header's end: "دخول" + "افتح المنصة" for visitors; "لوحة التحكم" + the account menu once signed in. */
-export function LandingNavAuth(){
+export function LandingNavAuth({ labels }: { labels?: { signIn: string; start: string; dashboard: string } } = {}){
   const acc = useAccount()
+  const l = labels || { signIn: "دخول", start: "افتح المنصة", dashboard: "لوحة التحكم" }
   if (acc.state === "loading") return <span className="h-9 w-[132px]" aria-hidden />
   if (acc.state === "out") return <>
-    <a href="/auth" className="hidden px-3 text-sm text-muted hover:text-ink sm:block">دخول</a>
-    <a href="/dashboard" className="rounded-xl bg-corona px-4 py-2 text-sm font-bold text-void transition hover:bg-corona-soft">افتح المنصة</a>
+    <a href="/auth" className="hidden whitespace-nowrap px-3 text-sm text-muted hover:text-ink sm:block">{l.signIn}</a>
+    <a href="/dashboard" className="whitespace-nowrap rounded-xl bg-corona px-3 py-2 text-[13px] font-bold text-on-corona transition hover:bg-corona-soft sm:px-4 sm:text-sm">{l.start}</a>
   </>
   return <>
-    <a href="/dashboard" className="hidden rounded-xl bg-corona px-4 py-2 text-sm font-bold text-void transition hover:bg-corona-soft sm:block">لوحة التحكم</a>
+    <a href="/dashboard" className="hidden rounded-xl bg-corona px-4 py-2 text-sm font-bold text-on-corona transition hover:bg-corona-soft sm:block">{l.dashboard}</a>
     <span className="w-1.5" />
     <AccountMenu email={acc.email} tier={acc.tier} isAdmin={acc.isAdmin} />
   </>

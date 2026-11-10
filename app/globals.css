@@ -2,21 +2,59 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Base: Cairo readable, 15px */
+/* the self-hosted fonts (app/layout.tsx imports their @font-face rules) */
+:root {
+  --font-cairo: "Cairo Variable";
+  --font-geist: "Geist Variable";
+  --font-mono: "JetBrains Mono";
+  --font-sans: var(--font-cairo);
+}
+/* English pages: Geist for Latin text, Cairo still covering any Arabic */
+:lang(en) { --font-sans: var(--font-geist), var(--font-cairo); }
+
+/* Colour tokens as "R G B" (tailwind.config.js reads them as rgb(var(--c-x) / alpha)).
+   Figma "RAQM — Global Redesign 2026": dark is the default (the values the whole app had), light under data-theme. */
+:root {
+  --c-void: 7 8 13;          --c-surface: 15 17 24;        --c-surface2: 22 26 37;
+  --c-line: 35 40 56;        --c-line2: 52 58 79;
+  --c-ink: 242 243 247;      --c-muted: 139 145 167;       --c-faint: 93 99 120;
+  --c-corona: 245 184 65;    --c-corona-soft: 255 225 161; --c-corona-deep: 217 154 30; --c-on-corona: 7 8 13;
+  --c-umbra: 123 97 255;     --c-signal: 76 201 240;
+  --c-profit: 34 211 160;    --c-loss: 255 84 112;
+  color-scheme: dark;
+}
+[data-theme="light"] {
+  --c-void: 246 246 243;     --c-surface: 255 255 255;     --c-surface2: 240 241 245;
+  --c-line: 226 228 235;     --c-line2: 201 205 216;
+  --c-ink: 11 13 20;         --c-muted: 82 88 112;         --c-faint: 128 134 153;
+  --c-corona: 185 124 6;     --c-corona-soft: 245 184 65;  --c-corona-deep: 150 98 0;   --c-on-corona: 255 255 255;
+  --c-umbra: 91 63 230;      --c-signal: 21 128 176;
+  --c-profit: 10 154 112;    --c-loss: 220 47 78;
+  color-scheme: light;
+}
+
+/* Base: readable, 15px */
 html { font-size: 15px; }
 body { line-height: 1.6; }
 
-/* Cairo for everything, JetBrains for mono/numbers */
+/* JetBrains for mono/numbers */
 .font-mono, code, .font-mono * {
   font-family: var(--font-mono), ui-monospace, monospace !important;
 }
-.font-display { font-family: var(--font-display), var(--font-cairo), sans-serif; }
+.font-display { font-family: var(--font-display), var(--font-sans), sans-serif; }
 
 h1, h2, h3 { letter-spacing: -0.02em; line-height: 1.2; }
+:lang(en) h1, :lang(en) h2 { letter-spacing: -0.035em; }
 
 /* tabular figures so prices don't jump while updating */
 .tabular { font-variant-numeric: tabular-nums; }
 
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}
+
 ::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-thumb { background: #232838; border-radius: 999px; }
-::-webkit-scrollbar-track { background: #0F1118; }
+::-webkit-scrollbar-thumb { background: rgb(var(--c-line)); border-radius: 999px; }
+::-webkit-scrollbar-track { background: rgb(var(--c-surface)); }

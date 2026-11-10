@@ -42,7 +42,7 @@ class Sim(FakeBinance):
     # like Binance USDT-M (seen on Demo): stop/take-profit orders only show in the trigger/stop views, and a plain
     # cancel of one answers -2011 "Unknown order sent"
     def _stops(self, sym):
-        return [{"id": "stop-" + o["params"]["clientOrderId"], "clientOrderId": o["params"]["clientOrderId"]}
+        return [{"id": "stop-" + o["params"]["clientOrderId"], "clientOrderId": o["params"]["clientOrderId"], "status": "open"}
                 for o in self.orders if o["symbol"] == sym and ("stopLossPrice" in o["params"] or "takeProfitPrice" in o["params"])
                 and "stop-" + o["params"]["clientOrderId"] not in self.cancelled]
     def fetch_open_orders(self, sym, since=None, limit=None, params=None):
@@ -98,6 +98,14 @@ class HarnessTests(unittest.TestCase):
         code, _ = self.run_harness(ex)
         self.assertIn("refusing", str(code))
         self.assertEqual(ex.orders, [])                                    # not a single order sent
+
+    def test_refuses_an_account_with_open_positions(self):
+        # the Demo bots' positions: the run would fail on them and its cleanup could close one
+        ex = Sim(); ex.positions["DOGE/USDT"] = 120.0; ex.positions["BTC/USDT"] = -0.01
+        code, _ = self.run_harness(ex)
+        self.assertIn("refusing", str(code)); self.assertIn("open positions", str(code))
+        self.assertEqual(ex.orders, [])
+        self.assertEqual(ex.positions, {"DOGE/USDT": 120.0, "BTC/USDT": -0.01})   # untouched
 
 
 if __name__ == "__main__":

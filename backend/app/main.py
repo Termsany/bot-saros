@@ -4,7 +4,7 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 from typing import List, Optional
 import sys, re, uuid
@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from app.db import init_db, async_session, Trade, BacktestRun, UserSetting, UserClose, PlanPrice, Invitation, PlanGrant
 from app.auth import require_user, require_admin, require_admin_or_cron, is_admin
 from app import live_activation
+from app import live_accounts
 from sqlalchemy import select, desc
 import ccxt, pandas as pd, numpy as np
 from datetime import datetime, timezone
@@ -24,6 +25,7 @@ from app import risk_manager
 from app import live_bots_feed
 from app import admin_users
 from app import plans_invites as pi
+from app import user_approvals
 
 try:
     from dotenv import load_dotenv; load_dotenv()
@@ -91,7 +93,7 @@ async def lifespan(app: FastAPI):
     print("DB ready")
     asyncio.create_task(check_supabase_service_key())  # don't delay startup on a slow Supabase
     asyncio.create_task(_resume_bot_after_restart())
-    asyncio.create_task(_gift_reminder_loop())
+    asyncio.create_task(invites_routes._gift_reminder_loop())
     yield
 
 # API docs list every endpoint — off in production unless ENABLE_API_DOCS=true
@@ -100,7 +102,8 @@ app = FastAPI(title="Raqm API", version="2.0.0", lifespan=lifespan,
               docs_url="/docs" if _docs else None, redoc_url=None, openapi_url="/openapi.json" if _docs else None)
 
 ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "https://bot-saros.vercel.app,http://localhost:3000").split(",") if o.strip()]
-app.add_middleware(CORSMiddleware, allow_origins=ALLOWED_ORIGINS, allow_methods=["GET", "POST"], allow_headers=["Authorization", "Content-Type"])
+# PATCH too: the admin page's PATCH calls (user settings, strategies) failed their browser preflight without it
+app.add_middleware(CORSMiddleware, allow_origins=ALLOWED_ORIGINS, allow_methods=["GET", "POST", "PATCH"], allow_headers=["Authorization", "Content-Type"])
 
 def llm_lab_allowed() -> bool:
     """Running LLM-written code is opt-in (ENABLE_LLM_LAB=true) and never on a server that can trade real money:
@@ -138,9 +141,10 @@ def rate_limit(user_id: str, key: str, max_calls: int, per_s: int):
 
 # Plan limits — enforced here, not only in the UI (a plan unlocks the first N of this list).
 # Keep in sync with lib/strategies.ts STRATEGIES order and TIERS counts: the four paper bots on the VPS.
-STRATEGY_ORDER = ["trend_daily", "momentum_ls", "listing_short", "ratio_trend"]
+from app import strategy_catalog
+STRATEGY_ORDER = list(strategy_catalog.PLANNED)   # lib/strategies.json, the same order as the site
 TIER_STRATEGY_COUNT = {"free": 1, "starter": 2, "pro": 3, "elite": 4}
-SOLO_STRATEGIES = ("trend_daily", "momentum_ls", "listing_short", "ratio_trend")  # own entries/exits
+SOLO_STRATEGIES = strategy_catalog.PLANNED  # own entries/exits
 PER_COIN = ("trend_daily",)  # the others trade a whole portfolio of coins — no single-coin backtest
 # Max backtest range in days (end date inclusive). None = unlimited. Keep in sync with lib/strategies.ts BACKTEST_DAYS.
 TIER_BACKTEST_DAYS = {"free": 7, "starter": 30, "pro": 90, "elite": None}
@@ -219,7 +223,27 @@ def _scrub(text: str) -> str:
 # ── Health
 @app.get("/api/health")
 async def health():
-    return {"ok": True, "name": "Raqm", "version": "2.0.0"}
+    from app.user_keys_vault import vault_health
+    # vault: whether users' Demo keys can be decrypted ("ok" / "empty" / "unreadable"); the watchdog alerts on it
+    return {"ok": True, "name": "Raqm", "version": "2.0.0", "vault": vault_health()}
+
+# Public, for an uptime check outside the server (owner, 2026-11-01): the watchdog on the VPS (scripts/watchdog.py)
+# writes a heartbeat every 5 minutes; 503 when it is missing or older than 15 — the timer stopped or the bots' side of
+# the server is stuck. The VPS itself down shows as no answer at all. Only an age and a count, nothing about trades.
+HEARTBEAT_MAX_AGE_S = 900
+
+# HEAD too: UptimeRobot checks with HEAD first, and a 405 there is a failed check
+@app.api_route("/api/health/bots", methods=["GET", "HEAD"])
+async def health_bots():
+    try:
+        hb = json.loads((IPC_DIR / "watchdog_heartbeat.json").read_text(encoding="utf-8"))
+        age = (datetime.now(timezone.utc) - datetime.fromisoformat(hb["at"])).total_seconds()
+        problems = int(hb.get("problems") or 0)
+    except Exception:
+        return JSONResponse({"ok": False, "reason": "no watchdog heartbeat"}, status_code=503)
+    if not 0 <= age <= HEARTBEAT_MAX_AGE_S:
+        return JSONResponse({"ok": False, "reason": "watchdog heartbeat stale", "age_s": int(age)}, status_code=503)
+    return {"ok": True, "age_s": int(age), "problems": problems}
 
 # ── Backtest: proxy to backtest.py (same logic, now via API + DB)
 class BacktestReq(BaseModel):
@@ -262,90 +286,6 @@ class BacktestReq(BaseModel):
     def _strats(cls, v):
         if v and not all(re.match(r"^[a-z0-9_]{1,30}$", x) for x in v): raise ValueError("bad strategy name")
         return v
-
-@app.post("/api/backtest")
-async def api_backtest(req: BacktestReq, user: dict = Depends(require_user)):
-    rate_limit(user["id"], "backtest", int(os.getenv("BACKTEST_PER_MIN", "5")), 60)
-    tier = await get_tier(user)
-    max_days = TIER_BACKTEST_DAYS[tier]
-    if max_days is not None:
-        span = backtest_span_days(req)
-        if span > max_days:
-            raise HTTPException(403, f"backtest range is {span:g} days — your {tier} plan allows up to {max_days} days. Upgrade for longer backtests")
-    allowed = STRATEGY_ORDER[:TIER_STRATEGY_COUNT[tier]]
-    if req.strategies:
-        locked = [s for s in req.strategies if s not in allowed]
-        if locked:
-            raise HTTPException(403, f"strategies not in your plan: {', '.join(locked)} — upgrade to unlock")
-    else:
-        req.strategies = ["trend_daily"]  # empty = the one strategy that backtests on a single coin
-    if any(s not in PER_COIN for s in req.strategies):
-        raise HTTPException(400, "only the daily trend backtests on one coin — the other bots trade a portfolio (results on the home page)")
-    req.strategies = ["trend_daily"]
-    req.timeframe = "1d"
-    _cleanup_backtest_files()
-    import json as js
-    sym_file = req.symbol.replace("/","")
-    # unique output per run so concurrent backtests don't read each other's results
-    run_name = f"backtest_{sym_file}_{req.timeframe}_{uuid.uuid4().hex[:10]}"
-    json_path = BOT_DIR / f"{run_name}.json"
-    args = ["--out-json", str(json_path), "--out", str(BOT_DIR / f"{run_name}.png"), "--symbol", req.symbol, "--timeframe", req.timeframe, "--amount", str(req.amount), "--leverage", str(req.leverage), "--fee", str(req.fee)]
-    if req.from_date: args += ["--from", req.from_date]
-    if req.to_date: args += ["--to", req.to_date]
-    if not req.from_date and not req.to_date: args += ["--limit", str(req.limit)]
-    if req.strategies: args += ["--strategies", ",".join(req.strategies)]
-
-    async with _backtest_slots:
-        proc = await asyncio.create_subprocess_exec(
-            sys.executable, str(BOT_DIR / "backtest.py"), *args,
-            cwd=str(BOT_DIR), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-        )
-        try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=110)
-        except asyncio.TimeoutError:
-            proc.kill(); raise HTTPException(504, "backtest timeout")
-    out = stdout.decode(errors="ignore")
-    err = stderr.decode(errors="ignore")
-
-    # Read JSON
-    data = None
-    if json_path.exists():
-        try: data = js.loads(json_path.read_text(encoding="utf-8"))
-        except: pass
-
-    # Save to DB
-    try:
-        async with async_session() as sess:
-            rec = BacktestRun(user_id=user["id"], symbol=req.symbol, timeframe=req.timeframe, from_date=req.from_date, to_date=req.to_date, strategies=js.dumps(req.strategies or []), stats=js.dumps(data.get("stats",{}) if data else {}), created_at=datetime.now(timezone.utc).isoformat(), chart_file=f"{run_name}.png", run_name=run_name)
-            sess.add(rec); await sess.commit()
-    except: pass
-
-    return {"ok": proc.returncode==0, "code": proc.returncode, "stdout": _scrub(out[-8000:]), "stderr": _scrub(err[-2000:]), "data": data, "chart": f"{run_name}.png"}
-
-@app.get("/api/backtest/history")
-async def backtest_history(limit: int = 20, user: dict = Depends(require_user)):
-    limit = max(1, min(limit, 100))
-    async with async_session() as sess:
-        # only the caller's own runs (this used to list every user's backtests)
-        res = await sess.execute(select(BacktestRun).where(BacktestRun.user_id == user["id"]).order_by(desc(BacktestRun.id)).limit(limit))
-        rows = res.scalars().all()
-        return [{"id":r.id,"symbol":r.symbol,"timeframe":r.timeframe,"from":r.from_date,"to":r.to_date,"strategies":r.strategies,"stats":r.stats,"at":r.created_at} for r in rows]
-
-@app.get("/api/chart")
-async def api_chart(file: str, user: dict = Depends(require_user)):
-    # Stage C: strict file->run binding - any owned run no longer unlocks every file
-    if not re.fullmatch(r"backtest_[A-Za-z0-9_]+\.(png|json)", file):
-        raise HTTPException(400, "bad file")
-    stem = file.rsplit(".", 1)[0]
-    async with async_session() as sess:
-        res = await sess.execute(select(BacktestRun).where((BacktestRun.user_id==user["id"]) & ((BacktestRun.run_name==stem) | (BacktestRun.chart_file==file))).limit(1))
-        row = res.scalars().first()
-        if row is None:
-            raise HTTPException(403, "not your chart")
-    p = BOT_DIR / file
-    if not p.exists(): raise HTTPException(404, "not found")
-    ct = "image/png" if file.endswith(".png") else "application/json"
-    return FileResponse(str(p), media_type=ct)
 
 # ── Bot control: status, start/stop (paper), trades
 bot_task = None
@@ -482,29 +422,14 @@ async def bot_stop(user: dict = Depends(require_admin)):
 
 def _get_exchange_for_cycle(paper: bool):
     """Returns (name, instance, is_paper) or None.
-    LIVE trades on the first LIVE exchange only — positions state is shared, so executing the
-    same signal on several exchanges would corrupt it. If LIVE was requested but nothing is
-    available, returns None (skip the cycle) instead of silently falling back to paper, which
-    would "close" real positions only in the local state."""
+    The dashboard loop is paper only: real orders run as the strategies' own services (bot.py --live), with the key
+    on the server only. The admin key vault that used to feed a LIVE branch here was removed on 2026-11-04 (nothing
+    could reach it: bot_loop refuses paper=False), so a LIVE request is skipped, never silently traded on paper."""
     import ccxt as _ccxt
     if paper:
         return ("paper", _ccxt.bybit({"enableRateLimit": True}), True)
-    if not live_trading_allowed():
-        print("LIVE requested but ALLOW_LIVE_TRADING is not true — skipping cycle")
-        return None
-    try:
-        from app.exchange_manager import get_all_instances
-        instances = get_all_instances("live")
-    except Exception as e:
-        print(f"exchange_manager fail {e}")
-        return None
-    if not instances:
-        print("LIVE requested but no exchange is LIVE in the vault — skipping cycle")
-        return None
-    name, inst = next(iter(instances.items()))
-    if len(instances) > 1:
-        print(f"WARNING: {len(instances)} LIVE exchanges — only {name} will trade")
-    return (name, inst, False)
+    print("LIVE requested from the dashboard loop — refused, paper only")
+    return None
 
 async def bot_loop(cfg, task_id=None):
     """يحلل كل poll_seconds ويحفظ في DB + يرسل تليجرام"""
@@ -853,262 +778,21 @@ async def save_settings(req: SettingsReq, user: dict = Depends(require_user)):
 BOT_PUBLIC_DIR = Path(os.getenv("BOT_PUBLIC_DIR", "/var/www/bot.da3m.io"))      # the bots' public JSON (read only)
 PAPER_IPC = Path(os.getenv("RAQM_PAPER_IPC", "/opt/raqm-ipc-paper"))             # close requests to the paper bots
 PAPER_BOTS = ("status", "momentum", "listing", "ratio", "breakout", "rsi2", "tbreak")
-STRATEGY_FILE = {"trend_daily": "status", "momentum_ls": "momentum", "listing_short": "listing", "ratio_trend": "ratio"}
-COIN_RE = re.compile(r"^[A-Z0-9]{1,20}/USDT(:USDT)?$")
-PAIR_RE = re.compile(r"^[A-Z0-9]{1,20}/USDT:USDT\|[A-Z0-9]{1,20}/USDT:USDT$")
 
-def _bot_json(name: str) -> dict:
-    try: return json.loads((BOT_PUBLIC_DIR / f"{name}.json").read_text(encoding="utf-8"))
-    except Exception: raise HTTPException(503, "bot data unavailable")
-
-def _label(name: str, p: dict) -> str:
-    """The trade's label as the site shows it: the coin, or 'LONG / SHORT' for a ratio pair."""
-    if name == "ratio": return f"{p['long']['symbol'].split('/')[0]} / {p['short']['symbol'].split('/')[0]}"
-    return p["symbol"].split("/")[0]
-
-@app.get("/api/user/me")
-async def user_me(user: dict = Depends(require_user)):
-    return {"admin": is_admin(user)}
-
-class PortfolioCloseReq(BaseModel):
-    label: str = Field(max_length=60)
-    opened: str = Field(max_length=40)
-
-@app.post("/api/user/portfolio/close")
-async def portfolio_close(req: PortfolioCloseReq, user: dict = Depends(require_user)):
-    """Close one trade in the caller's own paper portfolio at the bot's current price. Server-side: the trade must be
-    open in the bot the user follows and opened after their start — the price comes from the bot, never from the user."""
-    rate_limit(user["id"], "portfolio_close", 30, 60)
-    async with async_session() as sess:
-        setting = await sess.get(UserSetting, user["id"])
-        if not setting or setting.strategy not in STRATEGY_FILE:
-            raise HTTPException(400, "no personal portfolio")
-        name = STRATEGY_FILE[setting.strategy]; data = _bot_json(name)
-        rows = data.get("pairs") if name == "ratio" else data.get("positions")
-        p = next((x for x in rows or [] if _label(name, x) == req.label and x.get("opened") == req.opened), None)
-        if not p: raise HTTPException(404, "this trade isn't open")
-        if datetime.fromisoformat(p["opened"]) < datetime.fromisoformat(setting.started_at):
-            raise HTTPException(400, "this trade opened before your portfolio started")
-        key = f"{req.label}@{req.opened}"
-        if await sess.get(UserClose, (user["id"], key)): raise HTTPException(409, "already closed")
-        c = UserClose(user_id=user["id"], trade_key=key, bot_pnl=float(p.get("pnl") or 0),
-                      exit_price=None if name == "ratio" else float(p.get("price") or 0), closed_at=datetime.now(timezone.utc).isoformat())
-        sess.add(c); await sess.commit()
-        return {"ok": True, "key": key, "bot_pnl": c.bot_pnl, "exit_price": c.exit_price, "closed_at": c.closed_at}
-
-class PaperCloseReq(BaseModel):
-    bot: str
-    symbol: str = Field(max_length=60)
-
-def _drop_request(d: Path, root: Path, rid: str, cmd: dict):
+def _drop_request(d: Path, root: Path, rid: str, cmd: dict, mode: int = 0o660):
     """A close request file in `d`: the folder must really be inside `root` (no link swapped in for it — a paper
     bot's commands/ pointing at the real-money bot's folder would turn a paper close into a real one), and the file
-    is created new (O_EXCL, O_NOFOLLOW) then renamed in, so nothing planted there is written through."""
+    is created new (O_EXCL, O_NOFOLLOW) then renamed in, so nothing planted there is written through.
+    `mode` 0644 for a user's bot: it isn't in the API's group, and the folder lets in only the two of them."""
     real, base = os.path.realpath(d), os.path.realpath(root)
     if os.path.islink(d) or os.path.commonpath([real, base]) != base or real != os.path.normpath(os.path.join(base, os.path.relpath(d, root))):
         raise HTTPException(500, "request folder is not where it should be — refused")
     tmp = os.path.join(real, f".close-{rid}.tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o660)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), mode)
+    if hasattr(os, "fchmod"): os.fchmod(fd, mode)     # the umask must not take the bot's read bit away
     with os.fdopen(fd, "w", encoding="utf-8") as fh: fh.write(json.dumps(cmd))
     os.replace(tmp, os.path.join(real, f"close-{rid}.json"))   # the bot only picks up close-*.json
 
-@app.post("/api/paper/close")
-async def paper_close(req: PaperCloseReq, user: dict = Depends(require_admin)):
-    """Admin: close one position of a paper bot. The bot runs the request within a cycle (one minute) and only closes."""
-    rate_limit(user["id"], "paper_close", 20, 60)
-    if req.bot not in PAPER_BOTS: raise HTTPException(400, "unknown bot")
-    if not (PAIR_RE if req.bot == "ratio" else COIN_RE).match(req.symbol): raise HTTPException(400, "bad symbol")
-    data = _bot_json(req.bot)
-    if req.bot == "ratio": found = any(p.get("pair") == req.symbol for p in data.get("pairs") or [])
-    else: found = any(p.get("symbol", "").split(":")[0] == req.symbol.split(":")[0] for p in data.get("positions") or [])
-    if not found: raise HTTPException(404, "no open position on that coin")
-    rid = uuid.uuid4().hex
-    _drop_request(PAPER_IPC / req.bot / "commands", PAPER_IPC, rid, {"id": rid, "symbol": req.symbol, "at_epoch": _time.time(), "by": user.get("email")})
-    return {"ok": True, "id": rid}
-
-@app.get("/api/paper/close/{bot}/{rid}")
-async def paper_close_result(bot: str, rid: str, user: dict = Depends(require_admin)):
-    if bot not in PAPER_BOTS or not re.fullmatch(r"[0-9a-f]{32}", rid): raise HTTPException(400, "bad request")
-    f = PAPER_IPC / bot / "results" / f"{rid}.json"
-    if not f.exists(): return {"done": False, "pending": (PAPER_IPC / bot / "commands" / f"close-{rid}.json").exists()}
-    return {"done": True, **json.loads(f.read_text(encoding="utf-8"))}
-
-
-@app.get("/api/user/tier")
-async def user_tier(user: dict = Depends(require_user)):
-    """The caller's plan (paid or gift, the higher) — server-side verification; gift = an active gift's plan and end."""
-    gift = None
-    try: gift = None if is_admin(user) else await _gift_of(user["id"])
-    except Exception: pass
-    return {"tier": await get_tier(user), "gift": gift}
-
-
-@app.post("/api/optimizer/run")
-async def optimizer_run(symbol: str = "BTC/USDT", timeframe: str = "4h", limit: int = 200, user: dict = Depends(require_admin)):
-    """يشغل Auto-Optimizer ويرجع البطل — يحدث ai_weights.json"""
-    rate_limit(user["id"], "optimizer", 2, 300)
-    import json as js
-    if not SYMBOL_RE.match(symbol) or timeframe not in TIMEFRAMES: raise HTTPException(400, "bad symbol/timeframe")
-    limit = max(50, min(int(limit), 1000))
-    if not (BOT_DIR / "auto_optimizer.py").exists():
-        return {"ok": False, "error": "auto_optimizer.py is missing from the repo"}
-    args = [sys.executable, str(BOT_DIR / "auto_optimizer.py"), "--symbol", symbol, "--timeframe", timeframe, "--limit", str(limit)]
-    try:
-        proc = await asyncio.create_subprocess_exec(*args, cwd=str(BOT_DIR), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=180)
-        out = stdout.decode(errors="ignore"); err = stderr.decode(errors="ignore")
-        # Read weights if created
-        weights = None
-        try:
-            wp = BOT_DIR / "ai_weights.json"
-            if wp.exists(): weights = js.loads(wp.read_text(encoding="utf-8"))
-        except: pass
-        return {"ok": proc.returncode==0, "stdout": out[-4000:], "stderr": err[-1500:], "weights": weights}
-    except asyncio.TimeoutError:
-        return {"ok": False, "error": "optimizer timeout — جرب limit أصغر"}
-
-@app.post("/api/telegram/test")
-async def telegram_test(user: dict = Depends(require_admin)):
-    from app.telegram_bot import test_telegram
-    ok = await test_telegram()
-    return {"ok": bool(ok), "msg": "تم الإرسال" if ok else "فشل — تأكد من TELEGRAM_BOT_TOKEN و CHAT_ID في backend/.env"}
-
-@app.get("/api/telegram/status")
-async def telegram_status(user: dict = Depends(require_admin)):
-    import os
-    has_token = bool(os.getenv("TELEGRAM_BOT_TOKEN","").strip())
-    has_chat = bool(os.getenv("TELEGRAM_CHAT_ID","").strip())
-    return {"configured": has_token and has_chat, "has_token": has_token, "has_chat": has_chat}
-
-
-@app.post("/api/evolve")
-async def evolve(user: dict = Depends(require_admin_or_cron)):
-    """Self-evolution: يعيد تقييم الـ 15 استراتيجية ويطفي الخسرانة + يحدث الأوزان"""
-    rate_limit(user["id"], "evolve", 1, 300)
-    import json as js
-    if not (BOT_DIR / "auto_optimizer.py").exists():
-        return {"ok": False, "error": "auto_optimizer.py is missing from the repo"}
-    # Run optimizer on BTC 4h (light)
-    args = [sys.executable, str(BOT_DIR / "auto_optimizer.py"), "--symbol", "BTC/USDT", "--timeframe", "4h", "--limit", "200"]
-    try:
-        proc = await asyncio.create_subprocess_exec(*args, cwd=str(BOT_DIR), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=180)
-        out = stdout.decode(errors="ignore")
-        # Read weights
-        weights = None
-        try:
-            wp = BOT_DIR / "ai_weights.json"
-            if wp.exists():
-                weights = js.loads(wp.read_text(encoding="utf-8"))
-        except: pass
-        # Self-pruning: if any strategy PF < 0.8 for 2 weeks, suggest disabling
-        pruning = []
-        try:
-            cmp_path = BOT_DIR / "optimizer_BTCUSDT_4h.json"
-            if cmp_path.exists():
-                data = js.loads(cmp_path.read_text(encoding="utf-8"))
-                for p in data.get("perfs", []):
-                    if p.get("pf", 99) < 0.8 and p.get("pnl", 0) < -5:
-                        pruning.append({"strategy": p["name"], "pf": p["pf"], "pnl": p["pnl"], "action": "disable_suggested"})
-        except: pass
-        # Telegram report
-        try:
-            from app.telegram_bot import send_telegram
-            top = ", ".join(list((weights or {}).keys())[:3]) if weights else "?"
-            msg = f"\U0001f916 *Self-Evolution*\n\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\nBTC 4h updated\nTop weights: `{str(weights)[:120] if weights else '?'}`\nPruning: `{pruning if pruning else 'none'}`"
-            await send_telegram(msg)
-        except: pass
-        return {"ok": proc.returncode==0, "weights": weights, "pruning": pruning, "stdout": _scrub(out[-3000:]), "stderr": _scrub(stderr.decode(errors="ignore")[-800:])}
-    except asyncio.TimeoutError:
-        return {"ok": False, "error": "evolve timeout"}
-    except Exception as e:
-        return {"ok": False, "error": str(e)[:300]}
-
-
-@app.post("/api/llm/generate")
-async def llm_generate(prompt: str = "RSI + volume divergence on 4h", symbol: str = "BTC/USDT", timeframe: str = "4h", user: dict = Depends(require_admin)):
-    """LLM يخترع استراتيجية + باك تست فوري (الكود بيتشغل في sandbox — شوف llm_sandbox.py)"""
-    _require_llm_lab()
-    rate_limit(user["id"], "llm_generate", 3, 300)
-    if not SYMBOL_RE.match(symbol) or timeframe not in TIMEFRAMES: raise HTTPException(400, "bad symbol/timeframe")
-    prompt = prompt[:500]
-    from app.llm_generator import generate_strategy, save_strategy, backtest_llm
-    gen = await generate_strategy(prompt)
-    if not gen.get("ok"):
-        return gen
-    code = gen["code"]
-    from app.llm_sandbox import validate_code, UnsafeCode
-    try: validate_code(code)
-    except UnsafeCode as e: return {"ok": False, "error": f"unsafe code refused: {e}", "code": code}
-    # Save
-    try:
-        fp = save_strategy(code)
-        name = fp.stem
-    except Exception as e:
-        return {"ok": False, "error": f"save failed: {e}", "code": code}
-    # Backtest
-    try:
-        bt_result = await backtest_llm(code, symbol, timeframe, limit=300)
-    except Exception as e:
-        return {"ok": True, "code": code, "name": name, "backtest": {"ok": False, "error": str(e)[:300]}, "usage": gen.get("usage")}
-    return {"ok": True, "code": code, "name": name, "backtest": bt_result, "usage": gen.get("usage")}
-
-@app.get("/api/llm/list")
-async def llm_list(user: dict = Depends(require_admin)):
-    from pathlib import Path as _P
-    d = _P(__file__).parent.parent / "strategies_llm"
-    if not d.exists():
-        return []
-    out = []
-    for f in sorted(d.glob("llm_*.py")):
-        out.append({"name": f.stem, "code": f.read_text(encoding="utf-8")[:2000], "size": f.stat().st_size})
-    return out
-
-
-@app.post("/api/llm/evolve")
-async def llm_evolve(prompt: str = "innovative crypto futures strategy combining momentum and mean reversion", n: int = 3, user: dict = Depends(require_admin)):
-    """يولد n استراتيجيات، يباك تست كل واحدة، ويضيف الفائزة (WR>=60%) تلقائياً — admin only: the cron secret must not
-    choose what code gets generated and run"""
-    _require_llm_lab()
-    rate_limit(user["id"], "llm_evolve", 1, 600)
-    prompt = prompt[:500]
-    from app.llm_generator import generate_strategy, save_strategy, backtest_llm, auto_promote_if_winner
-    results = []
-    for i in range(min(n, 5)):
-        gen = await generate_strategy(f"{prompt} — variation {i+1}")
-        if not gen.get("ok"):
-            results.append({"i": i+1, "ok": False, "error": gen.get("error")})
-            continue
-        code = gen["code"]
-        from app.llm_sandbox import validate_code, UnsafeCode
-        try: validate_code(code)
-        except UnsafeCode as e:
-            results.append({"i": i+1, "ok": False, "error": f"unsafe code refused: {e}"}); continue
-        # Save
-        try:
-            fp = save_strategy(code)
-            name = fp.stem
-        except Exception as e:
-            results.append({"i": i+1, "ok": False, "error": str(e)})
-            continue
-        # Backtest
-        try:
-            bt = await backtest_llm(code)
-            if not bt.get("ok"):
-                results.append({"i": i+1, "ok": True, "name": name, "backtest": bt, "promoted": False})
-                continue
-            stats = bt.get("stats", {})
-            promo = await auto_promote_if_winner(code, name, stats)
-            results.append({"i": i+1, "ok": True, "name": name, "code": code[:400], "stats": stats, "promoted": promo.get("promoted"), "reason": promo.get("reason","")})
-        except Exception as e:
-            results.append({"i": i+1, "ok": True, "name": name, "error": str(e)[:200]})
-    promoted = [r for r in results if r.get("promoted")]
-    # Telegram summary
-    try:
-        from app.telegram_bot import send_telegram
-        await send_telegram(f"\U0001f916 LLM Evolve: {len(results)} generated, {len(promoted)} promoted (WR>=60%)")
-    except: pass
-    return {"results": results, "promoted": len(promoted), "total": len(results)}
 
 # ── Real-orders bots (bot.py --live, one service per strategy on the admin's account: raqm-live@<strategy>): the
 # admin turns each strategy on or off, sees its positions and can close one by hand. Each bot runs as another OS user
@@ -1117,25 +801,121 @@ async def llm_evolve(prompt: str = "innovative crypto futures strategy combining
 IPC_DIR = Path(os.getenv("RAQM_IPC_DIR", "/opt/raqm-ipc"))
 LIVE_SYMBOL_RE = re.compile(r"^[A-Z0-9]{1,20}/USDT(:USDT)?$")
 # Keep in sync with bot.LIVE_READY_STRATEGIES (test_admin_live_strategies.py checks it)
-LIVE_STRATEGIES = ("trend_daily", "vol_breakout", "rsi2_pullback", "trend_breakout", "listing_short", "momentum_ls", "ratio_trend")
+LIVE_STRATEGIES = strategy_catalog.IDS
 
 class LiveCloseReq(BaseModel):
     strategy: str = Field(pattern=r"^[a-z0-9_]{1,30}$")
     symbol: str
 
+def capital_check(env: str, patch: dict, acct: str = "") -> str | None:
+    """Why a capital save may be meant for the other account, or None. On 2026-11-03 the real account's plan ($500,
+    margin $26) was saved on the Demo tab three minutes before the real one, and the Demo refused every entry for a
+    day; the same slip the other way would size real money on the Demo's capital. Two signs, each confirmable:
+    - the capital and the margin are exactly the other account's;
+    - on the real account, a capital above twice the balance the bot last read."""
+    cap, margin = patch.get("capital_usdt"), patch.get("capital_margin_override_usdt")
+    if not cap:
+        return None
+    # every other account: Demo, the main real account and each live strategy's own sub-account
+    others = [("demo", "", "الـ Demo")] if env == "live" else []
+    others += [("live", a, "الحساب الحقيقي" if not a else f"الحساب الحقيقي '{a}'") for a in [""] + sorted(_accounts_or_empty())
+               if not (env == "live" and a == acct)]
+    for o_env, o_acct, name in others:
+        try:
+            o = risk_manager.load_risk_state(_ledger(o_env, o_acct))["limits"]
+            if float(o.get("capital_usdt") or 0) == float(cap) and float(o.get("capital_margin_override_usdt") or 0) == float(margin or 0):
+                return f"نفس راس المال والمارجن المحفوظين على {name} بالظبط — متأكد إنك على الحساب الصح؟"
+        except Exception:
+            pass
+    if env == "live":
+        try:
+            eq = risk_manager.load_risk_state(_ledger("live", acct)).get("equity_last")
+            if eq and float(eq) > 0 and float(cap) > 2 * float(eq):
+                return f"راس المال {float(cap):,.0f}$ أكتر من ضعف رصيد الحساب الحقيقي ({float(eq):,.0f}$) — ده رقم الـ Demo؟"
+        except Exception:
+            pass
+    return None
+
+
 class CapitalReq(BaseModel):
     env: str = Field(default="live", pattern=r"^(live|demo)$")
+    acct: str = Field(default="", pattern=r"^([a-z][a-z0-9]{1,15})?$")   # a live strategy's own sub-account; "" = main
     capital_usdt: Optional[float] = Field(None, ge=0, le=100_000_000)     # 0 / None = no plan
     capital_reserve_pct: Optional[float] = Field(None, ge=0, le=90)
     capital_margin_pct: Optional[float] = Field(None, gt=0, le=50)
     capital_min_margin_usdt: Optional[float] = Field(None, ge=5, le=1_000_000)
     capital_margin_override_usdt: Optional[float] = Field(None, ge=0, le=10_000_000)   # 0 = back to the rule
+    confirm: bool = False      # the owner saw capital_check's warning and saves anyway
 
-def _ledger(env: str) -> Path:
-    return (Path(os.getenv("RAQM_RISK_DIR_DEMO", "/opt/raqm-risk-demo")) / "risk_state.json") if env == "demo" else _risk_path()
+LIMIT_KEYS = ("risk_per_trade_pct", "max_aggregate_risk_pct", "max_correlated_risk_pct", "max_daily_loss_pct", "max_drawdown_pct")
+
+class LimitsReq(BaseModel):
+    """An account's risk limits, in % of its equity. On real money the bot takes the lower of each and root's ceiling
+    (RAQM_CAP_*_PCT in /opt/raqm-live/allow-live.env), which nothing here can change."""
+    model_config = ConfigDict(extra="forbid")
+    env: str = Field(default="live", pattern=r"^(live|demo)$")
+    acct: str = Field(default="", pattern=r"^([a-z][a-z0-9]{1,15})?$")   # a live strategy's own sub-account; "" = main
+    risk_per_trade_pct: Optional[float] = Field(None, gt=0, le=100)
+    max_aggregate_risk_pct: Optional[float] = Field(None, gt=0, le=100)
+    max_correlated_risk_pct: Optional[float] = Field(None, gt=0, le=100)
+    max_daily_loss_pct: Optional[float] = Field(None, gt=0, le=100)
+    max_drawdown_pct: Optional[float] = Field(None, gt=0, le=100)
+
+# Live strategies on their own Binance sub-account (backend/app/live_accounts.py, docs/trend-daily-live-plan.md §2):
+# each account has its own ledger and activation record. "" is the main account (RAQM_RISK_DIR), as before.
+ACCOUNTS_REGISTRY = live_accounts.REGISTRY
+ACCOUNTS_RISK_ROOT = live_accounts.RISK_ROOT
+ACCT_RE = re.compile(r"^([a-z][a-z0-9]{1,15})?$")
+
+def _accounts_or_empty() -> dict:
+    try:
+        return live_accounts.load(ACCOUNTS_REGISTRY)
+    except live_accounts.RegistryError:
+        return {}
+
+def _accounts() -> dict:
+    try:
+        return live_accounts.load(ACCOUNTS_REGISTRY)
+    except live_accounts.RegistryError as e:
+        raise HTTPException(503, f"accounts registry: {e}")
+
+def _copies() -> dict:
+    """The copy accounts: one more copy of a strategy that also runs on the main account (live_account.py add-copy)."""
+    try:
+        return live_accounts.load_copies(ACCOUNTS_REGISTRY)
+    except live_accounts.RegistryError as e:
+        raise HTTPException(503, f"accounts registry: {e}")
+
+def _acct_dir(acct: str):
+    """None for the main account; the sub-account's (moved or copy) ledger folder; 400/404 for anything else."""
+    if not acct: return None
+    if not ACCT_RE.match(acct): raise HTTPException(400, "bad account name")
+    if acct not in _accounts() and acct not in _copies(): raise HTTPException(404, "unknown live account")
+    return live_accounts.paths(acct, risk_root=ACCOUNTS_RISK_ROOT)["risk"]
+
+def _live_activation_path(acct: str = "") -> Path:
+    d = _acct_dir(acct)
+    return LIVE_ACTIVATION_PATH if d is None else d / "live_activation.sqlite3"
+
+def _account_strategies(acct: str = "") -> list:
+    """The live strategies that trade on this account: its own, or for the main one every strategy no sub-account has
+    (a copy account takes nothing away from the main one)."""
+    accs = _accounts()
+    copies = _copies()
+    if acct in copies: return [s for s in LIVE_STRATEGIES if s in copies[acct]]
+    if acct: return [s for s in LIVE_STRATEGIES if s in accs.get(acct, [])]
+    elsewhere = {s for ss in accs.values() for s in ss}
+    return [s for s in LIVE_STRATEGIES if s not in elsewhere]
+
+def _ledger(env: str, acct: str = "") -> Path:
+    if env == "demo":
+        return Path(os.getenv("RAQM_RISK_DIR_DEMO", "/opt/raqm-risk-demo")) / "risk_state.json"
+    d = _acct_dir(acct)
+    return _risk_path() if d is None else d / "risk_state.json"
 
 class LiveStrategiesReq(BaseModel):
     env: str = Field(default="live", pattern=r"^(live|demo)$")
+    acct: str = Field(default="", pattern=r"^([a-z][a-z0-9]{1,15})?$")   # a live strategy's own sub-account; "" = main
     account: str = Field(default="", max_length=120)
     strategies: List[str] = Field(max_length=len(LIVE_STRATEGIES))
 
@@ -1146,8 +926,9 @@ def _live_strategy(name: str) -> str:
     if name not in LIVE_STRATEGIES: raise HTTPException(400, "unknown live strategy")
     return name
 
-def _live_status_of(strategy: str) -> dict:
-    f = IPC_DIR / strategy / "live_status.json"
+def _live_status_of(strategy: str, acct: str = "") -> dict:
+    """A live bot's status: the main (or moved) one's folder, or a copy account's own (/opt/raqm-ipc/acct-<name>/...)."""
+    f = (live_accounts.copy_ipc(acct, strategy, IPC_DIR) if acct and acct in _copies() else IPC_DIR / strategy) / "live_status.json"
     if not f.exists():
         return {"running": False}
     try:
@@ -1171,49 +952,107 @@ async def live_status(user: dict = Depends(require_admin)):
     out = {s: _live_status_of(s) for s in LIVE_STRATEGIES}
     return {"running": any(v.get("running") for v in out.values()), "strategies": out}
 
+from app import demo_measure
+
+@app.get("/api/live/measurement")
+async def live_measurement(user: dict = Depends(require_admin)):
+    """The Demo measurement: each strategy's own closed Demo trades (RAQM_IPC_DIR/<strategy>/closed.json, written by
+    the bot) against the backtest baseline (lib/demo-baseline.json), with its sample and status (app/demo_measure.py)."""
+    closed = {}
+    for s in LIVE_STRATEGIES:
+        try:
+            doc = json.loads((IPC_DIR / s / "closed.json").read_text(encoding="utf-8"))
+            if doc.get("env") == "demo": closed[s] = doc.get("closed") or []
+        except Exception:
+            pass
+    try:
+        baseline = json.loads((BOT_DIR / "lib" / "demo-baseline.json").read_text(encoding="utf-8"))
+    except Exception:
+        baseline = None
+    return {**demo_measure.measure(closed, baseline), "baseline_available": baseline is not None}
+
 
 @app.get("/api/live/strategies")
-async def live_strategies(env: str = "live", user: dict = Depends(require_admin)):
+async def live_strategies(env: str = "live", acct: str = "", user: dict = Depends(require_admin)):
     """Which strategies may enter on the admin's account — real money (the active activation record) or Demo (the Demo
-    yes/no) — and how each bot is."""
+    yes/no) — and how each bot is. On real money, `acct` picks a strategy's own sub-account ("" = main)."""
     if env not in ("live", "demo"): raise HTTPException(400, "env must be live or demo")
     if env == "demo":
+        acct = ""
         chosen = live_activation.demo_strategies(DEMO_ACTIVATION_PATH)
         record, on = None, set(LIVE_STRATEGIES if chosen is None else chosen)
+        listed = list(LIVE_STRATEGIES)
     else:
-        record = live_activation.active_record(LIVE_ACTIVATION_PATH)
+        record = live_activation.active_record(_live_activation_path(acct))
         on = set((record or {}).get("strategies") or [])
+        listed = _account_strategies(acct)
     rows = []
-    for s in LIVE_STRATEGIES:
-        st = _live_status_of(s)
-        rows.append({"id": s, "on": s in on, "running": st.get("running", False), "env": st.get("env"),
-                     "positions": len(st.get("positions") or []), "entry_block": st.get("entry_block") or "",
-                     "review": list((st.get("review") or {}).keys())})
+    for s in listed:
+        st = _live_status_of(s, acct if env == "live" else "")
+        # one status folder per strategy for both bots (raqm-demo@ and raqm-live@): only the asked account's bot counts —
+        # the real-money view showed the Demo bots' positions as its own (2026-11-03)
+        mine = st.get("env") == env
+        rows.append({"id": s, "on": s in on, "running": bool(mine and st.get("running", False)), "env": st.get("env"),
+                     "positions": len(st.get("positions") or []) if mine else 0,
+                     "entry_block": (st.get("entry_block") or "") if mine else "",
+                     "review": list((st.get("review") or {}).keys()) if mine else []})
+    kill = None
     try:
-        ledger = risk_manager.load_risk_state(_ledger(env))
+        ledger = risk_manager.load_risk_state(_ledger(env, acct))
+        kill = ledger.get("kill_switch")
         lim = ledger["limits"]
         plan = risk_manager.capital_plan(lim, ledger.get("equity_last"))
         capital = {"plan": plan, "limits_check": risk_manager.plan_vs_limits(lim, plan), "equity_last": ledger.get("equity_last"),
                    "open_trades": len(ledger.get("open_risk") or {}),
                    **{k: lim.get(k) for k in ("capital_usdt", "capital_reserve_pct", "capital_margin_pct", "capital_min_margin_usdt",
-                                              "capital_margin_override_usdt", "risk_per_trade_pct", "max_aggregate_risk_pct")}}
+                                              "capital_margin_override_usdt") + LIMIT_KEYS}}
     except Exception as e:
         capital = {"error": str(e)}
-    return {"env": env, "enabled": live_trading_allowed() if env == "live" else True, "capital": capital,
+    accounts = []
+    if env == "live":
+        accounts = [{"name": "", "strategies": _account_strategies("")}]
+        accounts += [{"name": n, "strategies": ss} for n, ss in sorted(_accounts().items())]
+        accounts += [{"name": n, "strategies": ss, "copy": True} for n, ss in sorted(_copies().items())]
+    return {"env": env, "acct": acct, "accounts": accounts, "kill_switch": kill,
+            "enabled": live_trading_allowed() if env == "live" else True, "capital": capital,
             "account": (record or {}).get("account"), "record": record, "strategies": rows}
 
 
 @app.post("/api/live/capital")
 async def live_capital(req: CapitalReq, user: dict = Depends(require_admin)):
     """The owner's capital for an account: it sets the margin per trade and the most trades open at once, every strategy
-    together (risk_manager.capital_plan). 0 = no plan. The bots and the risk gate read it before every entry."""
-    patch = {k: v for k, v in req.model_dump().items() if k != "env" and v is not None}
+    together (risk_manager.capital_plan). 0 = no plan. The bots and the risk gate read it before every entry.
+    A save that looks like the wrong account is refused with 409 until the owner confirms it (capital_check)."""
+    acct = req.acct if req.env == "live" else ""
+    patch = {k: v for k, v in req.model_dump().items() if k not in ("env", "confirm", "acct") and v is not None}
     for k in ("capital_usdt", "capital_margin_override_usdt"):
         if patch.get(k) == 0: patch[k] = None
-    limits = risk_manager.update_limits(_ledger(req.env), patch)
-    admin_control.audit(BOT_DIR, str(user.get("email") or user.get("id")), "capital_plan", "ok", {"env": req.env, **patch})
-    plan = risk_manager.capital_plan(limits, risk_manager.load_risk_state(_ledger(req.env)).get("equity_last"))
+    ledger = _ledger(req.env, acct)
+    if not req.confirm:
+        warning = capital_check(req.env, patch, acct)
+        if warning: raise HTTPException(409, warning)
+    limits = risk_manager.update_limits(ledger, patch)
+    admin_control.audit(BOT_DIR, str(user.get("email") or user.get("id")), "capital_plan", "ok", {"env": req.env, "acct": acct, **patch})
+    plan = risk_manager.capital_plan(limits, risk_manager.load_risk_state(ledger).get("equity_last"))
     return {"ok": True, "plan": plan, "limits_check": risk_manager.plan_vs_limits(limits, plan)}
+
+
+@app.post("/api/live/limits")
+async def live_limits(req: LimitsReq, user: dict = Depends(require_admin)):
+    """An account's risk limits from the dashboard (the risk tab only showed them). Per trade can't be above the
+    aggregate: one trade alone would then be refused by the aggregate check anyway."""
+    rate_limit(user["id"], "admin_mutation", 30, 60)
+    acct = req.acct if req.env == "live" else ""
+    patch = {k: v for k, v in req.model_dump().items() if k not in ("env", "acct") and v is not None}
+    if not patch: raise HTTPException(400, "nothing to change")
+    ledger = _ledger(req.env, acct)
+    current = risk_manager.load_risk_state(ledger)["limits"]
+    merged = {**current, **patch}
+    if float(merged["risk_per_trade_pct"]) > float(merged["max_aggregate_risk_pct"]):
+        raise HTTPException(400, "risk per trade is above the aggregate limit")
+    limits = risk_manager.update_limits(ledger, patch)
+    admin_control.audit(BOT_DIR, str(user.get("email") or user.get("id")), "risk_limits", "ok", {"env": req.env, "acct": acct, **patch})
+    return {"ok": True, "env": req.env, "acct": acct, "limits": {k: limits.get(k) for k in LIMIT_KEYS}}
 
 
 @app.post("/api/live/strategies")
@@ -1228,20 +1067,28 @@ async def live_strategies_set(req: LiveStrategiesReq, user: dict = Depends(requi
         return {"ok": True, "env": "demo", "strategies": sorted(set(req.strategies))}
     if not req.account.strip():
         raise HTTPException(422, "the live account name is required")
+    act_path = _live_activation_path(req.acct)
+    # a sub-account's bot reads BINANCE_LIVE_ACCOUNT=<its name> (live_account.py); another name would never match it
+    if req.acct and req.account.strip() != req.acct:
+        raise HTTPException(422, f"on the '{req.acct}' account the activation's account name is '{req.acct}'")
+    mine = set(_account_strategies(req.acct))
+    if not set(req.strategies) <= mine:
+        raise HTTPException(422, f"not on this account: {', '.join(sorted(set(req.strategies) - mine))}")
     if not req.strategies:
-        live_activation.revoke(LIVE_ACTIVATION_PATH, reason=f"all live strategies turned off by {actor}")
-        admin_control.audit(BOT_DIR, actor, "live_strategies", "ok", {"strategies": []})
+        live_activation.revoke(act_path, reason=f"all live strategies turned off by {actor}")
+        admin_control.audit(BOT_DIR, actor, "live_strategies", "ok", {"acct": req.acct, "strategies": []})
         return {"ok": True, "strategies": []}
     chosen = sorted(set(req.strategies))
     try:
-        aid = live_activation.activate(LIVE_ACTIVATION_PATH, environment="live", account=req.account, approved_by=actor,
+        aid = live_activation.activate(act_path, environment="live", account=req.account, approved_by=actor,
                                        strategies=chosen,
-                                       readiness_evidence=_safe_json_file(BOT_DIR / "readiness_evidence.json") or {})
+                                       readiness_evidence=_safe_json_file(BOT_DIR / "readiness_evidence.json") or {},
+                                       expected_reviewed_commit_sha=_trusted_readiness_commit())
     except PermissionError as exc:
         raise HTTPException(403, str(exc))
     except ValueError as exc:
         raise HTTPException(422, str(exc))
-    admin_control.audit(BOT_DIR, actor, "live_strategies", "ok", {"account": req.account, "strategies": chosen})
+    admin_control.audit(BOT_DIR, actor, "live_strategies", "ok", {"acct": req.acct, "account": req.account, "strategies": chosen})
     return {"ok": True, "activation_id": aid, "strategies": chosen}
 
 
@@ -1260,7 +1107,8 @@ async def live_activation_create(req: LiveActivationReq, user: dict = Depends(re
     try:
         aid = live_activation.activate(LIVE_ACTIVATION_PATH, environment=req.environment, account=req.account,
             approved_by=str(user.get("email") or user.get("id")), strategies=req.strategies,
-            readiness_evidence=_safe_json_file(BOT_DIR / "readiness_evidence.json") or {})
+            readiness_evidence=_safe_json_file(BOT_DIR / "readiness_evidence.json") or {},
+            expected_reviewed_commit_sha=_trusted_readiness_commit())
     except PermissionError as exc:
         raise HTTPException(403, str(exc))
     except ValueError as exc:
@@ -1345,6 +1193,7 @@ class RiskLimitsReq(AdminModel):
 
 class KillSwitchReq(AdminModel):
     action: str = Field(pattern=r"^(trip|reset)$")
+    acct: str = Field(default="", pattern=r"^([a-z][a-z0-9]{1,15})?$")   # a live strategy's own sub-account; "" = main
     reason: Optional[str] = Field(None, min_length=3, max_length=240)
     confirm: bool = False
 
@@ -1353,6 +1202,11 @@ def _risk_path(): return risk_manager.ledger_dir(BOT_DIR) / "risk_state.json"   
 def _safe_json_file(path):
     try: return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
     except Exception: return None
+
+def _trusted_readiness_commit():
+    """Deployment-provided exact commit binding; missing or malformed means readiness fails closed."""
+    value = os.getenv("READINESS_EXPECTED_COMMIT_SHA", "").strip().lower()
+    return value if re.fullmatch(r"[0-9a-f]{40}", value) else None
 
 def _health_snapshot():
     cfg=_safe_json_file(BOT_DIR / "api_bot_config.json") or {}
@@ -1434,8 +1288,8 @@ async def admin_paper_portfolio(user: dict = Depends(require_admin)):
                          "aggregate":live_bots_feed.aggregate_summary(live_feed),"strategies":live_strategies}}
 
 @app.get("/api/admin/risk")
-async def admin_risk(user: dict = Depends(require_admin)):
-    st=risk_manager.load_risk_state(_risk_path()); return {"available":True,"state":st}
+async def admin_risk(acct: str = "", user: dict = Depends(require_admin)):
+    st=risk_manager.load_risk_state(_ledger("live", acct)); return {"available":True,"acct":acct,"state":st}
 
 @app.patch("/api/admin/risk/limits")
 async def admin_risk_limits(req: RiskLimitsReq, user: dict = Depends(require_admin)):
@@ -1446,11 +1300,11 @@ async def admin_risk_limits(req: RiskLimitsReq, user: dict = Depends(require_adm
 async def admin_kill_switch(req: KillSwitchReq, user: dict = Depends(require_admin)):
     rate_limit(user["id"], "admin_mutation", 30, 60)
     if not req.confirm: raise HTTPException(400,"confirmation required")
-    actor=await _admin_actor(user)
-    if req.action=="trip": risk_manager.trip_kill_switch(_risk_path(),req.reason or "manual operator trip",by=actor)
-    else: risk_manager.reset_kill_switch(_risk_path(),operator=actor)
-    admin_control.audit_kill(BOT_DIR,actor,"kill_switch_"+req.action,"ok",{"reason":req.reason})
-    return {"ok":True,"state":risk_manager.load_risk_state(_risk_path())["kill_switch"]}
+    actor=await _admin_actor(user); ledger=_ledger("live", req.acct)
+    if req.action=="trip": risk_manager.trip_kill_switch(ledger,req.reason or "manual operator trip",by=actor)
+    else: risk_manager.reset_kill_switch(ledger,operator=actor)
+    admin_control.audit_kill(BOT_DIR,actor,"kill_switch_"+req.action,"ok",{"reason":req.reason,"acct":req.acct})
+    return {"ok":True,"acct":req.acct,"state":risk_manager.load_risk_state(ledger)["kill_switch"]}
 
 @app.post("/api/admin/controls/entry-pause")
 async def admin_entry_pause(req: PauseReq, user: dict = Depends(require_admin)):
@@ -1560,12 +1414,11 @@ async def admin_finance(user: dict = Depends(require_admin)):
     return {"available": merged["available"], "error": merged["error"], "plan_counts": merged["plan_counts"], "finance": finance, "prices": prices}
 
 
-
-# ── Plan prices and invitations (app/plans_invites.py has the rules)
 async def _saved_prices() -> dict[str, int]:
     async with async_session() as sess:
         rows = (await sess.execute(select(PlanPrice))).scalars().all()
     return {r.tier: r.price_usd for r in rows}
+
 
 async def _grants() -> dict[str, dict]:
     async with async_session() as sess:
@@ -1573,249 +1426,6 @@ async def _grants() -> dict[str, dict]:
     return {r.user_id: {"tier": r.tier, "expires_at": r.expires_at, "email": r.email, "invite_id": r.invite_id,
                         "granted_at": r.granted_at} for r in rows}
 
-@app.get("/api/plans")
-async def plans_public():
-    """Every plan's current monthly price (USD) — the pricing page and the Stripe checkout read this."""
-    return {"currency": "usd", "prices": pi.effective_prices(await _saved_prices())}
-
-@app.get("/api/admin/plans")
-async def admin_plans(user: dict = Depends(require_admin)):
-    async with async_session() as sess:
-        rows = (await sess.execute(select(PlanPrice))).scalars().all()
-    saved = {r.tier: r.price_usd for r in rows}
-    return {"prices": pi.effective_prices(saved), "defaults": dict(admin_users.TIER_PRICES_USD),
-            "changed": {r.tier: {"price_usd": r.price_usd, "updated_at": r.updated_at, "updated_by": r.updated_by} for r in rows}}
-
-class PlanPricesReq(AdminModel):
-    prices: dict
-    confirm: bool = False
-
-@app.post("/api/admin/plans")
-async def admin_plans_set(req: PlanPricesReq, user: dict = Depends(require_admin)):
-    """Change paid plans' monthly prices. New checkouts charge them; existing Stripe subscribers keep their price."""
-    rate_limit(user["id"], "admin_mutation", 30, 60)
-    if not req.confirm: raise HTTPException(400, "confirmation required")
-    try: patch = pi.validate_prices(req.prices)
-    except ValueError as e: raise HTTPException(400, str(e))
-    actor, at = await _admin_actor(user), pi.iso(pi.now())
-    async with async_session() as sess:
-        for tier, price in patch.items():
-            row = await sess.get(PlanPrice, tier)
-            if row is None: sess.add(PlanPrice(tier=tier, price_usd=price, updated_at=at, updated_by=actor))
-            else: row.price_usd, row.updated_at, row.updated_by = price, at, actor
-        await sess.commit()
-    admin_control.audit(BOT_DIR, actor, "plan_prices", "ok", patch)
-    return {"ok": True, "prices": pi.effective_prices(await _saved_prices())}
-
-def _invite_out(inv: Invitation, prices: dict, paid_tier_by_email: dict | None = None) -> dict:
-    d = {c: getattr(inv, c) for c in ("id", "email", "tier", "kind", "days", "status", "note", "created_at", "created_by",
-                                     "link_expires_at", "emailed_at", "email_error", "opened_checkout_at", "accepted_at")}
-    d["state"] = pi.invite_state(d)
-    if inv.kind in ("trial", "paid") and d["state"] == "pending" and paid_tier_by_email is not None:
-        if pi.TIER_RANK.get(paid_tier_by_email.get(inv.email, "free"), 0) >= pi.TIER_RANK.get(inv.tier, 0):
-            d["state"] = "subscribed"
-    d["link"] = pi.invite_link(inv.id)
-    d["offer"] = pi.offer_text(inv.tier, inv.kind, inv.days, prices.get(inv.tier))
-    return d
-
-@app.get("/api/admin/invites")
-async def admin_invites(user: dict = Depends(require_admin)):
-    rate_limit(user["id"], "admin_users", 20, 60)
-    prices = pi.effective_prices(await _saved_prices())
-    gotrue = await admin_users.fetch_gotrue_users()
-    tiers = await admin_users.fetch_profile_tiers()
-    by_email = {pi.normalize_email(u.get("email")): tiers.get("tiers", {}).get(u.get("id")) or "free"
-                for u in gotrue.get("users", []) if u.get("email")}
-    async with async_session() as sess:
-        rows = (await sess.execute(select(Invitation).order_by(desc(Invitation.created_at)).limit(200))).scalars().all()
-    grants = await _grants()
-    at = pi.now()
-    return {"email_configured": pi.email_configured(),
-            "invites": [_invite_out(r, prices, by_email if gotrue.get("available") else None) for r in rows],
-            "grants": [{"user_id": uid, **g, "active": bool(pi.active_grant_tier(g, at))} for uid, g in grants.items()]}
-
-class InviteReq(AdminModel):
-    email: str = Field(max_length=254)
-    tier: str
-    kind: str
-    days: Optional[int] = Field(None, ge=1, le=pi.MAX_DAYS)
-    note: Optional[str] = Field(None, max_length=200)
-    send_email: bool = True
-    confirm: bool = False
-
-async def _email_invite(inv: Invitation, prices: dict) -> dict:
-    subject, body = pi.invite_email(inv.tier, inv.kind, inv.days, prices.get(inv.tier), pi.invite_link(inv.id))
-    return await pi.send_email(inv.email, subject, body)
-
-@app.post("/api/admin/invites")
-async def admin_invite_create(req: InviteReq, user: dict = Depends(require_admin)):
-    rate_limit(user["id"], "admin_mutation", 30, 60)
-    if not req.confirm: raise HTTPException(400, "confirmation required")
-    email = pi.normalize_email(req.email)
-    if not pi.valid_email(email): raise HTTPException(400, "invalid email")
-    if req.tier not in pi.PAID_TIERS: raise HTTPException(400, f"tier must be one of {pi.PAID_TIERS}")
-    if req.kind not in pi.KINDS: raise HTTPException(400, f"kind must be one of {pi.KINDS}")
-    if req.kind in ("gift", "trial") and not req.days: raise HTTPException(400, "days required for a gift or a trial")
-    at = pi.now()
-    async with async_session() as sess:
-        open_ = (await sess.execute(select(Invitation).where(Invitation.email == email, Invitation.status == "pending"))).scalars().all()
-        if any(pi.invite_state({"status": r.status, "link_expires_at": r.link_expires_at}, at) == "pending" for r in open_):
-            raise HTTPException(409, "there is already a pending invitation for this email — revoke or resend it")
-        inv = Invitation(id=pi.new_invite_id(), email=email, tier=req.tier, kind=req.kind,
-                         days=req.days if req.kind != "paid" else None, status="pending", note=(req.note or "").strip() or None,
-                         created_at=pi.iso(at), created_by=await _admin_actor(user),
-                         link_expires_at=pi.iso(at + pi.timedelta(days=pi.LINK_DAYS)))
-        sess.add(inv)
-        await sess.commit()
-    prices = pi.effective_prices(await _saved_prices())
-    sent = {"ok": False, "error": None}
-    if req.send_email:
-        sent = await _email_invite(inv, prices)
-        async with async_session() as sess:
-            row = await sess.get(Invitation, inv.id)
-            if sent["ok"]: row.emailed_at = pi.iso(pi.now())
-            row.email_error = sent["error"]
-            await sess.commit()
-            inv = row
-    admin_control.audit(BOT_DIR, inv.created_by, "invite_create", "ok",
-                         {"invite": inv.id[:6], "email": email, "tier": req.tier, "kind": req.kind, "days": inv.days, "emailed": sent["ok"]})
-    return {"ok": True, "invite": _invite_out(inv, prices), "emailed": sent["ok"], "email_error": sent["error"]}
-
-class InviteActionReq(AdminModel):
-    confirm: bool = False
-
-@app.post("/api/admin/invites/{invite_id}/revoke")
-async def admin_invite_revoke(invite_id: str, req: InviteActionReq, user: dict = Depends(require_admin)):
-    rate_limit(user["id"], "admin_mutation", 30, 60)
-    if not req.confirm: raise HTTPException(400, "confirmation required")
-    async with async_session() as sess:
-        inv = await sess.get(Invitation, invite_id)
-        if inv is None: raise HTTPException(404, "invitation not found")
-        if inv.status != "pending": raise HTTPException(409, f"invitation is {inv.status}")
-        inv.status = "revoked"
-        await sess.commit()
-    admin_control.audit(BOT_DIR, await _admin_actor(user), "invite_revoke", "ok", {"invite": invite_id[:6], "email": inv.email})
-    return {"ok": True}
-
-@app.post("/api/admin/invites/{invite_id}/resend")
-async def admin_invite_resend(invite_id: str, req: InviteActionReq, user: dict = Depends(require_admin)):
-    """Email the invitation again; the link gets a fresh LINK_DAYS."""
-    rate_limit(user["id"], "admin_mutation", 30, 60)
-    if not req.confirm: raise HTTPException(400, "confirmation required")
-    async with async_session() as sess:
-        inv = await sess.get(Invitation, invite_id)
-        if inv is None: raise HTTPException(404, "invitation not found")
-        if inv.status != "pending": raise HTTPException(409, f"invitation is {inv.status}")
-        inv.link_expires_at = pi.iso(pi.now() + pi.timedelta(days=pi.LINK_DAYS))
-        await sess.commit()
-    prices = pi.effective_prices(await _saved_prices())
-    sent = await _email_invite(inv, prices)
-    async with async_session() as sess:
-        row = await sess.get(Invitation, invite_id)
-        if sent["ok"]: row.emailed_at = pi.iso(pi.now())
-        row.email_error = sent["error"]
-        await sess.commit()
-    admin_control.audit(BOT_DIR, await _admin_actor(user), "invite_resend", "ok" if sent["ok"] else "failed", {"invite": invite_id[:6], "email": inv.email})
-    return {"ok": True, "emailed": sent["ok"], "email_error": sent["error"]}
-
-@app.post("/api/admin/grants/{target_user_id}/end")
-async def admin_grant_end(target_user_id: str, req: InviteActionReq, user: dict = Depends(require_admin)):
-    """End a gift now: the user is back on their paid plan (or free)."""
-    rate_limit(user["id"], "admin_mutation", 30, 60)
-    if not req.confirm: raise HTTPException(400, "confirmation required")
-    async with async_session() as sess:
-        g = await sess.get(PlanGrant, target_user_id)
-        if g is None: raise HTTPException(404, "no gift for this user")
-        g.expires_at = pi.iso(pi.now())
-        await sess.commit()
-    _tier_cache.pop(target_user_id, None)
-    admin_control.audit(BOT_DIR, await _admin_actor(user), "gift_end", "ok", {"target_user_id": target_user_id})
-    return {"ok": True}
-
-async def _load_invite(invite_id: str) -> Invitation:
-    if not re.fullmatch(r"[A-Za-z0-9_-]{16,64}", invite_id or ""): raise HTTPException(404, "invitation not found")
-    async with async_session() as sess:
-        inv = await sess.get(Invitation, invite_id)
-    if inv is None: raise HTTPException(404, "invitation not found")
-    return inv
-
-@app.get("/api/invites/{invite_id}")
-async def invite_public(invite_id: str, request: Request):
-    """What the invitation offers, for its page. The email is masked: the link alone doesn't reveal the address."""
-    rate_limit(request.client.host if request.client else "?", "invite_view", 30, 60)
-    inv = await _load_invite(invite_id)
-    prices = pi.effective_prices(await _saved_prices())
-    return {"state": pi.invite_state({"status": inv.status, "link_expires_at": inv.link_expires_at}), "tier": inv.tier,
-            "kind": inv.kind, "days": inv.days, "price_usd": prices.get(inv.tier), "email_hint": pi.mask_email(inv.email),
-            "offer": pi.offer_text(inv.tier, inv.kind, inv.days, prices.get(inv.tier))}
-
-def _check_invitee(inv: Invitation, user: dict):
-    if pi.invite_state({"status": inv.status, "link_expires_at": inv.link_expires_at}) != "pending":
-        raise HTTPException(409, "invitation is no longer valid")
-    if not user.get("email_confirmed"): raise HTTPException(403, "confirm your email first")
-    if pi.normalize_email(user.get("email")) != inv.email: raise HTTPException(403, "this invitation is for another email")
-
-@app.post("/api/invites/{invite_id}/accept")
-async def invite_accept(invite_id: str, user: dict = Depends(require_user)):
-    """Take a gift invitation: the plan for its days, on top of the paid plan (the higher one counts)."""
-    rate_limit(user["id"], "invite_accept", 10, 60)
-    inv = await _load_invite(invite_id)
-    _check_invitee(inv, user)
-    if inv.kind != "gift": raise HTTPException(400, "this invitation is taken through checkout")
-    at = pi.now()
-    async with async_session() as sess:
-        row = await sess.get(Invitation, invite_id)
-        if row.status != "pending": raise HTTPException(409, "invitation is no longer valid")
-        g = await sess.get(PlanGrant, user["id"])
-        tier, end = pi.grant_end({"tier": g.tier, "expires_at": g.expires_at} if g else None, inv.tier, inv.days or 0, at)
-        if g is None:
-            sess.add(PlanGrant(user_id=user["id"], email=inv.email, tier=tier, expires_at=pi.iso(end), invite_id=inv.id, granted_at=pi.iso(at)))
-        else:
-            g.tier, g.expires_at, g.invite_id, g.granted_at, g.reminded_at, g.email = tier, pi.iso(end), inv.id, pi.iso(at), None, inv.email
-        row.status, row.accepted_at, row.accepted_user_id = "accepted", pi.iso(at), user["id"]
-        await sess.commit()
-    _tier_cache.pop(user["id"], None)
-    admin_control.audit(BOT_DIR, inv.email, "invite_accept", "ok", {"invite": inv.id[:6], "tier": tier, "until": pi.iso(end)})
-    return {"ok": True, "kind": "gift", "tier": tier, "expires_at": pi.iso(end)}
-
-@app.post("/api/invites/{invite_id}/checkout")
-async def invite_checkout_terms(invite_id: str, user: dict = Depends(require_user)):
-    """For the Stripe checkout route: the plan, price and free days of a trial/paid invitation, for its invitee only."""
-    rate_limit(user["id"], "invite_accept", 10, 60)
-    inv = await _load_invite(invite_id)
-    _check_invitee(inv, user)
-    if inv.kind not in ("trial", "paid"): raise HTTPException(400, "a gift needs no checkout")
-    if pi.TIER_RANK.get(await _paid_tier(user), 0) >= pi.TIER_RANK.get(inv.tier, 0):
-        async with async_session() as sess:
-            row = await sess.get(Invitation, invite_id)
-            row.status, row.accepted_at, row.accepted_user_id = "accepted", pi.iso(pi.now()), user["id"]
-            await sess.commit()
-        raise HTTPException(409, "you already have this plan or a higher one")
-    async with async_session() as sess:
-        row = await sess.get(Invitation, invite_id)
-        row.opened_checkout_at = pi.iso(pi.now())
-        await sess.commit()
-    prices = pi.effective_prices(await _saved_prices())
-    return {"tier": inv.tier, "kind": inv.kind, "trial_days": inv.days if inv.kind == "trial" else None, "price_usd": prices.get(inv.tier)}
-
-async def _gift_reminder_loop():
-    """Hourly: email gifts ending within REMIND_BEFORE_DAYS once (only when email is configured)."""
-    while True:
-        try:
-            if pi.email_configured():
-                at = pi.now()
-                async with async_session() as sess:
-                    rows = (await sess.execute(select(PlanGrant).where(PlanGrant.reminded_at.is_(None)))).scalars().all()
-                    for g in rows:
-                        end = pi.parse(g.expires_at)
-                        if not g.email or not end or not (at < end <= at + pi.timedelta(days=pi.REMIND_BEFORE_DAYS)): continue
-                        subject, body = pi.reminder_email(g.tier, max(1, (end - at).days or 1),
-                                                          (os.getenv("SITE_URL") or "https://bot-saros.vercel.app").rstrip("/") + "/#pricing")
-                        if (await pi.send_email(g.email, subject, body))["ok"]: g.reminded_at = pi.iso(at)
-                    await sess.commit()
-        except Exception as e:
-            print(f"gift reminder: {type(e).__name__}")
-        await asyncio.sleep(3600)
 
 @app.get("/api/admin/readiness")
 async def admin_readiness(user: dict = Depends(require_admin)):
@@ -1828,7 +1438,9 @@ async def admin_readiness(user: dict = Depends(require_admin)):
         risk_readable = False
         kill_clear = False
     evidence = _safe_json_file(BOT_DIR / "readiness_evidence.json") or {}
-    result = build_admin_readiness(strategies=list(admin_control.STRATEGIES), evidence=evidence, live_locked=not live_trading_allowed(), environment=os.getenv("BINANCE_ENV", ""))
+    result = build_admin_readiness(strategies=list(admin_control.STRATEGIES), evidence=evidence,
+                                   live_locked=not live_trading_allowed(), environment=os.getenv("BINANCE_ENV", ""),
+                                   expected_reviewed_commit_sha=_trusted_readiness_commit())
     result.update({"environment":"testnet" if os.getenv("BINANCE_ENV")=="testnet" else "unavailable", "checks":{"server_live_flag_locked":not live_trading_allowed(), "risk_ledger_readable":risk_readable, "kill_switch_clear":kill_clear}})
     result["testnet_ready"] = result["testnet_ready"] and risk_readable and kill_clear
     result["live_ready"] = result["live_ready"] and risk_readable and kill_clear
@@ -1849,140 +1461,12 @@ async def admin_activation(user: dict = Depends(require_admin)):
 async def admin_audit(limit: int=100, user: dict = Depends(require_admin)):
     return {"items":admin_control.list_audit(BOT_DIR,max(1,min(limit,200)))}
 
-# ── Keys Vault — Multi-Exchange (encrypted, never expose secrets)
+# The admin-only /api/keys/* endpoints and their vault.json were removed on 2026-11-04 (development-plan 3.2): they
+# fed only the paper dashboard loop. Users' Demo keys are below; the real bot's key lives on the server only.
 from pydantic import BaseModel as _BM2
 
-class SaveKeyReq(_BM2):
-    exchange: str
-    apiKey: str
-    secret: str
-    passphrase: str = ""
-
-@app.get("/api/keys/status")
-async def keys_status(user: dict = Depends(require_admin)):
-    from app.keys_vault import load_all_status
-    return load_all_status()
-
-@app.post("/api/keys/save")
-async def keys_save(req: SaveKeyReq, user: dict = Depends(require_admin)):
-    from app.keys_vault import save_keys
-    try:
-        save_keys(req.exchange.lower().strip(), req.apiKey.strip(), req.secret.strip(), req.passphrase.strip())
-        return {"ok": True}
-    except Exception as e:
-        raise HTTPException(400, str(e))
-
-@app.post("/api/keys/delete")
-async def keys_delete(exchange: str = "", body: dict = None, user: dict = Depends(require_admin)):
-    from app.keys_vault import delete_keys
-    ex = (body or {}).get("exchange") or exchange
-    ex = str(ex).lower().strip()
-    if not ex: raise HTTPException(400, "exchange required")
-    ok = delete_keys(ex)
-    return {"ok": bool(ok)}
-
-@app.post("/api/keys/paper")
-async def keys_paper(body: dict, user: dict = Depends(require_admin)):
-    from app.keys_vault import set_paper
-    ex = str(body.get("exchange","")).lower().strip()
-    paper = body.get("paper", True) is not False  # only an explicit false switches to LIVE
-    if not ex: raise HTTPException(400, "exchange required")
-    if not paper and not live_trading_allowed():
-        raise HTTPException(400, "LIVE disabled — set ALLOW_LIVE_TRADING=true on the backend first")
-    ok = set_paper(ex, paper)
-    return {"ok": bool(ok), "paper": paper}
-
-@app.get("/api/keys/live")
-async def keys_live(user: dict = Depends(require_admin)):
-    """Which exchanges are LIVE (for bot)"""
-    from app.keys_vault import get_exchanges_for_trading
-    return {"live": get_exchanges_for_trading()}
-
-# ── Per-user Keys Vault + Live Enable — any registered user, own account only.
-# Separate from the admin-only /api/keys/* and /api/admin/* paths above, which are
-# untouched. Every endpoint here is scoped by the authenticated user's own id
-# (Depends(require_user)) — never by an id supplied in the request body — so a user
-# can only ever read/write their own key and their own live-enable record.
 USER_LIVE_ACTIVATION_PATH = BOT_DIR / "user_live_activation.sqlite3"
 
-class UserSaveKeyReq(_BM2):
-    # bounded: every save re-encrypts the whole shared vault on the API's single worker
-    exchange: str = Field(max_length=20)
-    apiKey: str = Field(max_length=256)
-    secret: str = Field(max_length=256)
-    passphrase: str = Field(default="", max_length=128)
-
-def _require_confirmed(user: dict):
-    if not user.get("email_confirmed"):
-        raise HTTPException(403, "confirm your email first")
-
-class UserLiveEnableReq(_BM2):
-    exchange: str
-    confirm: str
-    leverage: Optional[int] = None
-    risk_per_trade_pct: Optional[float] = None
-    max_aggregate_risk_pct: Optional[float] = None
-
-@app.get("/api/user/keys/status")
-async def user_keys_status(user: dict = Depends(require_user)):
-    from app.user_keys_vault import user_key_status
-    return user_key_status(user["id"])
-
-@app.post("/api/user/keys/save")
-async def user_keys_save(req: UserSaveKeyReq, user: dict = Depends(require_user)):
-    _require_confirmed(user)
-    from app.user_keys_vault import save_user_keys
-    try:
-        save_user_keys(user["id"], req.exchange.lower().strip(), req.apiKey.strip(), req.secret.strip(), req.passphrase.strip())
-        return {"ok": True}
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-
-@app.post("/api/user/keys/delete")
-async def user_keys_delete(body: dict, user: dict = Depends(require_user)):
-    from app.user_keys_vault import delete_user_keys
-    ex = str((body or {}).get("exchange", "")).lower().strip()
-    if not ex:
-        raise HTTPException(400, "exchange required")
-    ok = delete_user_keys(user["id"], ex)
-    return {"ok": bool(ok)}
-
-@app.get("/api/user/live/status")
-async def user_live_status(user: dict = Depends(require_user)):
-    from app.user_live_activation import get_user_live_record
-    rec = get_user_live_record(USER_LIVE_ACTIVATION_PATH, user_id=user["id"])
-    if not rec:
-        return {"enabled": False}
-    return {"enabled": bool(rec["enabled"]), "exchange": rec["exchange"], "leverage": rec["leverage"],
-            "risk_per_trade_pct": rec["risk_per_trade_pct"], "max_aggregate_risk_pct": rec["max_aggregate_risk_pct"],
-            "consented_at": rec["consented_at"]}
-
-@app.post("/api/user/live/enable")
-async def user_live_enable(req: UserLiveEnableReq, request: Request, user: dict = Depends(require_user)):
-    _require_confirmed(user)
-    if not live_trading_allowed():   # per-user live trading obeys the server's real-money switch like everything else
-        raise HTTPException(403, "live trading is off on this server")
-    from app.user_keys_vault import has_live_configured_keys
-    from app.user_live_activation import enable_user_live
-    ex = req.exchange.lower().strip()
-    if not has_live_configured_keys(user["id"], ex):
-        raise HTTPException(400, f"save your {ex} API key first — live cannot be enabled without your own keys")
-    try:
-        enable_user_live(USER_LIVE_ACTIVATION_PATH, user_id=user["id"], exchange=ex, confirm=req.confirm,
-                          actor=str(user.get("email") or user["id"]), ip=(request.client.host if request.client else None),
-                          leverage=req.leverage, risk_per_trade_pct=req.risk_per_trade_pct,
-                          max_aggregate_risk_pct=req.max_aggregate_risk_pct)
-    except (PermissionError, ValueError) as e:
-        raise HTTPException(400, str(e))
-    from app.user_keys_vault import set_user_paper
-    set_user_paper(user["id"], ex, False)  # the per-user vault entry itself switches to LIVE too
-    return {"ok": True}
-
-@app.post("/api/user/live/disable")
-async def user_live_disable(user: dict = Depends(require_user)):
-    from app.user_live_activation import disable_user_live
-    disable_user_live(USER_LIVE_ACTIVATION_PATH, user_id=user["id"], reason="user disabled")
-    return {"ok": True}
 
 @app.get("/api/trades")
 async def api_trades(limit: int = 50, user: dict = Depends(require_admin)):
@@ -1991,3 +1475,13 @@ async def api_trades(limit: int = 50, user: dict = Depends(require_admin)):
         res = await sess.execute(select(Trade).order_by(desc(Trade.id)).limit(limit))
         rows=res.scalars().all()
         return [{"id":r.id,"symbol":r.symbol,"side":r.side,"entry":r.entry,"exit":r.exit,"qty":r.qty,"pnl":r.pnl,"status":r.status,"sl":r.sl,"tp":r.tp,"at":r.created_at} for r in rows]
+
+
+# ── Routers (development-plan 3.2): sections moved out of this file, included last so they read its settings.
+from app.routes import invites as invites_routes, users as users_routes  # noqa: E402
+from app.routes import backtest as backtest_routes, paper as paper_routes, lab as lab_routes  # noqa: E402
+app.include_router(invites_routes.router)
+app.include_router(users_routes.router)
+app.include_router(backtest_routes.router)
+app.include_router(paper_routes.router)
+app.include_router(lab_routes.router)

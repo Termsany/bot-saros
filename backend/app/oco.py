@@ -11,6 +11,22 @@ import uuid
 
 OCO_PREFIX = "raqm"
 MAX_RETRY_OCO = 2
+ACTIVE_PROTECTION_STATUSES = frozenset({"open", "new", "active", "pending"})
+INACTIVE_PROTECTION_STATUSES = frozenset({"closed", "filled", "canceled", "cancelled", "expired", "rejected"})
+
+
+def _is_active_protection_order(order):
+    """Exchange protection is active only for the documented, normalized active statuses."""
+    return isinstance(order, dict) and isinstance(order.get("status"), str) and order["status"].strip().lower() in ACTIVE_PROTECTION_STATUSES
+
+
+def _may_be_live_protection(order):
+    """For an order an open-orders view returned: live unless its status says it is done. A missing or unknown status
+    still counts, so cleanup cancels it and checks it is gone — dropping it would report a live stop as cancelled."""
+    if not isinstance(order, dict):
+        return False
+    status = order.get("status")
+    return not (isinstance(status, str) and status.strip().lower() in INACTIVE_PROTECTION_STATUSES)
 
 def _oco_id(pos_id, leg):
     # the random part of the entry id (12 hex): 8 characters of "raqm-xxxxxxxx" left only 3 random ones, so two
@@ -40,7 +56,7 @@ def _leg_on_exchange(ex, symbol, order, cid):
         try:
             o = ex.fetch_order(oid, symbol)
             if isinstance(o, dict) and (o.get("id") == oid or _order_cid(o) == cid):
-                return (o.get("status") or "open") == "open"
+                return _is_active_protection_order(o)
         except Exception:
             pass
     for params in ({}, {"trigger": True}, {"stop": True}):
@@ -52,7 +68,8 @@ def _leg_on_exchange(ex, symbol, order, cid):
             continue
         for o in opens:
             if isinstance(o, dict) and (_order_cid(o) == cid or (oid and o.get("id") == oid)):
-                return True
+                if _is_active_protection_order(o):
+                    return True
     return False
 
 
@@ -163,7 +180,7 @@ def _owned_orders(ex, symbol, ids):
         for order in opens:
             if not isinstance(order, dict):
                 continue
-            if _order_cid(order) in ids or order.get("id") in ids:
+            if (_order_cid(order) in ids or order.get("id") in ids) and _may_be_live_protection(order):
                 found.setdefault(order.get("id"), {"order": order, "view": view})
     return found, complete
 

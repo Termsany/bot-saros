@@ -21,6 +21,16 @@ python research/universe_data.py && python research/funding_store.py
 
 Without a copy the same two commands build everything from scratch (about 10 minutes of candles, longer for funding).
 
+**Bybit** (a second exchange, November 2026): `bybit_daily.pkl`, `bybit_funding.pkl`, `bybit_meta.pkl` — every crypto
+USDT perpetual Bybit lists or has closed (835, 318 delisted; stocks, ETFs, commodities and forex left out), daily
+candles and real funding since 2020, in the same folder on the server. Copy, or refresh (resumable, only what is
+missing; ~40 minutes from scratch on the server at `RAQM_BYBIT_PAUSE=0.04`):
+
+```bash
+scp root@bot.da3m.io:/opt/raqm-data/research/bybit_*.pkl research/.cache/
+python research/bybit_data.py
+```
+
 ## Method
 
 - **Data:** last 2,000 closed candles from Bybit for BTC, ETH, SOL and XRP on 1h and 4h — 8 data sets
@@ -317,6 +327,286 @@ exact-time funding) and `research/hourly_study.py`. Daily membership from the pr
 | funding-time effect | 0 / 9 | −0.95 |
 
 None improved the three core bots. On hourly candles the extra trades' costs eat any small edge.
+
+### 19. Filters on the new-listing short — not adopted (November 2026)
+
+`research/listing_improve_study.py`: the rule that runs (30 days after listing, hold 90, stop 40%, at most 10 open,
+577 listings since 2021) with four filters fixed before any result, every combination (36): BTC regime (none / below
+its 200-day average / 30-day return below 0), the coin's move since listing (none / below its listing open / not up
+50%+), skip on negative 7-day funding, and a cover at −60%. Chosen on Sharpe before 2024, 60 trades at least.
+
+| | trades | PnL | max DD | Sharpe < 2024 | Sharpe 2024 → | PnL 2024 → |
+|---|---|---|---|---|---|---|
+| **the rule that runs** | 251 | **+775** | 358 | 0.64 | **1.30** | **+529** |
+| in-sample pick: skip coins up 50%+ since listing | 239 | +608 | 353 | 0.71 | 0.88 | +344 |
+| BTC 30-day return below 0 | 152 | +498 | 238 | 0.56 | 0.92 | +344 |
+
+- **0 of 36 variants beat the rule out-of-sample.** The rule stays as it is.
+- The losses are the stops: 110 trades hit the 40% stop (−1,716); the 139 held 90 days made +2,451.
+- Shorting new coins while BTC is below its 200-day average lost (92 trades, −51): in a falling market the new
+  coins have often already fallen, and they bounce. Every BTC-below-200d variant lost before 2024.
+- The BTC-30-day filter cut the drawdown (358 → 238) but also half the profit; it was not the in-sample pick.
+
+### 20. The new-listing short on Bybit — weaker, and more fragile than Binance alone showed (November 2026)
+
+`research/bybit_listing_study.py`: the exact rule (30 days after the first candle, hold 90, stop 40%, at most 10 open,
+fees, real funding) on Bybit's 803 listings since 2021, 294 of them delisted. Nothing tuned on Bybit.
+
+| | trades | PnL | max DD | Sharpe < 2024 | Sharpe 2024 → |
+|---|---|---|---|---|---|
+| Binance, every listing (the rule that runs) | 251 | +775 | 358 | 0.64 | 1.30 |
+| Bybit, every listing | 275 | +301 | 390 | −0.26 | 0.80 |
+| Bybit, coins also on Binance | 263 | −96 | 429 | −0.17 | −0.07 |
+| Bybit, coins never on Binance (≥ $1M a day) | 114 | +606 | 161 | 0.57 | 1.16 |
+
+- **The same coins, two exchanges:** the coins on both made +630 with Binance's listing dates and −96 with Bybit's.
+  Not a matter of who listed first (Bybit first or the same week: −12). With at most 10 open, which listings get a
+  slot decides much of the result — the edge is real on average but noisier than one exchange's history shows.
+- On Binance, its 39 listings that Bybit never had lost (−194); on Bybit, the coins Binance never had made +606
+  (mostly 2025–2026, 114 trades). Small samples, likely luck of the period.
+- **Not adopted:** no Bybit bot. For the listing short on Binance it means caution before real money — its
+  backtest result depends on which coins fill the 10 slots, so the paper and Demo sample matters more.
+
+### 21. The ratio trend: tested, netted per coin, and as live runs it (November 2026)
+
+`research/ratio_netting_study.py` (docs/ratio-trend-live-plan.md §1): the bot's rule (every pair among the weekly top
+7 by volume, ratio vs its 50-day mean) at the real account's $26 margin ×2 per unit, 2020-01 → 2026-10, fees and
+real funding, a daily model (each unit's notional reset daily).
+
+| | PnL | worst DD | Sharpe < 2024 | Sharpe 2024 → | margin used | 2022 | 2026 |
+|---|---|---|---|---|---|---|---|
+| PAIRS: the tested strategy, 21 pairs, no stop | +1,949 | 1,406 (54 units) | 0.70 | 0.19 | ~$588 | −439 | +29 |
+| NETTED: one position per coin (+6 … −6 units) | +2,011 | 1,400 | 0.71 | 0.20 | ~$588 | −429 | +37 |
+| NETTED + 40% stop per coin | **+2,455** | **1,273 (49 units)** | 0.59 | **0.64** | ~$582 | −387 | +772 |
+| LIVE NOW: coin-disjoint pairs only | +219 | 246 | 0.51 | 0.10 | ~$149 | −101 | +8 |
+
+- **Netting works:** the same PnL as the 21 pairs, with 20% less in fees.
+- **The stop matters:** in 2026 pump coins entered the top 7 (SIREN +269% in one day on 2026-04-04 while the
+  basket was short 6 units: −$839 that day without a stop). With the stop, 2026 is +772. Without the stop, 2026 is
+  flat, though one coin (LAB) alone made +856 in it: the year rests on a few coins either way.
+- **The drawdown is the problem:** about 49 units ($1,273 at $26), lasting from 2021-11 to 2023-08. That's roughly 3×
+  momentum's and trend_daily's, for a Sharpe after 2024 (0.64) below both.
+- **What runs live now** (coin-disjoint pairs) is a quarter of the size, and its edge after 2024 is near zero.
+- Weaker than docs/demo-baseline.md (PF 1.37, DD 39.7 margins), which used fixed quantities from entry and a
+  different start date. The ranking is the same.
+
+### 22. momentum_ls with the weekend off — not adopted (November 2026)
+
+`research/momentum_hold_days_study.py`: the live rule (Monday 00:00 UTC entry, top 50, 5 + 5, stop 40%), $26 ×2,
+2019 → 2026-10, fees and real funding. Only the exit day changes; the basket is flat until the next Monday.
+
+| hold | net | worst DD | PF (2024 →) | Sharpe < 2024 | Sharpe 2024 → |
+|---|---|---|---|---|---|
+| 7 days, Monday → Monday (runs) | **+$1,943** | $476 (18.3 margins) | 1.15 (1.20) | 0.60 | **1.15** |
+| 5 days, close end of Friday | +$1,809 | **$269** (10.3) | 1.16 (1.19) | **0.79** | 1.00 |
+| 4 days, close end of Thursday | +$1,496 | $359 (13.8) | 1.15 (1.20) | 0.64 | 1.01 |
+| 3 days, close end of Wednesday | +$1,238 | $291 (11.2) | 1.14 (1.19) | 0.56 | 0.96 |
+
+- A shorter week makes less (Thursday −23%) for the same profit factor. It cuts the drawdown, mostly 2022's.
+- Closing at the end of Friday has the best drawdown and the best Sharpe before 2024. After 2024, the period not used
+  to pick anything, the full week is best (1.15 against 1.00). The drawdown gain rests mostly on one bad year (2022),
+  so it isn't evidence enough to change a live rule during its first measured weeks.
+
+### 23. momentum_ls: every open day × every hold — Wednesday stands out, not adopted yet (November 2026)
+
+`research/momentum_day_grid_study.py`: the live rule on all 49 combinations (open Monday … Sunday, hold 1–7 days, flat
+until the next open), $26 ×2, fees and real funding. To keep a choice out of luck, a variant is picked on before 2024 only
+and judged on 2024 → 2026-10.
+
+| | net | worst DD | PF (2024 →) | Sharpe < 2024 | Sharpe 2024 → | 2022 | 2024 |
+|---|---|---|---|---|---|---|---|
+| Mon, 7 days (runs) | +$1,943 | $476 | 1.15 (1.20) | 0.60 | 1.15 | −259 | −37 |
+| **Wed, 3 days** (best before 2024) | +$1,932 | **$160** | 1.21 (1.23) | 1.12 | 1.10 | +195 | +237 |
+| Wed, 6 days | +$2,527 | $323 | 1.20 (1.27) | 0.83 | 1.34 | −91 | +485 |
+| Wed, 7 days | +$2,368 | $312 | 1.18 (1.24) | 0.73 | 1.22 | −97 | +359 |
+| Sun, 7 days (best after 2024) | +$2,933 | $442 | 1.22 (1.42) | 0.31 | 1.48 | −228 | +222 |
+
+- **Across all 49 the two periods agree only weakly** (rank correlation of Sharpe +0.22). Most of the differences
+  between days are timing luck, as §22 and docs/live-small-size-plan.md found for the full week.
+- **Wednesday is the exception:** every Wednesday hold is good in both periods (Sharpe 0.73–1.12 before 2024,
+  0.95–1.34 after). Wednesday-3 makes the same as the live rule with a third of its drawdown, and it was positive in
+  every year 2020–2026 (2022 +195, 2024 +237, where Monday lost). Thursday is the weakest in both.
+- **Sunday** is the best after 2024 and among the worst before: chosen on its recent numbers it would be hindsight.
+- Every variant takes about 70% of its profit from its 10 best weeks.
+- **Not adopted now:** the live rule stays Monday through its first real rebalances (one change at a time, and a
+  change needs a code change and a restart). Worth revisiting after them: Wednesday-6 or Wednesday-3.
+
+### 24. The ratio trend: which coins? No fair rule is good in both periods (November 2026)
+
+`research/ratio_universe_study.py` (owner, 2026-11-07: "must the pairs be among high-volume coins?"): the bot's rule,
+netted per coin with a 40% stop, $26 ×2 per unit, 2020-01 → 2026-10, fees and real funding. Every universe is
+re-picked weekly by a rule known at the time; only "5 majors" is hindsight.
+
+| universe | PnL | worst DD | PnL/DD | Sharpe < 2024 | Sharpe 2024 → | 2022 | 2026 |
+|---|---|---|---|---|---|---|---|
+| 5 majors (hindsight) | +1,428 | 236 | 6.05 | **1.13** | 0.65 | +135 | −108 |
+| 30-day volume, top 7 (runs now) | **+2,455** | 1,273 | 1.93 | 0.59 | 0.64 | −387 | +772 |
+| 90-day volume, top 5 | +568 | 327 | 1.73 | 0.64 | −0.12 | +195 | −178 |
+| persistent top 7 (in the top 10 in 8 of the last 12 weeks) | +1,708 | **588** | **2.91** | 0.14 | **1.27** | −62 | +834 |
+| 180-day volume, top 7 | +903 | 798 | 1.13 | 0.14 | 0.63 | −118 | −47 |
+| 365 days of history, top 7 | +1,061 | 885 | 1.20 | 0.40 | 0.20 | −94 | −301 |
+
+(13 universes in the script's output; each top 5 version makes less than its top 7.)
+
+- **Volume matters, but no volume rule rescues the strategy.** Picked before 2024, the best fair rules are the one
+  that runs now (0.59) and 90-day top 5 (0.64); after 2024 the second loses.
+- **Persistent top 7** halves the drawdown (588 vs 1,273) for 70% of the PnL and has the best Sharpe after 2024. But
+  its Sharpe before 2024 is 0.14: choosing it would be choosing on the period kept for checking. Worth a forward
+  test, not real money.
+- Even the hindsight majors are weak after 2024 (0.65, 2026 −108): the edge itself has faded, not only the coin pick.
+- 13 universes were tried, so the best number in each column is partly luck.
+- **Decision:** the ratio trend stays off real money. If tested further, persistent top 7 on Demo.
+
+### 25. The ratio trend without BTC and ETH: better, and it fits a small account, but the drawdown stays (November 2026)
+
+`research/ratio_universe_study.py --no-btc` (owner, 2026-11-07: "can the ratio trend run on a small account?").
+Binance's smallest futures order (checked 2026-11-07): BTC $50, ETH $20, 653 other USDT perpetuals $5. With BTC in,
+a unit can't go below $25 margin at ×2 (why the Demo bot runs $26). Without BTC and ETH, the next coins in line by
+volume come in. Same strategy and costs as §24, $26 ×2 per unit.
+
+| universe | PnL | worst DD | Sharpe < 2024 | Sharpe 2024 → | 2022 | 2026 | max units | DD units |
+|---|---|---|---|---|---|---|---|---|
+| 30-day volume, top 5 | +296 | 829 | 0.15 | 0.13 | −407 | +176 | 12 | 32 |
+| … no BTC/ETH | +1,493 | 690 | **0.59** | 0.59 | −226 | +455 | 12 | 27 |
+| 30-day volume, top 7 (runs now) | +2,455 | 1,273 | 0.59 | 0.64 | −387 | +772 | 24 | 49 |
+| … no BTC/ETH | **+3,324** | 1,301 | **0.62** | **0.86** | −216 | +1,172 | 24 | 50 |
+| persistent top 7 | +1,708 | 588 | 0.14 | 1.27 | −62 | +834 | 24 | 23 |
+| … no BTC/ETH | +2,718 | 1,089 | 0.24 | 1.74 | −578 | +1,446 | 24 | 42 |
+
+- **Taking BTC and ETH out helps in every version.** "30-day top 7, no BTC/ETH" has the best Sharpe before 2024 of
+  any fair universe (0.62), and it holds after (0.86). Picked by the rule of §24 (judge before 2024), it would be
+  chosen. But 17 universes have now been tried on the same data.
+- **It fits a small account.** Capital ≈ (max units + drawdown units) × unit margin. At $4 a unit ($8 notional, above
+  the $5 minimum): (24 + 50) × $4 ≈ **$300**. The PnL scales with the unit: about +$510 over 6.8 years at $4.
+- **The drawdown is the catch.** 50 units is about two thirds of that capital (momentum's worst is 18 margins),
+  lasting from 2021-11 to 2023-08. One coin can carry up to 6 of the 24 units.
+- Not every $5 coin can take an $8 order: a coarse quantity step on a high-priced coin raises its real minimum. A
+  live version must check each coin's step size before it trades.
+- **Decision:** still not real money. The fair candidate worth a forward test is "30-day top 7, no BTC/ETH" on
+  Demo at $4 a unit.
+
+### 26. 5–15 minute strategies — none survives costs, not adopted (November 2026)
+
+`research/m5_data.py` (5-minute candles since 2021 for the 102 coins ever in the top 10 by 30-day volume, delisted
+included, from Binance's monthly files; kept on the server in `/opt/raqm-data/research/m5`, 1.3 GB, rerun adds only
+new months) and `research/intraday_study.py`. Each day the previous day's top 10; $100 notional a trade; taker 0.05%
++ 0.02% slippage a side, maker 0.02% (limit fills only when the next bar trades through the price). 24 variants fixed
+before any result:
+
+| family | variants | best gross edge / trade | variants positive after 2024 | in-sample pick, Sharpe after 2024 |
+|---|---|---|---|---|
+| A. 15m Bollinger reversal, limit in (short-term reversal) | 12 | +5.4 bps | 0 / 12 | |
+| B. 15m channel breakout, trailing ATR stop (intraday momentum) | 8 | −4.4 bps | 0 / 8 | |
+| C. 5m shock reversal after a 4–6σ move, limit in | 4 | +11.4 bps | 1 / 4 | **0.02** (+$8 on 4,100 trades) |
+
+- **The edge before costs is a few basis points.** Almost every variant's gross edge is below the cheapest possible
+  round trip (maker both sides, 4 bps); a realistic one (maker in, taker out) costs 9 bps, taker both sides 14.
+- Breakouts lose even before costs (whipsaws on 15m); reversals make 1–5 bps gross, and the costs turn it into a loss.
+- The one survivor (C, 6σ, out after 15 minutes) earned 2.4 bps net in all, Sharpe 0.42 before 2024 and 0.02 after,
+  and its limit fills are optimistic (a shock fills the queue first). It is noise, not an edge.
+- With §16–18 (hourly), the answer is the same at every short timeframe we tried: the edge lives on daily and
+  weekly holds (momentum, trend), where a move is much bigger than the fees.
+
+### 27. Hourly strategies that hold hours to days — none holds out-of-sample, not adopted (November 2026)
+
+`research/hourly_trend_study.py`, on hourly candles made from §26's 5m store (cached in
+`/opt/raqm-data/research/h1`). The previous day's top 10; taker 0.05% + 0.02% slippage a side **and each coin's real
+funding for the time held**; an account of at most 5 positions, each 40% of equity as notional, compounding. 20
+variants fixed before any result:
+
+| family | variants | win % | profit factor | gross / funding / net bps a trade | positive after 2024 |
+|---|---|---|---|---|---|
+| P. trend pullback (daily trend + hourly RSI dip, out at RSI 50 / 4 ATR stop / T hours) | 8 | 53–60 | 0.87–0.95 | +1 to −20 / 3–5 / −11 to −30 | 0 / 8 |
+| Q. 72h / 168h channel breakout, trailing ATR | 8 | 37–40 | 0.91–1.03 | −5 to +42 / 2–15 / −22 to +13 | 2 / 8 |
+| R. volatility squeeze breakout, trailing ATR | 4 | 38–39 | 0.98–1.09 | +10 to +29 / 1–5 / −6 to +11 | 0 / 4 |
+
+- **In-sample pick** (R, 3 ATR trail, with the trend: Sharpe 0.85 before 2024) → **Sharpe −0.34, −46% after 2024.**
+- The two variants positive after 2024 (Q 168h, 8 ATR) were negative before it: Sharpe −0.13 / −0.08.
+- **A high win rate isn't profit.** The pullbacks win 53–60% of trades, but the average loss (−4.6 to −5.5%) is
+  bigger than the average win (+3.1 to +3.7%), so every variant loses.
+- The long breakouts do have a gross edge (+24 to +42 bps), but it is the daily trend seen hour by hour: holds of
+  5–6 days, where funding (up to 15 bps) and fees take most of it. The daily trend bot already trades that move.
+- Capital is not the obstacle: at $200 a position is $80 (over the $5 minimum); at $10,000 it is $4,000, a median
+  0.01% of the signal hour's volume. The problem is the edge, not the account size.
+
+### 28. Raising the win rate of the daily trend, momentum_ls and RSI-2 — one candidate, nothing adopted (November 2026)
+
+`research/core_improve_study.py`: ideas not tried before, fixed before any result, each against the rule the bot runs
+today (same simulators as `baseline_stats.py`: $20 x2, fees, real funding, the 40% guard). Pick = best Sharpe
+before 2024.
+
+| bot | variants | today: win % after 2024 / Sharpe after | in-sample pick | pick: win % / Sharpe after | beat today after 2024 |
+|---|---|---|---|---|---|
+| daily trend | 12 | 33.8 / **1.32** | BTC above its 200-day average | 35.0 / 1.08 (max DD 317 → 137) | 0 / 11 |
+| momentum_ls | 8 | 49.6 / **1.22** | 2w / volatility, no shorts in a bull market | 42.6 / −0.04 | 0 / 7 |
+| RSI-2 | 16 | 65.1 / 1.26 | BTC above its 200-day average | **67.8 / 1.24** (max DD 48 → 28) | 3 / 15 |
+
+- **Daily trend:** a 30% trailing stop does raise the win rate (up to 39% after 2024) but cuts the big trends it
+  lives on: PnL after 2024 670 → 410–458. 3 of 3 (instead of 2 of 3) and a BTC filter halve the drawdown and also
+  the profit. Nothing beats today's rule on Sharpe. It stays.
+- **momentum_ls:** today's 2-week ranking is the best of four in both periods; dropping the shorts in a bull market
+  (Daniel & Moskowitz's crash guard) was good before 2024 and failed after (Sharpe 0.47 to −0.04). It stays.
+- **RSI-2 with BTC above its 200-day average — the one candidate:** win rate 66.1 → **70.4%** (67.8% after 2024),
+  max drawdown 48 → **28** margins, PF 1.69 → 1.99, Sharpe after 2024 1.24 vs 1.26 — the same edge with fewer bad
+  trades, but 27% fewer trades (PnL 216 → 163). Top 20 with the same filter looked best after 2024 (Sharpe 1.50,
+  PnL 557) but was worse before it (0.70 vs 0.82): not the pick, hindsight.
+- A raised RSI-2 threshold (10) adds trades that lose the edge (PF ~1.1) in every combination.
+- **Decision:** no change while the Demo measurement runs against `docs/demo-baseline.md`; the RSI-2 BTC filter is
+  the candidate to try after it. (Owner, 2026-11-07: it runs on paper as `raqm-rsi2-btc` and is offered for real
+  money next to momentum.)
+
+### 29. Open interest and positioning — one family holds in both periods, a paper candidate (November 2026)
+
+`research/oi_data.py` (Binance's daily metrics files: open interest, top traders' and all accounts' long/short
+ratios, taker buy/sell ratio — every coin ever in the top 20 by volume since 2021, 215, delisted included; kept on
+the server in `/opt/raqm-data/research/oi`) and `research/oi_study.py`. From 2021-12 (most coins' files start
+there): before 2024 is two years. Each day the previous day's top 20 (every one has data: no hindsight); weekly
+baskets of 3 long + 3 short held 7 days or event trades, $20 x2, fees, real funding, the 40% guard. 14 variants fixed
+before any result.
+
+| family | Sharpe < 2024 / 2024 → (L = 3 days; 7 days) | PnL 2024 → | note |
+|---|---|---|---|
+| X1 open-interest growth (Hong & Yogo 2012) | −0.50 / −0.42; −0.41 / 0.13 | −162; +51 | |
+| X2 OI up while price down (crowded side) | −0.74 / −1.13; −0.47 / −0.17 | −371; −65 | |
+| **X3 against retail: long the lowest all-accounts long/short ratio, short the highest** | **0.27 / 0.98; 0.37 / 0.59** | **+472; +286** | both lookbacks, both periods |
+| X4 top traders' position ratio rising | 0.64 / −0.01; −0.52 / −0.47 | −4; −170 | the in-sample pick |
+| X5 taker buy/sell flow | −0.55 / 0.34; −0.66 / 0.19 | +119; +65 | |
+| F liquidation flush (OI −10/20% and price −5% in a day, long 3/7 days) | −0.30 to −1.18 / 0.71 to 0.90 | +93 to +310 | lost before 2024 |
+| (ref) momentum 2w on the same top 20, 3+3 | 0.06 / 0.79 | +373 | |
+
+- **The rule's pick failed:** top traders' rising positions (Sharpe 0.64 before 2024) → −0.01 after.
+- **The one family that held — after the fact, not by the pick rule:** fading the crowd's long/short ratio
+  (Baker & Wurgler-style sentiment as a contrarian signal). Both lookbacks were positive in both periods; L3: 1,518
+  trades, PF 1.17 (1.24 after 2024), max DD 108, win 49.7%.
+- **It is independent of momentum_ls:** correlation −0.02. Together (momentum_ls + X3 L3) the Sharpe after 2024 goes
+  1.22 → **1.54** with about the same drawdown (245 vs 240 margins); L7: 1.36.
+- **Caveats:** before 2024 is only 2022–2023 and its Sharpe is weak (0.27); it was found by looking at the results
+  (14 variants); the liquidation flush made money only after 2024.
+- **Decision:** not for real money. X3 L3 is the candidate for a paper bot next to momentum, to see whether it holds
+  live.
+- **Measured live (2026-11-08):** `research/paper_baseline.py` writes both paper candidates' backtest (RSI-2 + BTC
+  filter, X3 L3) to `lib/paper-baseline.json` in the Demo baseline's units, and the Sunday report
+  (`scripts/demo_weekly.py`) puts each paper bot next to it with `demo_measure`'s rules: samples 15 and 36 trades.
+
+### 33. Look-ahead check — no simulator reads the future (November 2026)
+`research/lookahead_check.py` (owner, 2026-11-09; the idea of freqtrade's lookahead-analysis, written from scratch).
+- **How:** every coin's history is cut at a date T as a live bot sees it at T's open: T's bar has only its open, then
+  15 flat, empty bars. Each simulator runs again. Every entry up to and including T must come out the same: same coin,
+  side, time and price.
+- **Stop orders from the open** (vol_breakout: open + k × yesterday's range) keep T's high and low, so the order can
+  fill. Only T's close and volume are hidden.
+- **Proven on planted leaks** (backend/tests/test_lookahead_check.py): it catches reading tomorrow's close, reading the
+  entry bar's own close, and choosing coins by their whole-history return. It passes the honest versions.
+- **Result:** 8 cut dates, 2021-03 to 2025-07, on the 7 live strategies and the paper ones (rsi2_btc here, retail_fade
+  on the server with the open-interest files). **0 missing, 0 extra, 0 repriced** in every one. That's 2,720
+  momentum_ls entries and 1,098 retail_fade entries by the last cut.
+- **First run:** 14 vol_breakout entries on the cut day were "missing". These were its stop orders filling on T's
+  high, which a live stop order does too. They're handled as above; a test pins both cases.
+- **Limits:**
+  - It checks entries only. Exits of trades open at T are cut short by design.
+  - A leak through T's high or low in an intraday-fill strategy isn't seen.
+  - Survivorship in the coin list itself (the data has delisted coins since 2019) is a separate question.
+- **Run it after any simulator change:** `python research/lookahead_check.py`. It exits 1 on a finding.
 
 ## The site now shows only the four paper bots
 

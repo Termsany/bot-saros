@@ -12,7 +12,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "backend"))
 
 import bot as botmod
-from app import auth, keys_vault
+from app import auth, user_keys_vault
 from app.main import app
 from app.db import ProtectiveOrder, Trade, Base
 
@@ -84,7 +84,7 @@ class ChartIdorTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.patches = [
             mock.patch.object(auth, "_verify_token", fake_verify),
-            mock.patch.object(keys_vault, "VAULT_PATH", Path(self.tmp.name) / "vault.json"),
+            mock.patch.object(user_keys_vault, "VAULT_PATH", Path(self.tmp.name) / "user_vault.json"),
             mock.patch.dict(os.environ, {"ADMIN_EMAILS": ADMIN["email"], "ALLOW_LIVE_TRADING": "", "VAULT_MASTER_KEY": __import__("cryptography.fernet", fromlist=["Fernet"]).Fernet.generate_key().decode()}),
         ]
         for p in self.patches: p.start()

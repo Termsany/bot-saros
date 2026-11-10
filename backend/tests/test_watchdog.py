@@ -1,5 +1,6 @@
 """Problem alerts (scripts/watchdog.py, owner 2026-10-30): one message when a problem starts, one when it clears."""
 import json, sys, tempfile, unittest
+from unittest import mock
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent.parent
@@ -26,6 +27,32 @@ class WatchdogTests(unittest.TestCase):
 
     def seen(self):
         return wd.problems(NOW, unit=lambda env, s: self.units.get((env, s), (False, False)), ipc=self.ipc, ledgers=self.ledgers)
+
+    def test_a_failing_users_provisioner_is_alerted(self):
+        # 2026-11-09/10: it failed every minute for 15 hours (readiness bound to another commit) and nobody was told
+        kw = dict(unit=lambda env, s: self.units.get((env, s), (False, False)), ipc=self.ipc, ledgers=self.ledgers)
+        out = wd.problems(NOW, failed=lambda name: name == "raqm-users-provision.service", **kw)
+        self.assertIn("provision", out)
+        self.assertIn("journalctl -u raqm-users-provision", out["provision"][0])
+        self.assertGreater(out["provision"][1], 1)          # not one blip: a few checks in a row
+        self.assertNotIn("provision", wd.problems(NOW, failed=lambda name: False, **kw))
+
+    def test_a_position_the_bot_didnt_open_on_real_money_is_alerted_at_once_with_what_to_do(self):
+        # owner, 2026-11-07: a manual EVAA trade on the real account stopped every entry for hours before the alert
+        rm.save_risk_state(self.ledgers["live"] / "risk_state.json", rm._default_state())
+        self.units[("live", "momentum_ls")] = (True, True)
+        self.status("momentum_ls", env="live", entry_block="صفقات على المنصة البوت مفتحهاش: EVAA/USDT")
+        out = self.seen()
+        self.assertIn("foreign:live:momentum_ls", out); self.assertNotIn("block:live:momentum_ls", out)
+        text, need = out["foreign:live:momentum_ls"]
+        self.assertEqual(need, 1)                                                   # the first check, not the second
+        self.assertIn("EVAA/USDT", text); self.assertIn("مش هيفتح الجديدة", text); self.assertIn("امسح أي أمر مفتوح", text)
+        _, msgs = wd.step({}, out)
+        self.assertTrue(any("EVAA/USDT" in m for m in msgs))                        # sent on this very run
+        self.status("momentum_ls", env="demo", entry_block="صفقات على المنصة البوت مفتحهاش: X/USDT")
+        self.units[("live", "momentum_ls")] = (False, False); self.units[("demo", "momentum_ls")] = (True, True)
+        out = self.seen()
+        self.assertNotIn("foreign:demo:momentum_ls", out); self.assertEqual(out["block:demo:momentum_ls"][1], 2)   # Demo: as before
 
     def test_healthy_bots_send_nothing(self):
         self.assertEqual(self.seen(), {})
@@ -70,6 +97,41 @@ class WatchdogTests(unittest.TestCase):
             wd.problems = orig
         self.assertEqual(set(seen), {"watchdog"}); self.assertIn("systemctl missing", seen["watchdog"][0])
 
+    # development-plan 2.4: the server itself
+    def server(self, **kw):
+        GB, MB = 1024 ** 3, 1024 ** 2
+        args = dict(disk=lambda: (35 * GB, 99 * GB), mem=lambda: (3900 * MB, 7900 * MB), ntp=lambda: True,
+                    offset=lambda: 40.0, cert=lambda host, now: 80.0, domains=("a.example", "b.example"), vault=lambda: "ok")
+        args.update(kw); return wd.server_problems(NOW, **args)
+
+    def test_a_healthy_server_sends_nothing(self):
+        self.assertEqual(self.server(), {})
+
+    def test_each_server_problem_is_found(self):
+        GB, MB = 1024 ** 3, 1024 ** 2
+        def cert(host, now):
+            if host == "b.example": raise ConnectionRefusedError()
+            return 9.0
+        seen = self.server(disk=lambda: (4 * GB, 99 * GB), mem=lambda: (500 * MB, 7900 * MB), ntp=lambda: False,
+                           offset=lambda: -2500.0, cert=cert, vault=lambda: "unreadable")
+        self.assertEqual(set(seen), {"server:disk", "server:mem", "server:ntp", "server:clock", "cert:a.example", "site:b.example",
+                                     "server:vault"})
+        self.assertEqual(seen["cert:a.example"][1], 1)                       # renewal failing: at once
+        self.assertEqual(seen["site:b.example"][1], 3)                       # a site down: after 15 minutes
+
+    def test_a_server_check_that_cannot_run_is_skipped_not_alerted(self):
+        boom = lambda *a: (_ for _ in ()).throw(OSError("no tool"))
+        self.assertEqual(self.server(disk=boom, mem=boom, ntp=boom, offset=lambda: None, vault=lambda: None), {})
+        self.assertEqual(self.server(vault=lambda: "empty"), {})              # no user has saved a key yet
+
+    def test_checks_adds_the_server_and_the_paper_bots_to_the_bots(self):
+        with mock.patch.object(wd, "problems", lambda now: {"down:demo:x": ("t", 2)}), \
+             mock.patch.object(wd, "server_problems", lambda now: {"server:disk": ("d", 2)}), \
+             mock.patch.object(wd, "paper_problems", lambda now: {"paper:momentum": ("p", 2)}):
+            self.assertEqual(set(wd.checks(NOW)), {"down:demo:x", "server:disk", "paper:momentum"})
+        with mock.patch.object(wd, "user_problems", lambda now: {}), mock.patch.object(wd, "server_problems", lambda now: 1 / 0):
+            self.assertEqual(wd.checks(NOW, users=True), {})                 # the users' watchdog: their bots only
+
     def test_long_alerts_go_in_parts_telegram_accepts(self):
         lines = ["🐶 مراقب رقم"] + [f"🚨 COIN{i}/USDT في trend_breakout (Demo) مش متأكدين إن وقف الخسارة على Binance" for i in range(66)]
         parts = wd.chunks(lines)
@@ -80,8 +142,45 @@ class WatchdogTests(unittest.TestCase):
         self.assertEqual(wd.chunks([]), [])
 
 
-if __name__ == "__main__":
-    unittest.main()
+class PaperWatchTests(unittest.TestCase):
+    """The paper bots (owner, 2026-11-09): a page file that stopped moving is a stopped bot."""
+    def setUp(self):
+        self.td = tempfile.TemporaryDirectory(); self.pub = Path(self.td.name)
+        self.bots = {"momentum": "مومنتم", "retail_fade": "عكس الأغلبية", "rsi2_btc": "RSI-2 + فلتر BTC"}
+        for n in self.bots: self.write(n, NOW - timedelta(minutes=1))
+
+    def tearDown(self):
+        self.td.cleanup()
+
+    def write(self, name, updated):
+        (self.pub / f"{name}.json").write_text(json.dumps({"updated": updated.isoformat(), "history": []}), encoding="utf-8")
+
+    def seen(self):
+        return wd.paper_problems(NOW, public=self.pub, bots=self.bots)
+
+    def test_fresh_paper_bots_send_nothing(self):
+        self.assertEqual(self.seen(), {})
+
+    def test_a_paper_bot_that_stopped_writing_is_named_after_two_checks(self):
+        self.write("retail_fade", NOW - timedelta(minutes=40))
+        seen = self.seen()
+        self.assertEqual(set(seen), {"paper:retail_fade"})
+        self.assertIn("عكس الأغلبية ما حدّثش من 40 دقيقة", seen["paper:retail_fade"][0])
+        self.assertEqual(seen["paper:retail_fade"][1], 2)
+        state, msgs = wd.step({}, seen); self.assertEqual(msgs, [])                       # one check: not yet
+        state, msgs = wd.step(state, seen); self.assertEqual(len(msgs), 1)                # the second: alerted
+        state, msgs = wd.step(state, {}); self.assertTrue(msgs[0].startswith("✅"))       # and when it writes again
+
+    def test_a_missing_or_broken_file_is_a_problem(self):
+        (self.pub / "rsi2_btc.json").unlink(); (self.pub / "momentum.json").write_text("{", encoding="utf-8")
+        seen = self.seen()
+        self.assertIn("مش موجود", seen["paper:rsi2_btc"][0]); self.assertIn("مش بيتقري", seen["paper:momentum"][0])
+
+    def test_every_paper_bot_of_the_page_is_watched(self):
+        page = (ROOT / "deploy" / "vps" / "page" / "index.html").read_text(encoding="utf-8")
+        for name in ("status", "listing", "momentum", "retail_fade", "rsi2_btc", "rsi2", "breakout", "tbreak", "ratio", "ratio_nobtc"):
+            self.assertIn(name, wd.PAPER_BOTS)
+            self.assertTrue(f"{name}.json" in page or f'["{name}"' in page, name)
 
 
 class WatchdogUnitTests(unittest.TestCase):
@@ -90,3 +189,54 @@ class WatchdogUnitTests(unittest.TestCase):
         unit = (ROOT / "deploy" / "vps" / "raqm-watchdog.service").read_text(encoding="utf-8")
         paths = " ".join(l.split("=", 1)[1] for l in unit.splitlines() if l.startswith("ReadWritePaths="))
         for d in wd.LEDGERS.values(): self.assertIn(f"-{d.as_posix()}", paths.split())
+
+
+class HeartbeatTests(unittest.TestCase):
+    """An uptime check outside the server (owner, 2026-11-01): the watchdog can't report the VPS or itself being down."""
+    def setUp(self):
+        self.td = tempfile.TemporaryDirectory(ignore_cleanup_errors=True); self.d = Path(self.td.name)
+    def tearDown(self): self.td.cleanup()
+
+    def test_the_heartbeat_has_the_time_and_only_a_count(self):
+        wd.heartbeat(NOW, {"down:demo:x": {"count": 2, "text": "t", "sent": True}, "stale:demo:y": {"count": 1, "text": "t"}},
+                     path=self.d / "hb.json")
+        self.assertEqual(json.loads((self.d / "hb.json").read_text(encoding="utf-8")), {"at": NOW.isoformat(), "problems": 1})
+
+    def test_a_heartbeat_failure_does_not_stop_the_watchdog(self):
+        wd.heartbeat(NOW, {}, path=self.d / "missing" / "hb.json")   # folder absent: prints, no exception
+
+    def api(self, hb=None):
+        sys.path.insert(0, str(ROOT / "backend"))
+        import app.main as m
+        from fastapi.testclient import TestClient
+        if hb is not None:
+            (self.d / "watchdog_heartbeat.json").write_text(json.dumps(hb), encoding="utf-8")
+        with mock.patch.object(m, "IPC_DIR", self.d):
+            return TestClient(m.app).get("/api/health/bots")
+
+    def test_the_api_says_ok_while_the_heartbeat_is_fresh(self):
+        r = self.api({"at": datetime.now(timezone.utc).isoformat(), "problems": 2})
+        self.assertEqual(r.status_code, 200); self.assertEqual((r.json()["ok"], r.json()["problems"]), (True, 2))
+
+    def test_an_uptime_monitor_checking_with_head_gets_the_same_status(self):
+        sys.path.insert(0, str(ROOT / "backend"))
+        import app.main as m
+        from fastapi.testclient import TestClient
+        (self.d / "watchdog_heartbeat.json").write_text(json.dumps({"at": datetime.now(timezone.utc).isoformat()}), encoding="utf-8")
+        with mock.patch.object(m, "IPC_DIR", self.d):
+            self.assertEqual(TestClient(m.app).head("/api/health/bots").status_code, 200)
+            (self.d / "watchdog_heartbeat.json").unlink()
+            self.assertEqual(TestClient(m.app).head("/api/health/bots").status_code, 503)
+
+    def test_a_stale_or_missing_heartbeat_is_503(self):
+        self.assertEqual(self.api().status_code, 503)
+        self.assertEqual(self.api({"at": (datetime.now(timezone.utc) - timedelta(minutes=16)).isoformat()}).status_code, 503)
+        self.assertEqual(self.api({"at": "garbage"}).status_code, 503)
+
+    def test_the_unit_lets_it_write_the_heartbeat(self):
+        unit = (ROOT / "deploy" / "vps" / "raqm-watchdog.service").read_text(encoding="utf-8")
+        self.assertIn(f"-{wd.IPC.as_posix()}", " ".join(l.split("=", 1)[1] for l in unit.splitlines() if l.startswith("ReadWritePaths=")).split())
+
+
+if __name__ == "__main__":
+    unittest.main()

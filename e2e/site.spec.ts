@@ -1,0 +1,204 @@
+import { test, expect, expectNoSideScroll } from "./fixtures"
+
+// What the owner found by hand in 2026-11-03/04 — the plans' promises, the terms, the real-money card, the realbot
+// page on a phone — checked on every PR, on a desktop and a phone screen.
+
+test("the plans say what they unlock, and link the terms — English on /", async ({ page }) => {
+  await page.goto("/")
+  await expect(page.locator("html")).toHaveAttribute("lang", "en")
+  await expect(page.locator("html")).toHaveAttribute("dir", "ltr")
+  const plans = page.locator("#pricing")
+  await expect(plans.getByText("They don't run bots on your Binance account yet")).toBeVisible()
+  for (const name of ["Free", "Starter", "Pro", "Elite"]) await expect(plans.getByText(name, { exact: true }).first()).toBeVisible()
+  await expectNoSideScroll(page)
+  await plans.getByRole("link", { name: "Terms & risks (Arabic)" }).click()
+  await expect(page).toHaveURL(/\/terms$/)
+  await expect(page.getByRole("heading", { name: "الشروط والمخاطر" })).toBeVisible()
+})
+
+test("the Arabic landing is right to left and says the same", async ({ page }) => {
+  await page.goto("/ar")
+  await expect(page.locator("html")).toHaveAttribute("lang", "ar")
+  await expect(page.locator("html")).toHaveAttribute("dir", "rtl")
+  const plans = page.locator("#pricing")
+  await expect(plans.getByText("لسه مابتشغّلش بوتات على حسابك في Binance")).toBeVisible()
+  await expect(plans.getByText("بوتين")).toHaveCount(0)                       // the old wording promised bots on the account
+  await expectNoSideScroll(page)
+  await page.getByTestId("lang-switch").click()                              // EN
+  await expect(page).toHaveURL(/\/$/)
+  await expect(page.locator("html")).toHaveAttribute("lang", "en")
+})
+
+test("the hero's live card shows the real basket, and the theme switch flips light and dark", async ({ page }) => {
+  await page.goto("/")
+  const card = page.getByTestId("live-card")
+  await expect(card.getByText("AGT/USDT", { exact: true })).toBeVisible()     // from /api/realbot (e2e/fixtures.ts REAL)
+  await expect(card.getByText("Next rebalance", { exact: false })).toBeVisible()
+  await expect(page.getByTestId("real-vs-backtest").getByText("after 30 trades (1/30)").first()).toBeVisible()
+  const html = page.locator("html")
+  const before = await html.getAttribute("data-theme")
+  await page.getByRole("button", { name: /Switch to (light|dark)/ }).click()
+  await expect(html).toHaveAttribute("data-theme", before === "light" ? "dark" : "light")
+  await page.reload()                                                         // remembered
+  await expect(html).toHaveAttribute("data-theme", before === "light" ? "dark" : "light")
+})
+
+test("the terms state the cancellation and refund policy", async ({ page }) => {
+  await page.goto("/terms")
+  await expect(page.getByRole("heading", { level: 2 })).toHaveCount(8)
+  await expect(page.getByText("مفيش استرجاع فلوس", { exact: false }).first()).toBeVisible()
+  await expect(page.getByText("إدارة الاشتراك / الإلغاء", { exact: false })).toBeVisible()
+  await expectNoSideScroll(page)
+})
+
+test("the dashboard shows the real-money bot first, the paper bots apart", async ({ page }) => {
+  await page.goto("/dashboard")
+  await expect(page.getByText("LIVE · فلوس حقيقية")).toBeVisible()
+  await expect(page.getByText("AGT/USDT", { exact: true }).first()).toBeVisible()
+  await expect(page.getByText("التبديل الجاي (البوت الحقيقي)")).toBeVisible()
+  await expect(page.getByText("+9.96").first()).toBeVisible()                  // realized, from the closed trade
+  await expect(page.getByRole("heading", { name: "بوتات التجربة" })).toBeVisible()
+  // the real card comes before the paper section
+  const realY = (await page.getByText("LIVE · فلوس حقيقية").boundingBox())!.y
+  const paperY = (await page.getByRole("heading", { name: "بوتات التجربة" }).boundingBox())!.y
+  expect(realY).toBeLessThan(paperY)
+  await expectNoSideScroll(page)
+})
+
+test("the dashboard in English after the English landing, with the light theme", async ({ page }) => {
+  await page.goto("/")                                                        // the English landing remembers the language
+  expect((await page.context().cookies()).find(c => c.name === "raqm-lang")?.value).toBe("en")
+  const direct = await page.request.get("/dashboard", { headers: { cookie: "raqm-lang=en" } })
+  expect((await direct.text()).match(/<html[^>]*>/)?.[0]).toContain('lang="en"')        // the server, without the browser
+  await page.goto("/dashboard")
+  await expect(page.locator("html")).toHaveAttribute("lang", "en")
+  await expect(page.locator("html")).toHaveAttribute("dir", "ltr")
+  await expect(page).toHaveTitle("Dashboard — RAQM")                          // the browser tab, in English too
+  await expect(page.getByText("LIVE · real money").first()).toBeVisible()
+  await expect(page.getByText("Next rebalance (real bot)")).toBeVisible()
+  await expect(page.getByRole("heading", { name: "Paper bots" })).toBeVisible()
+  await expect(page.locator('a[href="/settings/live"]').first()).toContainText("My Binance Demo bots")
+  await expectNoSideScroll(page)
+  const html = page.locator("html")
+  const before = await html.getAttribute("data-theme")
+  await page.getByRole("button", { name: /Switch to (light|dark)/ }).filter({ visible: true }).first().click()   // the phone header or the desktop bar
+  await expect(html).toHaveAttribute("data-theme", before === "light" ? "dark" : "light")
+  await page.getByTestId("app-lang-switch").filter({ visible: true }).first().click()   // back to Arabic, remembered
+  await expect(html).toHaveAttribute("lang", "ar")
+  await expect(page.getByRole("heading", { name: "بوتات التجربة" })).toBeVisible()
+})
+
+test("the Backtest page in English after the English landing, Arabic after the switch", async ({ page }) => {
+  await page.goto("/")
+  await page.evaluate(() => localStorage.setItem("raqm-theme", "light"))
+  await page.goto("/backtest")
+  const html = page.locator("html")
+  await expect(html).toHaveAttribute("lang", "en")
+  await expect(html).toHaveAttribute("dir", "ltr")
+  await expect(html).toHaveAttribute("data-theme", "light")                       // a themed page now
+  await expect(page).toHaveTitle("Backtest — RAQM")
+  await expect(page.getByRole("heading", { name: "Run settings" })).toBeVisible()
+  await expect(page.getByRole("button", { name: "Run the backtest" })).toBeVisible()
+  await expect(page.getByText("Market and range")).toBeVisible()
+  await expectNoSideScroll(page)
+  await page.getByTestId("app-lang-switch").filter({ visible: true }).first().click()
+  await expect(html).toHaveAttribute("lang", "ar")
+  await expect(page.getByRole("heading", { name: "إعدادات التشغيل" })).toBeVisible()
+  await expect(page.getByRole("button", { name: "شغّل الـ Backtest" })).toBeVisible()
+  await expect(page).toHaveTitle("Backtest — رقم RAQM")
+})
+
+test("a page not built for the light theme stays dark", async ({ page }) => {
+  await page.goto("/")
+  await page.evaluate(() => localStorage.setItem("raqm-theme", "light"))
+  await page.goto("/terms")
+  await expect(page.locator("html")).not.toHaveAttribute("data-theme", "light")
+  await expect(page.locator("html")).toHaveAttribute("lang", "ar")
+})
+
+test("one place for keys: the old keys page is out of the menus", async ({ page }) => {
+  await page.goto("/dashboard")
+  await expect(page.locator('a[href="/settings/live"]').first()).toBeAttached()
+  await expect(page.locator('a[href="/settings/live"]').first()).toContainText("بوتاتي على Binance (Demo)")
+  await expect(page.locator('a[href="/settings/keys"]')).toHaveCount(0)        // 2026-11-04: it fed nothing
+  await expect(page.getByText("مفاتيح المنصات")).toHaveCount(0)
+  await page.goto("/settings/keys")                                            // an old link explains where keys are
+  await expect(page.getByText("الصفحة دي اتشالت")).toBeVisible()
+  await expect(page.locator("input")).toHaveCount(0)
+})
+
+test("realbot.da3m.io shows the positions, as cards on a phone", async ({ page, isMobile }) => {
+  await page.goto("http://realbot.test/")
+  await expect(page.getByText("AGT/USDT").first()).toBeVisible()
+  await expect(page.getByText("التبديل الجاي")).toBeVisible()
+  await expect(page.getByText("IDOL/USDT").first()).toBeVisible()             // closed trades
+  // the summary (plan 7.1): the whole run next to the backtest, a warning while the sample is small, one row a month
+  await expect(page.getByRole("heading", { name: "الملخص من أول ما اشتغل" })).toBeVisible()
+  await expect(page.getByText("1 صفقة مقفولة", { exact: false })).toBeVisible()
+  await expect(page.getByText("الباكتست 1.19")).toBeVisible()
+  await expect(page.getByText("لسه 1 صفقة من 30", { exact: false })).toBeVisible()
+  await expect(page.locator('td[data-l="الصافي $"]').first()).toContainText("+$9.96")
+  await expectNoSideScroll(page)
+  const header = page.locator("thead").first()
+  if (isMobile) {
+    await expect(header).toBeHidden()                                         // rows are cards, each value labelled
+    await expect(page.locator('td[data-l="الدخول"]').first()).toBeVisible()
+  } else {
+    await expect(header).toBeVisible()
+  }
+})
+
+test("bot.da3m.io, the paper bots' page: Arabic by default, English and light after the switches, remembered", async ({ page }) => {
+  await page.goto("http://paperbot.test/")
+  const html = page.locator("html")
+  await expect(html).toHaveAttribute("lang", "ar")                           // the browser is Arabic (playwright.config.ts)
+  await expect(page.getByRole("heading", { name: "بوت الترند اليومي — مباشر" })).toBeVisible()
+  await expect(page.getByText("SOL").first()).toBeVisible()
+  await expect(page.getByText("0 لونج · 1 شورت")).toBeVisible()                // momentum
+  await page.getByTestId("paper-lang").click()
+  await expect(html).toHaveAttribute("dir", "ltr")
+  await expect(page.getByRole("heading", { name: "Daily Trend bot — live" })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "Today's list" })).toBeVisible()
+  await expect(page.getByText("0 long · 1 short")).toBeVisible()
+  await expect(page.getByText("Trend stopped")).toBeVisible()                   // the bot's Arabic close reason, in English
+  await expect(page.getByText("Weekly rebalance")).toBeVisible()
+  await expect(page.getByText("Stop at 0.0346")).toBeVisible()                  // "وقف <price>"
+  const ena = page.locator("#positions tr", { hasText: "ENA" })                // margin unknown → "—", never $0.00
+  await expect(ena.locator("td").nth(4)).toHaveText("—")
+  await expect(ena.locator("td").nth(6)).toHaveText("—")
+  await expect(page).toHaveTitle("RAQM — live paper bots")
+  await expect(page.locator("#listingSec")).toBeHidden()                       // a bot without a file stays hidden
+  const before = await html.getAttribute("data-theme")
+  await page.getByRole("button", { name: /Switch to (light|dark)/ }).click()
+  await expect(html).toHaveAttribute("data-theme", before === "light" ? "dark" : "light")
+  await expectNoSideScroll(page)
+  await page.reload()
+  await expect(html).toHaveAttribute("lang", "en")
+  await expect(html).toHaveAttribute("data-theme", before === "light" ? "dark" : "light")
+  await expect(page.getByRole("heading", { name: "Daily Trend bot — live" })).toBeVisible()
+})
+
+test("realbot.da3m.io in English from the site's link, light theme, back to Arabic", async ({ page }) => {
+  await page.goto("http://realbot.test/?lang=en")
+  const html = page.locator("html")
+  await expect(html).toHaveAttribute("lang", "en")
+  await expect(html).toHaveAttribute("dir", "ltr")
+  await expect(page.getByRole("heading", { name: "The real bot — live" })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "Since it started" })).toBeVisible()
+  await expect(page.getByText("Next rebalance:")).toBeVisible()
+  await expect(page.getByText("backtest 1.19")).toBeVisible()
+  await expect(page.locator('td[data-l="Net $"]').first()).toContainText("+$9.96")
+  await expect(page.getByText("Weekly rebalance").first()).toBeVisible()      // the bot's Arabic close reason, in English
+  await expect(page).toHaveTitle("RAQM — real money")
+  await expectNoSideScroll(page)
+  const before = await html.getAttribute("data-theme")
+  await page.getByRole("button", { name: /Switch to (light|dark)/ }).click()
+  await expect(html).toHaveAttribute("data-theme", before === "light" ? "dark" : "light")
+  await page.reload()                                                       // both choices are remembered
+  await expect(html).toHaveAttribute("data-theme", before === "light" ? "dark" : "light")
+  await page.getByTestId("realbot-lang").click()
+  await expect(html).toHaveAttribute("dir", "rtl")
+  await expect(page.getByRole("heading", { name: "الملخص من أول ما اشتغل" })).toBeVisible()
+  await page.goto("http://realbot.test/")
+  await expect(html).toHaveAttribute("lang", "ar")
+})

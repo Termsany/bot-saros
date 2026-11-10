@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the Raqm backup once a day
+
+[Timer]
+OnCalendar=*-*-* 03:30:00 UTC
+Persistent=true
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target

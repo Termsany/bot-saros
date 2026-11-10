@@ -1,0 +1,12 @@
+{
+  "_about": "The one list of the strategies (development-plan 3.4). Order matters: the plans unlock the planned ones in this order. live = the status file the bot writes (https://bot.da3m.io/<live>.json). demoSample = trades before the Demo verdict (null: not measured). The site (lib/strategies.ts), the API (backend/app/strategy_catalog.py) and the scripts read it; bot.py and the real-money modules keep their own lists, checked against this file in CI (backend/tests/test_strategy_catalog.py).",
+  "strategies": [
+    { "id": "trend_daily",    "name": "Daily Trend",         "nameAr": "ترند يومي",               "live": "status",   "planned": true,  "demoSample": 30 },
+    { "id": "momentum_ls",    "name": "Momentum L/S",        "nameAr": "مومنتم لونج/شورت",        "live": "momentum", "planned": true,  "demoSample": null },
+    { "id": "listing_short",  "name": "New Listing Short",   "nameAr": "شورت العملات الجديدة",    "live": "listing",  "planned": true,  "demoSample": 15 },
+    { "id": "ratio_trend",    "name": "Ratio Trend",         "nameAr": "ترند النسبة بين العملات", "live": "ratio",    "planned": true,  "demoSample": 30 },
+    { "id": "vol_breakout",   "name": "Volatility Breakout", "nameAr": "بريك أوت التذبذب (Williams)", "live": "breakout", "planned": false, "demoSample": 30 },
+    { "id": "rsi2_pullback",  "name": "RSI-2 Pullback",      "nameAr": "RSI-2 شراء الهبوط (Connors)", "live": "rsi2",     "planned": false, "demoSample": 15 },
+    { "id": "trend_breakout", "name": "Trend Breakout",      "nameAr": "اختراق الترند (Minervini/Darvas)", "live": "tbreak",   "planned": false, "demoSample": 30 }
+  ]
+}
