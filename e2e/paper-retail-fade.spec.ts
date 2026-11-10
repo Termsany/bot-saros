@@ -12,7 +12,8 @@ const RF = () => ({
 
 test("the paper page hides the against-the-crowd bot without its file", async ({ page }) => {
   await page.goto("http://paperbot.test/")
-  await expect(page.getByRole("heading", { name: "بوت الترند اليومي — مباشر" })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "بوتات الـ Paper" })).toBeVisible()
+  await expect(page.getByTestId("row-retail_fade")).toHaveCount(0)                     // no file, no row
   await expect(page.locator("#rfSec")).toBeHidden()
 })
 
@@ -20,12 +21,15 @@ test("the paper page shows the against-the-crowd bot with each coin's long/short
   await page.route("http://paperbot.test/retail_fade.json*", route =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(RF()) }))
   await page.goto("http://paperbot.test/")
+  await page.getByTestId("row-retail_fade").click()                                // its section opens in the side panel
   const sec = page.locator("#rfSec")
   await expect(sec).toBeVisible()
   await expect(sec.getByRole("heading", { name: /عكس الأغلبية/ })).toBeVisible()
   await expect(sec.locator("#rfPositions")).toContainText("3.61")
   await expect(sec.locator("#rfPositions")).toContainText("SOL")
   await expect(sec.locator("#rfHistory")).toContainText("ADA")
+  await page.getByTestId("drawer-close").click()
   await page.getByTestId("paper-lang").click()
+  await page.getByTestId("row-retail_fade").click()
   await expect(sec.getByRole("heading", { name: /Against the crowd/ })).toBeVisible()
 })

@@ -25,7 +25,7 @@ test("the paper page sums the three portfolios at $100 a coin from the trades op
   for (const [name, body] of Object.entries(FILES))
     await page.route(`http://paperbot.test/${name}.json*`, route =>
       route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) }))
-  await page.goto("http://paperbot.test/")
+  await page.goto("http://paperbot.test/#view=pf")                           // the Portfolios tab
   const sec = page.locator("#pfSec")
   await expect(sec).toBeVisible()
   await expect(sec.getByRole("heading", { name: "المحافظ الثلاثة — تجربة Paper" })).toBeVisible()
@@ -50,7 +50,7 @@ test("the paper page sums the three portfolios at $100 a coin from the trades op
 test("a portfolio whose bot has no file yet says so", async ({ page }) => {
   await page.route("http://paperbot.test/momentum.json*", route =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(FILES.momentum) }))
-  await page.goto("http://paperbot.test/")
+  await page.goto("http://paperbot.test/#view=pf")                           // the Portfolios tab
   const rows = page.locator("#pfSec #pfRows tr")
   await expect(rows.nth(0)).toContainText("مستني ملف عكس الأغلبية")
   await expect(rows.nth(2)).toContainText("مستني ملف عكس الأغلبية وRSI-2 + BTC")

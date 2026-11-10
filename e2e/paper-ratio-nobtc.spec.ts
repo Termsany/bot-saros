@@ -13,7 +13,8 @@ const RN = () => ({
 
 test("the paper page hides the no-BTC ratio bot without its file", async ({ page }) => {
   await page.goto("http://paperbot.test/")
-  await expect(page.getByRole("heading", { name: "بوت الترند اليومي — مباشر" })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "بوتات الـ Paper" })).toBeVisible()
+  await expect(page.getByTestId("row-ratio_nobtc")).toHaveCount(0)                     // no file, no row
   await expect(page.locator("#ratioNbSec")).toBeHidden()
 })
 
@@ -21,6 +22,7 @@ test("the paper page shows the no-BTC ratio bot from ratio_nobtc.json, apart fro
   await page.route("http://paperbot.test/ratio_nobtc.json*", route =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(RN()) }))
   await page.goto("http://paperbot.test/")
+  await page.getByTestId("row-ratio_nobtc").click()                                // its section opens in the side panel
   const sec = page.locator("#ratioNbSec")
   await expect(sec).toBeVisible()
   await expect(sec.getByRole("heading", { name: /Ratio trend من غير BTC\/ETH/ })).toBeVisible()
@@ -29,6 +31,8 @@ test("the paper page shows the no-BTC ratio bot from ratio_nobtc.json, apart fro
   await expect(sec.locator("#rnPairs")).toContainText("SOL")
   await expect(sec.locator("#rnHistory")).toContainText("BNB / ADA")
   await expect(page.locator("#ratioSec")).toBeHidden()                         // the first ratio bot has no file here
+  await page.getByTestId("drawer-close").click()
   await page.getByTestId("paper-lang").click()
+  await page.getByTestId("row-ratio_nobtc").click()
   await expect(sec.getByRole("heading", { name: /Ratio trend without BTC\/ETH/ })).toBeVisible()
 })

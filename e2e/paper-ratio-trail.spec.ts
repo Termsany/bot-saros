@@ -14,7 +14,8 @@ const RT = () => ({
 
 test("the paper page hides the trail ratio bot without its file", async ({ page }) => {
   await page.goto("http://paperbot.test/")
-  await expect(page.getByRole("heading", { name: "بوت الترند اليومي — مباشر" })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "بوتات الـ Paper" })).toBeVisible()
+  await expect(page.getByTestId("row-ratio_trail")).toHaveCount(0)                     // no file, no row
   await expect(page.locator("#ratioTrSec")).toBeHidden()
 })
 
@@ -22,6 +23,7 @@ test("the paper page shows the trail ratio bot from ratio_trail.json, apart from
   await page.route("http://paperbot.test/ratio_trail.json*", route =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(RT()) }))
   await page.goto("http://paperbot.test/")
+  await page.getByTestId("row-ratio_trail").click()                                // its section opens in the side panel
   const sec = page.locator("#ratioTrSec")
   await expect(sec).toBeVisible()
   await expect(sec.getByRole("heading", { name: /trailing 20%/ })).toBeVisible()
@@ -30,6 +32,8 @@ test("the paper page shows the trail ratio bot from ratio_trail.json, apart from
   await expect(sec.locator("#rtHistory")).toContainText("DOGE / ADA")
   await expect(sec.locator("#rtHistory")).toContainText("trailing 20%")
   await expect(page.locator("#ratioNbSec")).toBeHidden()                      // the no-BTC bot has no file here
+  await page.getByTestId("drawer-close").click()
   await page.getByTestId("paper-lang").click()
+  await page.getByTestId("row-ratio_trail").click()
   await expect(sec.getByRole("heading", { name: /Ratio trend without BTC\/ETH \+ 20% trailing/ })).toBeVisible()
 })

@@ -14,7 +14,8 @@ const RB = (above: boolean) => ({
 
 test("the paper page hides the RSI-2 + BTC filter bot without its file", async ({ page }) => {
   await page.goto("http://paperbot.test/")
-  await expect(page.getByRole("heading", { name: "بوت الترند اليومي — مباشر" })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "بوتات الـ Paper" })).toBeVisible()
+  await expect(page.getByTestId("row-rsi2_btc")).toHaveCount(0)                     // no file, no row
   await expect(page.locator("#rbSec")).toBeHidden()
 })
 
@@ -23,6 +24,7 @@ test("the paper page shows the RSI-2 + BTC filter bot and its filter state", asy
   await page.route("http://paperbot.test/rsi2_btc.json*", route =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(RB(above)) }))
   await page.goto("http://paperbot.test/")
+  await page.getByTestId("row-rsi2_btc").click()                                // its section opens in the side panel
   const sec = page.locator("#rbSec")
   await expect(sec).toBeVisible()
   await expect(sec.getByRole("heading", { name: /RSI-2 \+ فلتر BTC/ })).toBeVisible()
@@ -30,7 +32,9 @@ test("the paper page shows the RSI-2 + BTC filter bot and its filter state", asy
   await expect(sec.locator("#rbPositions")).toContainText("LINK")
   await expect(sec.locator("#rbHistory")).toContainText("ADA")
   await expect(page.locator("#r2Sec")).toBeHidden()                            // the first RSI-2 bot has no file here
+  await page.getByTestId("drawer-close").click()
   await page.getByTestId("paper-lang").click()
+  await page.getByTestId("row-rsi2_btc").click()
   await expect(sec.getByRole("heading", { name: /RSI-2 \+ BTC filter/ })).toBeVisible()
   above = false
   await expect(sec.locator("#rbWatch")).toContainText("below its 200-day average", { timeout: 20000 })

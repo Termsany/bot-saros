@@ -152,22 +152,35 @@ test("bot.da3m.io, the paper bots' page: Arabic by default, English and light af
   await page.goto("http://paperbot.test/")
   const html = page.locator("html")
   await expect(html).toHaveAttribute("lang", "ar")                           // the browser is Arabic (playwright.config.ts)
+  await expect(page.getByRole("heading", { name: "بوتات الـ Paper" })).toBeVisible()
+  await expect(page.getByTestId("row-status")).toContainText("الترند اليومي")   // one row a bot, the files there
+  await expect(page.getByTestId("row-momentum")).toBeVisible()
+  await expect(page.getByTestId("row-listing")).toHaveCount(0)               // a bot without a file has no row
+  await page.getByTestId("row-momentum").click()                              // its own section, in the side panel
+  await expect(page).toHaveURL(/#bot=momentum$/)
+  await expect(page.getByText("0 لونج · 1 شورت")).toBeVisible()
+  await page.keyboard.press("Escape")
+  await expect(page.locator("#drawer")).toBeHidden()
+  await page.getByTestId("row-status").click()
   await expect(page.getByRole("heading", { name: "بوت الترند اليومي — مباشر" })).toBeVisible()
   await expect(page.getByText("SOL").first()).toBeVisible()
-  await expect(page.getByText("0 لونج · 1 شورت")).toBeVisible()                // momentum
+  await page.getByTestId("drawer-close").click()
   await page.getByTestId("paper-lang").click()
   await expect(html).toHaveAttribute("dir", "ltr")
+  await expect(page.getByRole("heading", { name: "Paper bots" })).toBeVisible()
+  await page.getByTestId("row-status").click()
   await expect(page.getByRole("heading", { name: "Daily Trend bot — live" })).toBeVisible()
   await expect(page.getByRole("heading", { name: "Today's list" })).toBeVisible()
-  await expect(page.getByText("0 long · 1 short")).toBeVisible()
   await expect(page.getByText("Trend stopped")).toBeVisible()                   // the bot's Arabic close reason, in English
-  await expect(page.getByText("Weekly rebalance")).toBeVisible()
-  await expect(page.getByText("Stop at 0.0346")).toBeVisible()                  // "وقف <price>"
   const ena = page.locator("#positions tr", { hasText: "ENA" })                // margin unknown → "—", never $0.00
   await expect(ena.locator("td").nth(4)).toHaveText("—")
   await expect(ena.locator("td").nth(6)).toHaveText("—")
+  await page.goto("http://paperbot.test/#bot=momentum")                       // a link opens the same panel
+  await expect(page.getByText("0 long · 1 short")).toBeVisible()
+  await expect(page.getByText("Weekly rebalance")).toBeVisible()
+  await expect(page.getByText("Stop at 0.0346")).toBeVisible()                  // "وقف <price>"
+  await page.getByTestId("drawer-close").click()
   await expect(page).toHaveTitle("RAQM — live paper bots")
-  await expect(page.locator("#listingSec")).toBeHidden()                       // a bot without a file stays hidden
   const before = await html.getAttribute("data-theme")
   await page.getByRole("button", { name: /Switch to (light|dark)/ }).click()
   await expect(html).toHaveAttribute("data-theme", before === "light" ? "dark" : "light")
@@ -175,7 +188,37 @@ test("bot.da3m.io, the paper bots' page: Arabic by default, English and light af
   await page.reload()
   await expect(html).toHaveAttribute("lang", "en")
   await expect(html).toHaveAttribute("data-theme", before === "light" ? "dark" : "light")
-  await expect(page.getByRole("heading", { name: "Daily Trend bot — live" })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "Paper bots" })).toBeVisible()
+})
+
+test("bot.da3m.io: filters, search, sort, and two bots compared", async ({ page, isMobile }) => {
+  await page.goto("http://paperbot.test/?lang=en")
+  await expect(page.locator("#lbRows tr[data-k]")).toHaveCount(2)               // the fixtures: the trend bot and momentum
+  await page.getByRole("button", { name: /^Momentum/ }).click()               // the family filter
+  await expect(page.locator("#lbRows tr[data-k]")).toHaveCount(1)
+  await page.getByRole("button", { name: /^All/ }).click()
+  await page.locator("#q").fill("AGT")                                         // a coin a bot holds
+  await expect(page.locator("#lbRows tr[data-k]")).toHaveCount(1)
+  await expect(page.getByTestId("row-momentum")).toBeVisible()
+  await page.locator("#q").fill("")
+  await page.locator("#sortSel").selectOption("name")
+  await expect(page.locator("#lbRows tr[data-k]").first()).toContainText("Daily trend")
+  if (isMobile) {                                                              // the phone: pick them on the Compare tab
+    await page.getByTestId("view-cmp").click()
+    await page.locator("#cmpA").selectOption("status")
+    await page.locator("#cmpB").selectOption("momentum")
+  } else {                                                                     // the desktop: tick two rows
+    await page.locator('[data-pick="status"]').check()
+    await page.locator('[data-pick="momentum"]').check()
+    await page.getByTestId("cmp-go").click()
+  }
+  await expect(page).toHaveURL(/#view=cmp&a=status&b=momentum$/)
+  await expect(page.locator("#cmpHead")).toContainText("A · Daily trend")
+  await expect(page.locator("#cmpHead")).toContainText("B · Momentum")
+  await expect(page.locator("#cmpRows")).toContainText("Total P&L")
+  await expect(page.locator("#cmpChart svg")).toBeVisible()
+  await page.getByTestId("view-lb").click()
+  await expect(page.locator("#lbRows tr[data-k]")).toHaveCount(2)
 })
 
 test("realbot.da3m.io in English from the site's link, light theme, back to Arabic", async ({ page }) => {
