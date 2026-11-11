@@ -19,7 +19,7 @@ const en = {
     trust: ["Stops placed on the exchange", "Read-only public page", "Cancel anytime"],
   },
   live: {
-    title: "Momentum L/S · weekly", running: "Running", stopped: "Not reporting", loading: "Loading the live account…", error: "The live account can't be read right now.",
+    title: "Momentum L/S · daily", running: "Running", stopped: "Not reporting", loading: "Loading the live account…", error: "The live account can't be read right now.",
     openPnl: "open P&L · live prices", legs: (n: number) => `${n} legs · x2`, next: "Next rebalance", stops: "Every stop is on Binance", more: (n: number) => `+${n} more on the live page`,
   },
   strip: [
@@ -40,7 +40,7 @@ const en = {
     eyebrow: "Strategies", title: "Four strategies made the cut.", sub: "We tested more than fifteen ideas from trading research. These held up on every coin — with their losing stretches shown, not hidden.",
     pf: "Profit factor", win: "Win rate", trades: "Trades", sharpe: "Sharpe 2024+", high: "High risk", watch: "See them running",
     names: { trend_daily: "Daily Trend", momentum_ls: "Momentum L/S", listing_short: "New Listing Short", ratio_trend: "Ratio Trend" } as Record<string, string>,
-    desc: { trend_daily: "Long the coins in an uptrend, out when the trend stops.", momentum_ls: "Long the strongest five, short the weakest five — every week.", listing_short: "Short a new listing once the hype fades.", ratio_trend: "Long/short pairs of the top seven coins." } as Record<string, string>,
+    desc: { trend_daily: "Long the coins in an uptrend, out when the trend stops.", momentum_ls: "Long the strongest five, short the weakest five — a new basket every day.", listing_short: "Short a new listing once the hype fades.", ratio_trend: "Long/short pairs of the top seven coins." } as Record<string, string>,
     note: (from: string, to: string, n: number) => `Backtest on ${n} Binance perpetuals, ${from} → ${to}, after fees and funding. Past results don't promise future ones.`,
   },
   proof: {
@@ -93,7 +93,7 @@ const ar: Dict = {
     trust: ["الوقف على المنصة نفسها", "صفحة عامة للقراية بس", "تلغي في أي وقت"],
   },
   live: {
-    title: "مومنتم لونج/شورت · أسبوعي", running: "شغال", stopped: "مش بيكتب حالته", loading: "بيحمّل الحساب الحقيقي…", error: "الحساب الحقيقي مش متاح دلوقتي.",
+    title: "مومنتم لونج/شورت · يومي", running: "شغال", stopped: "مش بيكتب حالته", loading: "بيحمّل الحساب الحقيقي…", error: "الحساب الحقيقي مش متاح دلوقتي.",
     openPnl: "ربح المفتوح · بالسعر اللحظي", legs: (n: number) => `${n} صفقة · x2`, next: "التبديل الجاي", stops: "كل وقف على Binance", more: (n: number) => `+${n} كمان في الصفحة المباشرة`,
   },
   strip: [
@@ -114,7 +114,7 @@ const ar: Dict = {
     eyebrow: "الاستراتيجيات", title: "أربع استراتيجيات نجحت في الاختبار.", sub: "جربنا أكتر من 15 فكرة من أبحاث التداول. دول اللي صمدوا على كل العملات — والفترات الخسرانة ظاهرة، مش مستخبية.",
     pf: "Profit factor", win: "نسبة الكسب", trades: "صفقات", sharpe: "Sharpe ‎2024+", high: "خطورة عالية", watch: "شوفها شغالة",
     names: { trend_daily: "ترند يومي", momentum_ls: "مومنتم لونج/شورت", listing_short: "شورت العملات الجديدة", ratio_trend: "ترند النسبة بين العملات" },
-    desc: { trend_daily: "لونج على العملات اللي في ترند صاعد، وخروج لما الترند يقف.", momentum_ls: "لونج أقوى 5 وشورت أضعف 5 — كل أسبوع.", listing_short: "شورت العملة الجديدة بعد ما الهوجة تهدى.", ratio_trend: "لونج/شورت على أزواج أكبر 7 عملات." },
+    desc: { trend_daily: "لونج على العملات اللي في ترند صاعد، وخروج لما الترند يقف.", momentum_ls: "لونج أقوى 5 وشورت أضعف 5 — سلة جديدة كل يوم.", listing_short: "شورت العملة الجديدة بعد ما الهوجة تهدى.", ratio_trend: "لونج/شورت على أزواج أكبر 7 عملات." },
     note: (from: string, to: string, n: number) => `Backtest على ${n} عقد على Binance، من ${from} لحد ${to}، بعد الرسوم والـ funding. النتايج اللي فاتت مش ضمان لأي نتيجة جاية.`,
   },
   proof: {
