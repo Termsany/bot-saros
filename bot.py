@@ -229,7 +229,7 @@ if __name__=="__main__":
     p.add_argument("--ratio-net", action="store_true", help="ratio trend: one position per coin, the sum of its pairs — the only way a one-way account trades all of them (docs/ratio-trend-live-plan.md §1)")
     p.add_argument("--ratio-trail", type=float, default=0.0, help="ratio trend, paper pairs: out when the ratio is this far below its best since entry, e.g. 0.20 (research §35)")
     p.add_argument("--momentum-retail", action="store_true", help="momentum_ls ranked against the crowd's long/short ratio (paper only, research §29)")
-    p.add_argument("--mom-daily", action="store_true", help="momentum_ls: a new basket every day at 00:00 UTC, held one day (paper only, owner 2026-11-11)")
+    p.add_argument("--mom-daily", action="store_true", help="momentum_ls: a new basket every day at 00:00 UTC, keeping the coins still in it (owner 2026-11-11)")
     p.add_argument("--rsi2-btc-ma", type=int, default=0, help="RSI-2: new entries only while BTC closes above this daily average, e.g. 200 (research §28)")
     p.add_argument("--public-name", default=None, help="a second bot of the same strategy: its public file name (e.g. ratio_nobtc)")
     p.add_argument("--label", default=None, help="a second bot of the same strategy: its name on Telegram")
@@ -268,7 +268,8 @@ if __name__=="__main__":
         if args.strategy != "momentum_ls" or not args.paper: p.error("--momentum-retail: paper momentum_ls only")
         MOM.update(RETAIL)
     if args.mom_daily:
-        if args.strategy != "momentum_ls" or not args.paper or args.momentum_retail: p.error("--mom-daily: paper momentum_ls only")
+        # real money too since 2026-11-11 (owner: both real accounts trade the daily basket)
+        if args.strategy != "momentum_ls" or args.momentum_retail: p.error("--mom-daily: momentum_ls only")
         MOM.update(DAILY)
     if args.rsi2_btc_ma:
         if not 20 <= args.rsi2_btc_ma <= 400: p.error("--rsi2-btc-ma: 20..400 days")
