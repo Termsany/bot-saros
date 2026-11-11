@@ -33,6 +33,7 @@ STATE=${RAQM_DEPLOY_STATE:-/var/lib/raqm-deploy}      # root's: each target's de
 UNITS=/etc/systemd/system
 L=/opt/raqm-live; U=/opt/raqm-users/code; B=/opt/raqm-bot
 PAGE=/var/www/bot.da3m.io/index.html
+PAGE_ASSETS=/var/www/bot.da3m.io/assets     # its stylesheet and scripts (deploy/vps/page/assets/, since 2026-11-11)
 API=/opt/raqm-api/app
 SELF=$SRC/deploy/vps/deploy.sh
 # what every paper bot runs (the own-folder ones and /opt/raqm-bot): bot.py imports bots/ and backend/app
@@ -203,7 +204,14 @@ verify_paper_bot() {   # $1 unit, $2 folder
 }
 
 deploy_page() {
-    if [ -L "${PAGE%/*}" ] || [ -L "$PAGE" ]; then err "refusing: ${PAGE%/*} or its index.html is a symlink"; exit 3; fi
+    if [ -L "${PAGE%/*}" ] || [ -L "$PAGE" ] || [ -L "$PAGE_ASSETS" ]; then err "refusing: ${PAGE%/*}, its index.html or assets/ is a symlink"; exit 3; fi
+    # the assets first: index.html names them by content hash (deploy/vps/page/stamp.py), so the new page never goes
+    # live before its files; the old ones stay until a later deploy (the old page may still be open in a browser)
+    install -d -o raqm -g www-data -m 755 "$PAGE_ASSETS"
+    for f in "$T"/deploy/vps/page/assets/*; do
+        [ -L "$PAGE_ASSETS/${f##*/}" ] && { err "refusing: $PAGE_ASSETS/${f##*/} is a symlink"; exit 3; }
+        install -o raqm -g www-data -m 644 "$f" "$PAGE_ASSETS/"
+    done
     install -o raqm -g www-data -m 644 "$T/deploy/vps/page/index.html" "$PAGE"
 }
 
@@ -211,6 +219,11 @@ verify_page() {
     check_file deploy/vps/page/index.html "$PAGE"
     m=$(stat -c '%U:%G %a' "$PAGE")
     [ "$m" = "raqm:www-data 644" ] || { err "  FAIL $PAGE is $m, not raqm:www-data 644"; FAILS=$((FAILS+1)); }
+    for f in "$T"/deploy/vps/page/assets/*; do
+        check_file "deploy/vps/page/assets/${f##*/}" "$PAGE_ASSETS/${f##*/}"
+        m=$(stat -c '%U:%G %a' "$PAGE_ASSETS/${f##*/}" 2>/dev/null)
+        [ "$m" = "raqm:www-data 644" ] || { err "  FAIL $PAGE_ASSETS/${f##*/} is $m, not raqm:www-data 644"; FAILS=$((FAILS+1)); }
+    done
 }
 
 deploy_api() {

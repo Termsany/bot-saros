@@ -177,7 +177,8 @@ class PaperWatchTests(unittest.TestCase):
         self.assertIn("مش موجود", seen["paper:rsi2_btc"][0]); self.assertIn("مش بيتقري", seen["paper:momentum"][0])
 
     def test_every_paper_bot_of_the_page_is_watched(self):
-        page = (ROOT / "deploy" / "vps" / "page" / "index.html").read_text(encoding="utf-8")
+        d = ROOT / "deploy" / "vps" / "page"                 # the page and its scripts (assets/, since 2026-11-11)
+        page = "".join(p.read_text(encoding="utf-8") for p in [d / "index.html", *sorted((d / "assets").glob("*.js"))])
         for name in ("status", "listing", "momentum", "retail_fade", "rsi2_btc", "rsi2", "breakout", "tbreak", "ratio", "ratio_nobtc"):
             self.assertIn(name, wd.PAPER_BOTS)
             self.assertTrue(f"{name}.json" in page or f'["{name}"' in page, name)

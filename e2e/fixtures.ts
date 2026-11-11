@@ -39,7 +39,13 @@ const PAPER_PAGE: Record<string, () => unknown> = {
 
 const json = (body: unknown) => ({ status: 200, contentType: "application/json", body: JSON.stringify(body) })
 const REALBOT_HTML = readFileSync(path.join(__dirname, "..", "deploy", "vps", "realbot", "index.html"), "utf-8")
-const PAPER_HTML = readFileSync(path.join(__dirname, "..", "deploy", "vps", "page", "index.html"), "utf-8")
+const PAPER_DIR = path.join(__dirname, "..", "deploy", "vps", "page")
+const PAPER_HTML = readFileSync(path.join(PAPER_DIR, "index.html"), "utf-8")
+/** The page's stylesheet and scripts (deploy/vps/page/assets/, split from index.html on 2026-11-11), as nginx serves them. */
+const PAPER_ASSET = (name: string) => /^[a-z0-9_]+\.(js|css)$/.test(name)
+  ? { status: 200, contentType: name.endsWith(".js") ? "text/javascript; charset=utf-8" : "text/css; charset=utf-8",
+      body: readFileSync(path.join(PAPER_DIR, "assets", name), "utf-8") }
+  : { status: 404, body: "" }
 
 /** A fake API for a test: (method, path, body) → a JSON answer, or undefined for a 404, or an ApiStatus for another
  *  status (e.g. a 409 the page must ask about). Every call is recorded. */
@@ -83,6 +89,7 @@ async function offline(page: Page, api?: { handler: ApiHandler, calls: ApiCall[]
     if (url.hostname === "paperbot.test") {
       const file = url.pathname.replace(/^\/|\.json$/g, "")
       if (url.pathname.endsWith(".json")) return PAPER_PAGE[file] ? route.fulfill(json(PAPER_PAGE[file]())) : route.fulfill({ status: 404, body: "" })
+      if (url.pathname.startsWith("/assets/")) return route.fulfill(PAPER_ASSET(url.pathname.slice("/assets/".length)))
       return route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: PAPER_HTML })
     }
     return route.abort()
