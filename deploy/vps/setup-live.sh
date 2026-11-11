@@ -40,6 +40,9 @@ for f in bot.py strategies_trend.py strategies_advanced.py strategies_wave.py tr
 # the strategies, one file each (bots/, imported by bot.py) — not $L/strategies, which holds their root-owned options
 install -d -o root -g root -m 755 "$L/bots"
 for f in "$T"/bots/*.py; do install -m 644 -o root -g root "$f" "$L/bots/"; done
+# the engine, one module per part (engine/, imported by bot.py since 2026-11-11): a bot.py without it can't start
+install -d -o root -g root -m 755 "$L/engine"
+for f in "$T"/engine/*.py; do install -m 644 -o root -g root "$f" "$L/engine/"; done
 # the Telegram trade card's fonts (trade_card.py)
 install -d -o root -g root -m 755 "$L/assets" "$L/assets/fonts"
 for f in "$T"/assets/fonts/*; do install -m 644 -o root -g root "$f" "$L/assets/fonts/"; done
@@ -77,9 +80,10 @@ echo "$SHA" > "$L/DEPLOYED_COMMIT"
 # Phase 2 (docs/phase2-design.md): the same code for users' bots, readable by every user's OS account — the owner's
 # copy above is the owner's group only, and its state folder sits inside it. Root's, copied from the copy just made.
 U=/opt/raqm-users/code
-install -d -o root -g root -m 755 /opt/raqm-users "$U" "$U/bots" "$U/backend" "$U/backend/app" "$U/assets" "$U/assets/fonts"
+install -d -o root -g root -m 755 /opt/raqm-users "$U" "$U/bots" "$U/engine" "$U/backend" "$U/backend/app" "$U/assets" "$U/assets/fonts"
 for f in bot.py strategies_trend.py strategies_advanced.py strategies_wave.py trade_card.py DEPLOYED_COMMIT; do install -m 644 -o root -g root "$L/$f" "$U/$f"; done
 for f in "$L"/bots/*.py; do install -m 644 -o root -g root "$f" "$U/bots/"; done
+for f in "$L"/engine/*.py; do install -m 644 -o root -g root "$f" "$U/engine/"; done
 for f in "$L"/backend/app/*.py; do install -m 644 -o root -g root "$f" "$U/backend/app/"; done
 for f in "$L"/assets/fonts/*; do install -m 644 -o root -g root "$f" "$U/assets/fonts/"; done
 install -d -o root -g root -m 755 "$U/scripts"
