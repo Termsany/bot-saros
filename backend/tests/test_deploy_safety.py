@@ -32,11 +32,10 @@ class SetupLiveTests(unittest.TestCase):
         self.assertIn('for f in "$L"/bots/*.py; do install -m 644 -o root -g root "$f" "$U/bots/"; done', self.S)
 
     def test_every_paper_install_copies_the_strategy_files(self):
-        # the paper bots in their own folders (install-*.sh) run bot.py too: without bots/ they can't start
-        scripts = [p for p in sorted(VPS.glob("install-*.sh")) if "archive" in (s := p.read_text(encoding="utf-8")) and " bot.py " in s]
-        self.assertGreaterEqual(len(scripts), 4)
-        for p in scripts:
-            self.assertRegex(p.read_text(encoding="utf-8"), r'archive "\$COMMIT" bot\.py bots ', p.name)
+        # the paper bots (deploy.sh paper, which the install-*.sh wrappers call) run bot.py too: without bots/ they can't start
+        s = (VPS / "deploy.sh").read_text(encoding="utf-8")
+        self.assertRegex(s, r'(?m)^PAPER_FILES="bot\.py bots ')
+        self.assertIn('archive "$SHA" $PAPER_FILES', s)
 
     def test_only_key_lines_reach_the_live_env_file(self):
         self.assertIn("^(BINANCE_API_KEY|BINANCE_SECRET|BINANCE_LIVE_ACCOUNT)=", self.S)

@@ -12,11 +12,35 @@ The daily trend bot runs on its own server (Render's free plan sleeps and loses 
 | public page | `page/index.html` + `status.json` (written by the bot) → `/var/www/bot.da3m.io` (the folder keeps its old name: the bots' units write there) |
 | nginx site | `nginx-demo.da3m.io.conf` → `/etc/nginx/sites-available/demo.da3m.io`, HTTPS by certbot. `nginx-bot.da3m.io.conf`: the old name, answering 410 until its DNS record is gone |
 
-Update the bot after a change:
+## Deploying: `deploy.sh`, the one way code reaches the server
+
+Every update — real-money/Demo/users' code, the paper bots, the paper page, the API — goes through
+`deploy/vps/deploy.sh`, run as root on the server from root's clone `/root/raqm-src` at that exact commit:
 
 ```bash
-scp -r bot.py bots strategies_*.py trade_card.py assets root@SERVER:/opt/raqm-bot/ && ssh root@SERVER 'chown -R raqm:raqm /opt/raqm-bot/*.py /opt/raqm-bot/bots /opt/raqm-bot/assets && systemctl restart raqm-bot'
+git -C /root/raqm-src fetch -q origin && git -C /root/raqm-src checkout -q --detach <sha>
+sh /root/raqm-src/deploy/vps/deploy.sh <sha> --dry-run all         # the checks and each target's previous commit, nothing written
+sh /root/raqm-src/deploy/vps/deploy.sh <sha> paper page --restart  # e.g. the paper bots + page, paper bots restarted
 ```
+
+| target | what it installs | restarts |
+|---|---|---|
+| `live` | `setup-live.sh` of that commit: `/opt/raqm-live`, `/opt/raqm-users/code`, tools, units, realbot page | never `raqm-live@*` / `raqm-user@*` (it prints the owner's commands); Demo only with `--restart-demo trend_daily,...`, by name, never `raqm-demo@momentum_ls` (masked) |
+| `paper` | every paper bot found in the commit's units (`User=raqm`, `--paper`): each own folder `/opt/raqm-<bot>` + its unit, and `/opt/raqm-bot` | only with `--restart` |
+| `paper:<bot>` | one of them (`paper:ratio-nobtc`, `paper:momentum`, …, `paper:shared` = `/opt/raqm-bot`) | only with `--restart` |
+| `page` | `page/index.html` → `/var/www/bot.da3m.io/index.html`, `raqm:www-data 644` | — |
+| `api` | `api/raqm-api.service` (the old one saved in `/var/lib/raqm-deploy/` first) + `raqm-api-update --manual <sha>` | the API (as before) |
+| `all` | `live paper page api` | as above |
+
+It refuses a sha that isn't a full sha on `origin/main` and a clone that isn't root's; every file comes from `git archive`
+on the server (never a working tree, so no Windows CRLF, nothing a bot's user could have changed); copies into the bots'
+folders run as `raqm`. It prints each target's previous commit and its rollback command (`deploy.sh <previous> <target>`)
+before writing anything, checks every installed file's blob against git afterwards (any difference: exit 5, that target
+neither recorded nor restarted), and records each target's commit in `/var/lib/raqm-deploy/` (root only).
+
+From a laptop, the same thing over ssh (nothing is sent from the laptop's checkout):
+`sh deploy/vps/remote-deploy.sh <commit> -- <targets and options>`. The old `install-<bot>.sh <commit>` scripts are
+wrappers of it (`paper:<bot> --restart`) and keep working.
 
 Closed trades go to Telegram as an image card (`trade_card.py`, fonts in `assets/fonts`). The card needs Pillow in
 the bot's venv, once: `sudo -u raqm /opt/raqm-bot/venv/bin/pip install --only-binary=:all: pillow==13.0.0`. Without
@@ -48,7 +72,7 @@ Logs: `journalctl -u raqm-listing -f`.
 ## Third paper bot: weekly momentum long/short
 
 `raqm-momentum.service` runs `bot.py --strategy momentum_ls --state state_momentum.json` from its own folder
-`/opt/raqm-momentum-paper` (`sh deploy/vps/install-momentum-paper.sh <commit>`): every Monday (first cycle after
+`/opt/raqm-momentum-paper` (`deploy.sh <sha> paper:momentum --restart`): every Monday (first cycle after
 00:00 UTC, like the real bot) rank the top 50 Binance crypto USDT perpetuals by 30-day volume on their 2-week return, long the
 strongest 5 and short the weakest 5 for a week, stop 40%, $20 × 2, fees + real funding, paper only. Page data
 `momentum.json`. Live prices on the page come from `wss://fstream.binance.com/market/ws` (Binance moved market
@@ -65,7 +89,7 @@ to watch it, and the page marks it HIGH RISK. Page data `ratio.json`. Logs: `jou
 
 ## Real-orders bots: one per strategy on the admin's account
 
-`setup-live.sh <sha>` (as root, from the root-owned clone) installs the bots' code in `/opt/raqm-live`, the unit
+`deploy.sh <sha> live` (which runs that commit's `setup-live.sh <sha>`; as root, from the root-owned clone) installs the bots' code in `/opt/raqm-live`, the unit
 template `raqm-demo@.service`, one IPC folder per strategy (`/opt/raqm-ipc/<strategy>`) and the Demo risk ledger
 (`/opt/raqm-risk-demo`, play money only). Each strategy runs as its own service on the same Binance account:
 
