@@ -501,9 +501,13 @@ class System:
 
 
 def _limits(d):
+    # the kill switch's own limits too: left out until 2026-11-11, every user's ledger kept risk_manager's defaults
+    # (1% a day, 5% drawdown) under the unit's 20% / 45% ceilings, and the owner's second-account momentum bot tripped
+    # on its first basket's fees and moves (1.27% at 00:08 UTC, 2026-11-09)
     out = {"risk_per_trade_pct": d["risk_per_trade_pct"], "max_aggregate_risk_pct": d["max_aggregate_risk_pct"],
            "max_correlated_risk_pct": d["max_aggregate_risk_pct"], "capital_usdt": d["capital_usdt"],
-           "capital_margin_override_usdt": d["capital_margin_override_usdt"]}
+           "capital_margin_override_usdt": d["capital_margin_override_usdt"],
+           "max_daily_loss_pct": USER_DAILY_LOSS_PCT, "max_drawdown_pct": USER_DRAWDOWN_PCT}
     if d.get("capital_reserve_pct") is not None:      # real money: the user's reserve (the whole basket fits after it)
         out["capital_reserve_pct"] = d["capital_reserve_pct"]
     return out
@@ -525,7 +529,11 @@ def apply(actions, keys, sys_=None, log=print):
                 if sys_.read(path) != text:      # new keys reach a running bot at its next start (systemd copies them)
                     sys_.write(path, text, 0o600)
             elif kind == "limits":
-                applied, want = APPLIED / f"{uid}.json", json.dumps(a[2], sort_keys=True)
+                # the record of what was written: the request AND the limits it becomes, so a change in how the limits
+                # are derived (here, not in the request) reaches every running user's ledger once
+                try: limits = _limits(a[2])
+                except (KeyError, TypeError): limits = None        # a request set_limits will refuse, with its own error
+                applied, want = APPLIED / f"{uid}.json", json.dumps({"desired": a[2], "limits": limits}, sort_keys=True)
                 if sys_.read(applied) != want:
                     sys_.set_limits(uid, a[2]); sys_.write(applied, want, 0o600)
             elif kind == "ensure":
