@@ -130,6 +130,43 @@ class LiveKeepTests(unittest.TestCase):
         self.assertEqual(botmod.load_state()["mom_last"], today.isoformat())
 
 
+class BufferTests(unittest.TestCase):
+    """--mom-buffer (research §37): a held coin stays while among the strongest/weakest B; filled back to n."""
+
+    def test_without_a_buffer_the_picks_are_the_ends(self):
+        r = ranked()                                     # S0 weakest … S19 strongest
+        self.assertEqual(botmod.momentum_picks(r, 5), [(s, x, "short") for s, x in r[:5]] + [(s, x, "long") for s, x in r[::-1][:5]])
+        self.assertEqual(botmod.momentum_picks(r, 5, {"S13/USDT:USDT": "long"}, 5), botmod.momentum_picks(r, 5))
+
+    def test_a_held_coin_within_the_buffer_stays(self):
+        r = ranked()
+        held = {"S13/USDT:USDT": "long", "S12/USDT:USDT": "long", "S6/USDT:USDT": "short", "S4/USDT:USDT": "short"}
+        picks = botmod.momentum_picks(r, 5, held, 7)
+        longs = [s for s, _, side in picks if side == "long"]; shorts = [s for s, _, side in picks if side == "short"]
+        # S13 is 7th strongest: kept; S12 is 8th: out. S6 is 7th weakest: kept; S4 (5th) kept as well
+        self.assertIn("S13/USDT:USDT", longs); self.assertNotIn("S12/USDT:USDT", longs)
+        self.assertEqual(longs[1:], ["S19/USDT:USDT", "S18/USDT:USDT", "S17/USDT:USDT", "S16/USDT:USDT"])
+        self.assertEqual(shorts, ["S4/USDT:USDT", "S6/USDT:USDT", "S0/USDT:USDT", "S1/USDT:USDT", "S2/USDT:USDT"])
+        self.assertEqual(len(picks), 10)
+
+    def test_held_on_the_other_side_is_not_kept(self):
+        r = ranked()
+        picks = botmod.momentum_picks(r, 5, {"S14/USDT:USDT": "short"}, 7)
+        self.assertNotIn(("S14/USDT:USDT", "short"), [(s, side) for s, _, side in picks])
+
+    def test_the_cli(self):
+        e = {k: v for k, v in os.environ.items() if not k.startswith(("BINANCE", "ALLOW_LIVE", "RAQM_"))}
+        e.update({"BINANCE_ENV": "live", "PYTHONIOENCODING": "utf-8"})
+        run = lambda *a: subprocess.run([sys.executable, "bot.py", *a], cwd=ROOT, env=e, capture_output=True, timeout=120, encoding="utf-8", errors="replace")
+        r = run("--paper", "--strategy", "momentum_daily_b7", "--show-config")
+        self.assertEqual(r.returncode, 0, r.stderr); self.assertIn('"buffer": 7', r.stdout); self.assertIn('"public_name": "momentum_daily_b7"', r.stdout)
+        for a in (("--live", "--strategy", "momentum_ls", "--mom-daily", "--mom-buffer", "7"), ("--paper", "--strategy", "momentum_ls", "--mom-buffer", "7")):
+            r = run(*a); self.assertEqual(r.returncode, 2, a); self.assertIn("--mom-buffer", r.stderr)
+        u = (ROOT / "deploy/vps/raqm-momentum-daily-b7.service").read_text(encoding="utf-8")
+        self.assertIn("--paper --strategy momentum_daily_b7 --amount 100 --leverage 2", u)
+        self.assertIn('id="mbSec"', (ROOT / "deploy/vps/page/index.html").read_text(encoding="utf-8"))
+
+
 class WiringTests(unittest.TestCase):
     def run_bot(self, *args):
         e = {k: v for k, v in os.environ.items() if not k.startswith(("BINANCE", "ALLOW_LIVE", "RAQM_"))}

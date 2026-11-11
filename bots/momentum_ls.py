@@ -29,6 +29,22 @@ RETAIL = {"top": 20, "n": 3, "min_days": 150, "weekday": 2, "score": "retail", "
 # stays 3.9 days on average). Backtest 2019 → 2026-10, $20 x2: keeping them +$3,035 (DD $439, Sharpe 1.16 / 0.91);
 # closing and reopening every leg +$1,587 (the fees); the weekly bot +$2,200 (0.55 / 0.92)
 DAILY = {"weekday": False, "every_days": 1, "hold_days": 1, "keep": True}
+# --mom-buffer B (owner, 2026-11-11, paper only; research §37): with keep, a held coin stays while it is among the
+# strongest (longs) or weakest (shorts) B, not just n; the basket is filled back to n from the top. B = 7: the worst
+# drawdown $358 instead of $578 for 11% less profit, the same Sharpe in both periods
+
+
+def momentum_picks(ranked, n, held=None, buffer=None):
+    """[(symbol, score, side)]: n shorts from the weak end of `ranked` (weakest first) and n longs from the strong
+    end. With `held` ({symbol: side}) and a buffer B > n, a held coin still among the B on its side is picked first."""
+    held, B = held or {}, max(int(buffer or n), n)
+    score = dict(ranked); out, taken = [], set()
+    for side, lst in (("short", [s for s, _ in ranked]), ("long", [s for s, _ in reversed(ranked)])):
+        keep = [s for s in lst[:B] if held.get(s) == side and s not in taken]
+        pick = keep + [s for s in lst if s not in keep and s not in taken][:n - len(keep)]
+        for s in pick[:n]:
+            out.append((s, score[s], side)); taken.add(s)
+    return out
 
 
 def momentum_public_name():
@@ -163,7 +179,9 @@ def run_once_momentum(ex):
         ranked = bot.momentum_rank(ex)
         if len(ranked) >= M.get("min_ranked", 20) and len(ranked) >= 2 * M["n"]:
             closed = 0.0
-            lev = int(bot.CONFIG.get("leverage", 2)); picks = [(s, r, "short") for s, r in ranked[:M["n"]]] + [(s, r, "long") for s, r in ranked[-M["n"]:]]
+            lev = int(bot.CONFIG.get("leverage", 2))
+            held = {s: p["side"] for s, p in state["positions"].items()} if M.get("keep") else {}
+            picks = momentum_picks(ranked, M["n"], held, M.get("buffer"))
             # --mom-daily keeps a coin still in the day's basket on the same side: no exit, no new entry for it
             want = {sym: side for sym, _, side in picks}
             keep = {s for s, p in state["positions"].items() if M.get("keep") and want.get(s) == p["side"]}

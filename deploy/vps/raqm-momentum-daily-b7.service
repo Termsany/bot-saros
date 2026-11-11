@@ -1,0 +1,27 @@
+[Unit]
+Description=Raqm bot — momentum daily buffer 7: the daily basket, a held coin stays while among the strongest/weakest 7 (paper, research §37)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=raqm
+Group=raqm
+WorkingDirectory=/opt/raqm-momentum-daily-b7
+EnvironmentFile=-/opt/raqm-bot/.env
+Environment=PYTHONUNBUFFERED=1
+# owner, 2026-11-11 (research §37): next to raqm-momentum-daily, the same daily basket with a buffer — a held coin
+# stays while it is among the strongest (longs) or weakest (shorts) 7, not just 5. Backtest: the worst drawdown $358
+# instead of $578 for 11% less profit. Own state (state_momentum_daily_b7.json / .log), page data ->
+# momentum_daily_b7.json. Paper only (bot.py refuses --mom-buffer otherwise). Its own code folder
+# (deploy.sh paper:momentum-daily-b7); it shares the other paper bots' venv and Telegram settings only.
+ExecStart=/opt/raqm-bot/venv/bin/python -E -s bot.py --paper --strategy momentum_daily_b7 --amount 100 --leverage 2 --poll 60 --notify --public /var/www/bot.da3m.io --state state_momentum_daily_b7.json
+Restart=always
+RestartSec=30
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/raqm-momentum-daily-b7 /var/www/bot.da3m.io
+
+[Install]
+WantedBy=multi-user.target
