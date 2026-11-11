@@ -69,6 +69,7 @@ install -m 644 -o root -g root "$T/scripts/restore_check.py" "$L/scripts/restore
 install -d -o root -g root -m 755 /usr/local/lib/raqm
 install -m 644 -o root -g root "$T/deploy/vps/tools/set_demo_keys.sh" /usr/local/lib/raqm/set_demo_keys.sh
 install -m 644 -o root -g root "$T/deploy/vps/tools/set_reviewers.py" /usr/local/lib/raqm/set_reviewers.py
+install -m 644 -o root -g root "$T/deploy/vps/tools/rebase_hwm.py" /usr/local/lib/raqm/rebase_hwm.py   # the high-water mark after a withdrawal
 install -m 644 -o root -g root "$T/deploy/vps/tools/live_account.py" /usr/local/lib/raqm/live_account.py   # a live strategy on its own sub-account
 # what a real rebalance cost (read only), run after the Monday check: kept here, not in $L, so it can be updated
 # without touching the real bot's folder (whose code the readiness evidence is bound to)
