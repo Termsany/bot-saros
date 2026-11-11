@@ -774,6 +774,40 @@ losers hides them in the closed-trade numbers. C2 holds there too.
 - **Decision:** nothing changes on a bot. C2 is the candidate for a third RSI-2 paper bot, next to `raqm-rsi2` and
   `raqm-rsi2-btc`, to see whether 85%+ holds live.
 
+### 37. Momentum daily: no shorts, or a buffer before a coin leaves? Keep the shorts; a buffer of 7 halves the drawdown at some profit (`momentum_daily_study.py`, 2026-11-11)
+
+The daily basket the real accounts run (`--mom-daily`, keeping the coins still in it), simulated day by day with
+re-entry after a stop. Each leg is $20 ×2, the stop 40%, fees 0.04%, real funding. The owner's two ideas:
+- **Shorts:** full, half size, none, or only while BTC is under its 200-day average.
+- **A buffer:** a coin stays while it is in the strongest (or weakest) B, not just 5.
+
+Chosen on before 2024, judged on 2024 → 2026-10.
+
+| variant | legs | net | long / short | worst DD | Sharpe < 2024 | Sharpe 2024 → | 2022 | 2026 |
+|---|---|---|---|---|---|---|---|---|
+| **buffer 5, full shorts (runs)** | 6,192 | +$3,097 | 2,862 / 235 | $578 | 1.16 | 0.93 | −100 | +231 |
+| buffer 5, no shorts (best before 2024) | 2,665 | +$2,862 | 2,862 / 0 | $650 | 1.41 | 0.68 | −359 | +84 |
+| buffer 5, shorts only in a bear market | 4,128 | +$2,849 | 2,862 / −13 | $597 | 1.35 | 0.70 | −103 | +164 |
+| buffer 5, half shorts | 6,192 | +$2,979 | 2,862 / 117 | $614 | 1.31 | 0.81 | −230 | +157 |
+| **buffer 7, full shorts** | 4,070 | +$2,742 | 2,367 / 375 | **$358** | 1.12 | **0.97** | **−44** | 0 |
+| buffer 10, full shorts | 3,069 | +$2,125 | 1,913 / 212 | $328 | 1.00 | 0.81 | −11 | +29 |
+| buffer 15, full shorts | 2,396 | +$1,045 | 925 / 119 | $522 | 0.45 | 0.55 | −135 | −300 |
+
+- **Keep the shorts.**
+  - They make little on their own (+$235), but they are the hedge.
+  - Without them the worst drawdown grows ($578 → $650), 2022 loses 3.6 times as much, and Sharpe after 2024 falls
+    from 0.93 to 0.68.
+  - "No shorts" is the best variant before 2024 and among the worst after: picked on its past it would be hindsight.
+    Shorting only in a bear market does no better.
+- **A buffer of 7 is a trade-off, not a win.**
+  - It cuts a third of the legs and 38% of the worst drawdown ($578 → $358), and it nearly halves 2022's loss.
+  - Its Sharpe is the same in both periods (1.12 / 0.97 against 1.16 / 0.93), for 11% less profit, and 2026 so far
+    is flat.
+  - Wider buffers lose: a coin kept after it has stopped leading drags.
+- Across all 16 variants the two periods agree only moderately (rank correlation of Sharpe +0.45).
+- **Decision:** nothing changes on a bot. Buffer 7 is the candidate for a paper bot next to `raqm-momentum-daily`,
+  if the owner wants a lower-drawdown version measured live.
+
 ## The site now shows only the four paper bots
 
 `research/bots_stats.py` writes `lib/bot-stats.json` (the numbers the site shows); the dashboard's live section and
