@@ -127,8 +127,15 @@ def run_loop():
             bot.log(f"=== عكس الأغلبية: لونج أقل {M['n']} وشورت أعلى {M['n']} في نسبة لونج/شورت الحسابات من أعلى {M['top']} فوليوم — {mode} — تبديل كل أربع 00:00 UTC، وقف {M['stop']:.0%} | هامش {bot.CONFIG['trade_amount_usdt']} USDT x{bot.CONFIG.get('leverage',2)} ===")
             bot.notify(f"▶️ بوت عكس الأغلبية اشتغل ({mode})\nكل أربع: لونج أقل {M['n']} وشورت أعلى {M['n']} في نسبة لونج/شورت من أعلى {M['top']} عملة فوليوم")
         else:
-            bot.log(f"=== مومنتم: لونج أقوى {M['n']} وشورت أضعف {M['n']} من أعلى {M['top']} فوليوم (عائد {M['weeks']} أسبوع) — {mode} — تبديل كل اتنين 00:00 UTC، وقف {M['stop']:.0%} | هامش {bot.CONFIG['trade_amount_usdt']} USDT x{bot.CONFIG.get('leverage',2)} ===")
-            bot.notify(f"▶️ بوت المومنتم اشتغل ({mode})\nكل أسبوع: لونج أقوى {M['n']} وشورت أضعف {M['n']} من أعلى {M['top']} عملة فوليوم")
+            # the schedule as MOM says it (Wednesday-6 since 2026-11-11, or every day for momentum_daily)
+            days = ["الاتنين", "التلات", "الأربع", "الخميس", "الجمعة", "السبت", "الحد"]
+            if M.get("weekday") is False:
+                when = f"سلة جديدة كل {M['every_days']} يوم 00:00 UTC" if M["every_days"] > 1 else "سلة جديدة كل يوم 00:00 UTC"
+            else:
+                when = f"يفتح كل {days[M['weekday']]} 00:00 UTC"
+                if M.get("hold_days", 7) < M["every_days"]: when += f" ويقفل بعد {M['hold_days']} أيام"
+            bot.log(f"=== مومنتم: لونج أقوى {M['n']} وشورت أضعف {M['n']} من أعلى {M['top']} فوليوم (عائد {M['weeks']} أسبوع) — {mode} — {when}، وقف {M['stop']:.0%} | هامش {bot.CONFIG['trade_amount_usdt']} USDT x{bot.CONFIG.get('leverage',2)} ===")
+            bot.notify(f"▶️ بوت المومنتم اشتغل ({mode})\n{when}: لونج أقوى {M['n']} وشورت أضعف {M['n']} من أعلى {M['top']} عملة فوليوم")
     elif bot.listing_mode():
         L=bot.LISTING
         bot.log(f"=== شورت العملات الجديدة — {mode} — دخول بعد {L['skip_days']} يوم، خروج بعد {L['hold_days']} يوم، وقف {L['stop']:.0%}، أقصى {L['max_open']} | هامش {bot.CONFIG['trade_amount_usdt']} USDT x{bot.CONFIG.get('leverage',2)} ===")
