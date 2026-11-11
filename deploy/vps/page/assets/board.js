@@ -12,6 +12,7 @@ const BOTS = [
   { k: "status", d: () => D, sec: "trendSec", ar: "الترند اليومي", en: "Daily trend", fam: "trend", kind: "bybit" },
   { k: "listing", d: () => LS, sec: "listingSec", ar: "شورت العملات الجديدة", en: "New listing short", fam: "short", kind: "short" },
   { k: "momentum", d: () => MS, sec: "momSec", ar: "مومنتم", en: "Momentum", fam: "momentum" },
+  { k: "momentum_daily", d: () => MD, sec: "mdSec", ar: "مومنتم يومي", en: "Momentum daily", fam: "momentum" },
   { k: "retail_fade", d: () => RF, sec: "rfSec", ar: "عكس الأغلبية", en: "Against the crowd", fam: "momentum" },
   { k: "ratio", d: () => RS, sec: "ratioSec", ar: "Ratio", en: "Ratio trend", fam: "ratio", risk: true, ab: "A", twin: "ratio_trail_btc" },
   { k: "ratio_trail_btc", d: () => RW, sec: "ratioTwSec", ar: "Ratio · trailing 20%", en: "Ratio · trail 20%", fam: "ratio", risk: true, ab: "B", twin: "ratio",

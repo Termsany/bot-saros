@@ -166,7 +166,7 @@ class RestartTests(_Harness):
 
 
 class PaperTests(_Harness):
-    OWN = {"momentum", "ratio-nobtc", "ratio-trail", "ratio-trail-btc", "retail-fade", "rsi2-btc"}
+    OWN = {"momentum", "momentum-daily", "ratio-nobtc", "ratio-trail", "ratio-trail-btc", "retail-fade", "rsi2-btc"}
 
     def found(self):
         r = self.run_lib(f'paper_bots "{VPS.as_posix()}"')

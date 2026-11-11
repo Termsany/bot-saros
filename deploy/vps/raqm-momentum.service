@@ -7,7 +7,7 @@ Wants=network-online.target
 User=raqm
 Group=raqm
 # owner, 2026-11-09: its own code folder (deploy/vps/install-momentum-paper.sh), so the paper basket follows the
-# current code (rebalance on Monday 00:00 UTC, like the real momentum bot) without touching the other paper bots in
+# current code (Wednesday 00:00 UTC open, Tuesday close, like the real momentum bot) without touching the other paper bots in
 # /opt/raqm-bot. It shares their venv and Telegram settings only.
 WorkingDirectory=/opt/raqm-momentum-paper
 EnvironmentFile=-/opt/raqm-bot/.env

@@ -9,18 +9,26 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-# weekday 0 = Monday (owner, 2026-11-03): the rebalance follows Binance's weekly candle. The weekday is arbitrary in the
-# backtest too (every 7 days from the data's start) and the results swing with it (PF 1.08–1.22 over the 7 days,
-# Monday 1.15): Monday is a fixed, readable anchor, not a fitted one.
-MOM = {"weeks": 2, "top": 50, "n": 5, "min_days": 60, "stop": 0.40, "every_days": 7, "weekday": 0, "score": "return", "min_ranked": 20, "hold_days": 7}
-# hold_days < every_days: the basket closes that many days after it opened and stays flat until the next rebalance.
-# Only bot.py --mom-weekday / --mom-hold change these two, and only on Demo (research/README.md §23: the Wednesday-6
-# experiment, owner 2026-11-06). The real bot runs the defaults: Monday, the full week.
+# Monday and the full week from 2026-11-03 to 2026-11-11.
+# weekday 2 = Wednesday, hold 6 days (owner, 2026-11-11; research/README.md §23): the basket opens on Wednesday
+# 00:00 UTC, closes on Tuesday 00:00 and stays flat until the next Wednesday. The best open day that held up both before
+# 2024 and after (Wednesday-6: +$2,527, worst DD $323, Sharpe 0.83 / 1.34; Monday-7: +$1,943, $476, 0.60 / 1.15).
+MOM = {"weeks": 2, "top": 50, "n": 5, "min_days": 60, "stop": 0.40, "every_days": 7, "weekday": 2, "score": "return", "min_ranked": 20, "hold_days": 6, "catch_up_days": 1}
+# hold_days < every_days: the basket closes that many days after its week began and stays flat until the next
+# rebalance. bot.py --mom-weekday / --mom-hold change these two on Demo only: real money runs the defaults.
+# catch_up_days: a week whose open was missed (bot down, kill switch, foreign positions) still opens up to that many
+# days late (Thursday); after that the bot waits for the next Wednesday rather than open a basket for a few days.
 
 # --momentum-retail (owner, 2026-11-07; research §29, paper only): the same weekly basket, ranked against the crowd —
 # among the top 20 by 30-day volume (150+ days listed), long the 3 whose all-accounts long/short ratio (Binance, the
 # last 3 days' hourly values) is lowest, short the 3 where it is highest; every Wednesday, as the study's weeks ran
-RETAIL = {"top": 20, "n": 3, "min_days": 150, "weekday": 2, "score": "retail", "ls_hours": 72, "min_ranked": 8}
+RETAIL = {"top": 20, "n": 3, "min_days": 150, "weekday": 2, "score": "retail", "ls_hours": 72, "min_ranked": 8, "hold_days": 7}
+
+# --mom-daily (owner, 2026-11-11, paper only): the same ranking, a new basket every day at 00:00 UTC, held one day —
+# to see each day's basket. A coin still in the day's basket on the same side is kept, not closed and reopened (a coin
+# stays 3.9 days on average). Backtest 2019 → 2026-10, $20 x2: keeping them +$3,035 (DD $439, Sharpe 1.16 / 0.91);
+# closing and reopening every leg +$1,587 (the fees); the weekly bot +$2,200 (0.55 / 0.92)
+DAILY = {"weekday": False, "every_days": 1, "hold_days": 1, "keep": True}
 
 
 def momentum_public_name():
@@ -36,8 +44,8 @@ def retail_ratio(ex, sym):
 
 
 def momentum_hold_over(last_iso, today, hold_days=None, every_days=None):
-    """True when the basket opened at `last_iso` has been held `hold_days` and must close before the next rebalance.
-    Never with the defaults (a full week): the rebalance itself closes it."""
+    """True when the basket of the week that began at `last_iso` has been held `hold_days` and must close before the
+    next rebalance (Wednesday-6: Tuesday 00:00). Never with a full week's hold: the rebalance itself closes it."""
     hold = int(hold_days if hold_days is not None else MOM["hold_days"])
     every = int(every_days if every_days is not None else MOM["every_days"])
     if not last_iso or hold >= every:
@@ -45,23 +53,37 @@ def momentum_hold_over(last_iso, today, hold_days=None, every_days=None):
     return today >= datetime.fromisoformat(last_iso) + pd.Timedelta(days=hold)
 
 
-def momentum_due(last_iso, today, every_days=MOM["every_days"], weekday=MOM["weekday"]):
-    """The basket is rebuilt at the first cycle after 00:00 UTC on `weekday`; never twice on one day; and if that day
-    was missed (the bot down all day), as soon as `every_days` have passed. No rebalance yet: now. `today` is 00:00 UTC."""
-    if not last_iso:
-        return True
-    last = datetime.fromisoformat(last_iso)
-    if today - last >= pd.Timedelta(days=every_days):
-        return True
-    return weekday is not None and today.weekday() == weekday and last < today
+def momentum_slot(today, weekday=None):
+    """The start of the basket week `today` (00:00 UTC) falls in: the latest `weekday` on or before it."""
+    weekday = MOM["weekday"] if weekday is None else weekday
+    return today - pd.Timedelta(days=(today.weekday() - weekday) % 7)
 
 
-def momentum_next(last_iso, every_days=MOM["every_days"], weekday=MOM["weekday"]):
+def momentum_due(last_iso, today, every_days=None, weekday=None, hold_days=None, catch_up_days=None):
+    """The basket is rebuilt at the first cycle after 00:00 UTC on `weekday`, once per week. A week whose day was
+    missed (the bot down, or entries blocked) is caught up at most `catch_up_days` later, and never in the flat days
+    after `hold_days`; mom_last then records the week's start, so a late basket keeps the week's close. No rebalance
+    yet: the same window. `today` is 00:00 UTC. Without a weekday (weekday=False): every `every_days` from the last."""
+    every = int(every_days if every_days is not None else MOM["every_days"])
+    weekday = MOM["weekday"] if weekday is None else weekday
+    hold = int(hold_days if hold_days is not None else MOM["hold_days"])
+    late = int(catch_up_days if catch_up_days is not None else MOM.get("catch_up_days", 1))
+    if weekday is False:
+        return not last_iso or today - datetime.fromisoformat(last_iso) >= pd.Timedelta(days=every)
+    slot = momentum_slot(today, weekday)
+    if today >= slot + pd.Timedelta(days=min(hold, every, late + 1)):
+        return False                                       # too late in the week: wait for the next one
+    return not last_iso or datetime.fromisoformat(last_iso) < slot
+
+
+def momentum_next(last_iso, every_days=None, weekday=None):
     """The next rebalance's day (00:00 UTC) after the one recorded: the next `weekday`, within `every_days`."""
     if not last_iso:
         return None
+    every_days = MOM["every_days"] if every_days is None else every_days
+    weekday = MOM["weekday"] if weekday is None else weekday
     last = datetime.fromisoformat(last_iso)
-    if weekday is None:
+    if weekday is False:
         return last + pd.Timedelta(days=every_days)
     return last + pd.Timedelta(days=(weekday - last.weekday()) % 7 or 7)
 
@@ -115,10 +137,12 @@ def run_once_momentum(ex):
                 pnl = bot._paper_close(ex, state, sym, price, f"وقف {pos['sl']:.6g}"); bot.save_state(state)
                 bot.log(f"🔒 وقف {pos['side']} {sym} @ {price:.6g} PnL {pnl:+.4f}")
         except Exception as e: bot.log(f"مومنتم {sym}: {e}")
-    # weekly rebalance, at the first cycle after the daily close (00:00 UTC) on Monday (momentum_due)
+    # weekly rebalance, at the first cycle after the daily close (00:00 UTC) on Wednesday (momentum_due). mom_last
+    # records the week's start (momentum_slot), not the day a late basket opened: the close stays on the week's Tuesday
     today = now.replace(hour=0, minute=0, second=0, microsecond=0)
     last = state.get("mom_last")
-    # the experiment's early close (Demo only, --mom-hold): flat from here until the next rebalance day
+    week = momentum_slot(today, M.get("weekday")).isoformat() if M.get("weekday") is not False else today.isoformat()
+    # the week's close (hold_days from its start): flat from here until the next rebalance day
     if state["positions"] and momentum_hold_over(last, today, M.get("hold_days"), M["every_days"]):
         if not bot.CONFIG["paper_trading"]:
             exits = []
@@ -135,7 +159,7 @@ def run_once_momentum(ex):
                 except Exception as e: bot.log(f"قفل {sym}: {e}")
         bot.save_state(state)
         bot.log(f"⏹️ مومنتم: السلة اتقفلت بعد {M['hold_days']} أيام — مفيش صفقات لحد التبديل الجاي")
-    if bot.momentum_due(last, today, M["every_days"], M.get("weekday")):
+    if bot.momentum_due(last, today, M["every_days"], M.get("weekday"), M.get("hold_days"), M.get("catch_up_days")):
         ranked = bot.momentum_rank(ex)
         if len(ranked) >= M.get("min_ranked", 20) and len(ranked) >= 2 * M["n"]:
             closed = 0.0
@@ -157,31 +181,37 @@ def run_once_momentum(ex):
                     entries.append(bot._phase2_leg(sym, side, bot.position_size(px), px, stop, None, "momentum_ls", extra={"ret": ret}))
                 result = bot._phase2_live_basket(ex, state, "momentum_ls", "momentum-rebalance-entry", entries)
                 if result and result.get("status") == "filled":
-                    state["mom_last"] = today.isoformat(); state["mom_ranking"] = [{"symbol": s.split(":")[0], "ret": round(r * 100, 1)} for s, r in ranked]; bot.save_state(state)
+                    state["mom_last"] = week; state["mom_ranking"] = [{"symbol": s.split(":")[0], "ret": round(r * 100, 1)} for s, r in ranked]; bot.save_state(state)
                 return
+            period = "تبديل يومي" if M["every_days"] == 1 else "تبديل أسبوعي"
+            want = {sym: side for sym, _, side in picks}
+            keep = {s for s, p in state["positions"].items() if M.get("keep") and want.get(s) == p["side"]}
             for sym in list(state["positions"]):
+                if sym in keep: continue                    # still in the basket, same side: held as it is
                 try:
-                    price = float(ex.fetch_ticker(sym)["last"]); closed += bot._paper_close(ex, state, sym, price, "تبديل أسبوعي")
+                    price = float(ex.fetch_ticker(sym)["last"]); closed += bot._paper_close(ex, state, sym, price, period)
                 except Exception as e: bot.log(f"قفل {sym}: {e}")
             for sym, ret, side in picks:
+                if sym in keep:
+                    state["positions"][sym]["ret"] = ret; continue
                 try:
                     price = float(ex.fetch_ticker(sym)["last"]); prices[sym] = price; q = bot.position_size(price) * lev / price
                     sl = price * (1 + M["stop"]) if side == "short" else price * (1 - M["stop"])
                     state["positions"][sym] = {"side": side, "entry": price, "qty": q, "leverage": lev, "time": now.isoformat(),
                                                "sl": sl, "tp": None, "ret": ret}
                 except Exception as e: bot.log(f"فتح {sym}: {e}")
-            state["mom_last"] = today.isoformat()
+            state["mom_last"] = week
             state["mom_ranking"] = [{"symbol": s.split(":")[0], "ret": round(r * 100, 1)} for s, r in ranked]
             bot.save_state(state)
             retail = M.get("score") == "retail"
             fmt = (lambda r: f"L/S {r:.2f}") if retail else (lambda r: f"{r * 100:+.0f}%")
             longs = ", ".join(f"{s.split('/')[0]} {fmt(r)}" for s, r, sd in picks if sd == "long")
             shorts = ", ".join(f"{s.split('/')[0]} {fmt(r)}" for s, r, sd in picks if sd == "short")
-            bot.log(f"🔄 مومنتم: تبديل أسبوعي — قفل {closed:+.4f} | لونج: {longs} | شورت: {shorts}")
+            bot.log(f"🔄 مومنتم: {period} — قفل {closed:+.4f} | لونج: {longs} | شورت: {shorts}")
             if retail:
                 bot.notify(f"🔄 عكس الأغلبية — تبديل أسبوعي (Paper)\nالأسبوع اللي فات: {closed:+.2f}$\n🟢 لونج (الأغلبية شورت): {longs}\n🔴 شورت (الأغلبية لونج): {shorts}")
             else:
-                bot.notify(f"🔄 مومنتم — تبديل أسبوعي (Paper)\nالأسبوع اللي فات: {closed:+.2f}$\n🟢 لونج الأقوى: {longs}\n🔴 شورت الأضعف: {shorts}")
+                bot.notify(f"🔄 مومنتم — {period} (Paper)\n{'امبارح' if M['every_days'] == 1 else 'الأسبوع اللي فات'}: {closed:+.2f}$\n🟢 لونج الأقوى: {longs}\n🔴 شورت الأضعف: {shorts}")
         else: bot.log(f"مومنتم: {len(ranked)} عملة بس في القائمة — مفيش تبديل")
         if M.get("score") == "retail":       # its ranking on the page: the crowd's ratio, not a 2-week return
             state["mom_ranking"] = [{"symbol": s.split(":")[0], "ratio": round(r, 3)} for s, r in ranked]; bot.save_state(state)

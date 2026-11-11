@@ -1,5 +1,8 @@
 # The momentum day experiment on Demo: Wednesday open, 6 days held
 
+> **Superseded 2026-11-11:** the owner moved every momentum_ls bot to Wednesday-6 without this Demo step
+> (docs/momentum-wednesday.md). This unit now runs the same rule as the real bot.
+
 **Owner's decision, 2026-11-06.** It tests on Binance Demo the best variant of research/README.md §23 that held up in
 both periods: momentum_ls opening on **Wednesday 00:00 UTC** and closing after **6 days** (Tuesday 00:00), flat until
 the next Wednesday. **The real bot doesn't change:** `raqm-live@momentum_ls` keeps Monday and the full week. `bot.py`

@@ -120,11 +120,11 @@ class RebalanceCheckTests(unittest.TestCase):
         ok, why = rc.key_source("trend_daily", acc, str(d / "other"), d)
         self.assertFalse(ok); self.assertIn("CREDENTIALS_DIRECTORY=/etc/raqm-live/accounts/trend", why)
 
-    def test_setup_installs_the_script_and_the_monday_timer(self):
+    def test_setup_installs_the_script_and_the_wednesday_timer(self):
         s = (ROOT / "deploy" / "vps" / "setup-live.sh").read_text(encoding="utf-8")
         self.assertIn("scripts/rebalance_check.py", s); self.assertIn("raqm-rebalance-check.timer", s)
         t = (ROOT / "deploy" / "vps" / "raqm-rebalance-check.timer").read_text(encoding="utf-8")
-        self.assertIn("OnCalendar=Mon *-*-* 00:20:00 UTC", t)
+        self.assertIn("OnCalendar=Wed *-*-* 00:20:00 UTC", t)
         u = (ROOT / "deploy" / "vps" / "raqm-rebalance-check.service").read_text(encoding="utf-8")
         self.assertIn("User=raqmlive", u); self.assertIn("--rebalance-day --telegram", u); self.assertIn("ProtectSystem=strict", u)
         # then the costs (development-plan 2.5), from where setup-live.sh installs them, never failing the check

@@ -8,7 +8,7 @@ exchange exit price and a net PnL, and no order is left on those coins. Places, 
 Run as raqmlive with the real key (the same file the bot reads):
   sudo -u raqmlive sh -c 'set -a; . /opt/raqm-live/.env.real; . /opt/raqm-live/.env.telegram; set +a; \
       cd /opt/raqm-live && venv/bin/python -E -s scripts/rebalance_check.py [--rebalance-day] [--telegram]'
-raqm-rebalance-check.timer runs it with both flags on Mondays at 00:20 UTC.
+raqm-rebalance-check.timer runs it with both flags on Wednesdays at 00:20 UTC.
 
 Any other live strategy: --strategy <name> checks its positions and stops against its own Binance account (no basket
 or rebalance lines). A strategy on its own sub-account (backend/app/live_accounts.py) is checked with that account's

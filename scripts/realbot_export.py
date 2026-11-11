@@ -25,11 +25,11 @@ TRADE_FIELDS = ("symbol", "side", "entry", "exit", "qty", "pnl", "pnl_pct", "rea
 HISTORY = 100
 # the real-money bots' own state (raqmlive's): the basket strategy's last rebalance, for the page's "next rebalance"
 STATE = Path(os.getenv("RAQM_LIVE_STATE", "/opt/raqm-live/state"))
-REBALANCE_WEEKDAY = 0    # Monday, as bot.MOM["weekday"] (test_realbot_export checks it against bot.momentum_next)
+REBALANCE_WEEKDAY = 2    # Wednesday, as bot.MOM["weekday"] (test_realbot_export checks it against bot.momentum_next)
 
 
 def next_rebalance(last_iso):
-    """bot.momentum_next without importing the bot: the next Monday 00:00 UTC after the last rebalance."""
+    """bot.momentum_next without importing the bot: the next Wednesday 00:00 UTC after the last rebalance."""
     try:
         last = datetime.fromisoformat(last_iso)
     except (TypeError, ValueError):

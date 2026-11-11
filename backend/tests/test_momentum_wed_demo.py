@@ -18,11 +18,10 @@ def day(s):
 
 
 class HoldRuleTests(unittest.TestCase):
-    def test_the_defaults_never_close_early(self):
-        self.assertEqual((botmod.MOM["weekday"], botmod.MOM["hold_days"], botmod.MOM["every_days"]), (0, 7, 6 + 1))
+    def test_a_full_week_never_closes_early(self):
         last = day("2026-11-09").isoformat()
         for d in range(1, 15):
-            self.assertFalse(botmod.momentum_hold_over(last, day("2026-11-09") + timedelta(days=d)))
+            self.assertFalse(botmod.momentum_hold_over(last, day("2026-11-09") + timedelta(days=d), 7, 7))
 
     def test_wednesday_six_closes_on_tuesday_and_reopens_on_wednesday(self):
         last = day("2026-11-11").isoformat()                       # a Wednesday basket
@@ -58,7 +57,8 @@ class DemoBasketTests(unittest.TestCase):
         self.td.cleanup()
 
     def open_basket(self, ex):
-        with mock.patch.object(botmod, "momentum_rank", return_value=ranked()):
+        # opened on its own rebalance day (a basket opens only in its week's first days, momentum_due)
+        with mock.patch.object(botmod, "momentum_rank", return_value=ranked()), mock.patch.dict(botmod.MOM, {"weekday": self.today.weekday()}):
             botmod.run_once_momentum(ex)
         self.assertEqual(len(botmod.load_state()["positions"]), 10)
 
@@ -87,7 +87,8 @@ class DemoBasketTests(unittest.TestCase):
         self.assertEqual(len(botmod.load_state()["positions"]), 10)
 
     def test_the_full_week_never_closes_early(self):
-        ex = MomentumFakeBinance(); self.open_basket(ex)           # the defaults: Monday, 7 days
+        botmod.MOM.update({"hold_days": 7})                         # a full week's hold (the crowd bot's)
+        ex = MomentumFakeBinance(); self.open_basket(ex)
         botmod.MOM.update({"weekday": (self.today.weekday() + 1) % 7})
         self.age(6)
         botmod.run_once_momentum(ex)

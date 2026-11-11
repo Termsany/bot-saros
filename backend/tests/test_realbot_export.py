@@ -82,7 +82,7 @@ class RealbotExportTests(unittest.TestCase):
         (state / "live-momentum_ls.json").write_text(json.dumps({"mom_last": "2026-11-03T00:00:00+00:00", "positions": {}}), encoding="utf-8")
         self.put("momentum_ls", status()); self.put("trend_daily", dict(status(), strategy="trend_daily"))
         bots = {b["strategy"]: b for b in rx.build(self.ipc, NOW, state)["bots"]}
-        self.assertEqual(bots["momentum_ls"]["next_rebalance"], "2026-11-09T00:00:00+00:00")   # the Monday after Tuesday
+        self.assertEqual(bots["momentum_ls"]["next_rebalance"], "2026-11-04T00:00:00+00:00")   # the Wednesday after Tuesday
         self.assertIsNone(bots["trend_daily"]["next_rebalance"])                               # not a weekly basket
         sys.path.insert(0, str(ROOT)); import bot as botmod
         self.assertEqual(rx.REBALANCE_WEEKDAY, botmod.MOM["weekday"])
