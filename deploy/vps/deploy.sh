@@ -160,7 +160,7 @@ deploy_live() {
         check_present "$R" backend/app; check_present "$R" scripts
         [ "$(file_commit "$R/DEPLOYED_COMMIT")" = "$SHA" ] || { err "  FAIL $R/DEPLOYED_COMMIT is not $SHA"; FAILS=$((FAILS+1)); }
     done
-    for t in set_demo_keys.sh set_reviewers.py live_account.py; do check_file "deploy/vps/tools/$t" "/usr/local/lib/raqm/$t"; done
+    for t in set_demo_keys.sh set_reviewers.py rebase_hwm.py live_account.py; do check_file "deploy/vps/tools/$t" "/usr/local/lib/raqm/$t"; done
     check_file scripts/rebalance_costs.py /usr/local/lib/raqm/rebalance_costs.py
     check_file deploy/vps/realbot/index.html /var/www/realbot.da3m.io/index.html
     for u in $LIVE_UNITS; do check_file "deploy/vps/$u" "$UNITS/$u"; done

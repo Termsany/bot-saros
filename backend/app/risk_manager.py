@@ -262,7 +262,7 @@ def _ensure_legacy_migrated(con, path):
 
 
 _META_KEYS = ("limits", "kill_switch", "equity_high_water_mark", "equity_observed_at", "daily", "equity_last",
-              "transfers_through", "transfers_applied")
+              "transfers_through", "transfers_applied", "hwm_rebases")
 TRANSFERS_KEPT = 20      # the last transfers applied, for the admin page and the audit
 
 
@@ -751,6 +751,47 @@ def trip_kill_switch(path, reason, *, by="manual"):
 def reset_kill_switch(path, *, operator):
     def mutate(state): state["kill_switch"] = {"tripped": False, "reason": None, "at": _now(), "by": f"reset:{operator}"}
     _mutate_meta(path, mutate)
+
+
+HWM_REBASES_KEPT = 20
+REBASE_MAX_AGE_S = 600          # the equity the owner confirms must be one the bot read in the last 10 minutes
+REBASE_TOLERANCE = 0.005        # ... and within 0.5% of it: the balance moves between the bot's reading and the typing
+
+
+def rebase_high_water_mark(path, *, equity_usdt, operator, now=None):
+    """The owner's step when money left the account in a way the ledger can't net out (withdrawn before #151's
+    transfer watermark existed: the main account read an 81% drawdown on 2026-11-09 for money taken out, not lost).
+    Sets the high-water mark and today's starting equity to `equity_usdt`, which must match the equity the bot last
+    read (equity_last, at most REBASE_MAX_AGE_S old, within REBASE_TOLERANCE): the owner types what the dashboard
+    shows and the ledger refuses a figure it hasn't seen. Never touches the kill switch — resetting it stays its own
+    step. Records each rebase (who, when, from, to). Returns (old high-water mark, new)."""
+    eq = _finite(equity_usdt)
+    if eq is None or eq <= 0:
+        raise ValueError("equity must be a positive number")
+    if not str(operator or "").strip():
+        raise ValueError("operator: who is doing this")
+    out = {}
+
+    def mutate(state):
+        last, at = _finite(state.get("equity_last")), state.get("equity_observed_at")
+        if last is None or not at:
+            raise ValueError("the ledger has no equity reading yet: let the bot run a cycle first")
+        stamp = datetime.fromisoformat(at.replace("Z", "+00:00")) if isinstance(at, str) else datetime.fromtimestamp(float(at), tz=timezone.utc)
+        age = ((now or datetime.now(timezone.utc)) - stamp).total_seconds()
+        if not -60 <= age <= REBASE_MAX_AGE_S:
+            raise ValueError(f"the ledger's last equity reading is {int(age)} s old (at most {REBASE_MAX_AGE_S}): let the bot run a cycle first")
+        if abs(eq - last) > REBASE_TOLERANCE * last:
+            raise ValueError(f"{eq:g} is not the equity the bot last read ({last:g}, within {REBASE_TOLERANCE:.1%})")
+        old = state.get("equity_high_water_mark")
+        state["equity_high_water_mark"] = eq
+        daily = state.setdefault("daily", {"date": None, "realized_pnl": 0.0, "start_equity": None})
+        daily.update({"date": _today(), "start_equity": eq, "realized_pnl": 0.0})
+        log = list(state.get("hwm_rebases") or [])
+        log.append({"at": _now(), "by": str(operator).strip()[:60], "from": old, "to": eq, "equity_last": last})
+        state["hwm_rebases"] = log[-HWM_REBASES_KEPT:]
+        out["old"] = old
+    _mutate_meta(path, mutate)
+    return out["old"], eq
 
 
 def update_limits(path, patch):
