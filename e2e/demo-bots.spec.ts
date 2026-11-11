@@ -60,7 +60,7 @@ test("real money: the user types an amount and a margin, sees the risk, and the 
   await expect(risk).toContainText("−$16")                                       // one stop: 20 × 2 × 40%
   await expect(risk).toContainText("−$160")                                      // the worst week: all 10 legs at their stops
   await page.getByPlaceholder("اكتب نص الموافقة بالكامل هنا").fill(CONSENT_TEXT)
-  await expect(page.getByText(/بوافق على خطورة متوسطة: أسوأ أسبوع ممكن يخسّرني \$160/)).toBeVisible()
+  await expect(page.getByText(/بوافق على خطورة متوسطة: أسوأ حالة ممكن تخسّرني \$160/)).toBeVisible()
   await page.getByRole("checkbox", { name: /بوافق على/ }).check()
   await page.getByRole("button", { name: "وافق على الفلوس الحقيقية" }).click()
   await expect.poll(() => a.calls.filter(c => c.path === "/api/user/live/enable").length).toBe(1)
