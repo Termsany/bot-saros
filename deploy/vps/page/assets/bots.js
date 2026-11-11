@@ -45,7 +45,7 @@ async function loadListing(){
 }
 function bsubscribe(){
   if(!bws || bws.readyState !== 1) return
-  const ids = [...(LS ? LS.positions : []), ...(typeof MS !== "undefined" && MS ? MS.positions : []), ...(typeof RF !== "undefined" && RF ? RF.positions : []),
+  const ids = [...(LS ? LS.positions : []), ...(typeof MS !== "undefined" && MS ? MS.positions : []), ...(typeof MD !== "undefined" && MD ? MD.positions : []), ...(typeof RF !== "undefined" && RF ? RF.positions : []),
                ...(typeof RS !== "undefined" && RS ? RS.pairs.flatMap(p => [p.long, p.short]) : []),
                ...(typeof RN !== "undefined" && RN ? RN.pairs.flatMap(p => [p.long, p.short]) : []),
                ...(typeof RT !== "undefined" && RT ? RT.pairs.flatMap(p => [p.long, p.short]) : []),
@@ -70,25 +70,24 @@ setInterval(() => { if(bdirty){ bdirty = false; renderListing() } }, 1000)
 // ── weekly momentum long/short (third paper bot): momentum.json every 15 s, prices on the same Binance stream ──
 let MS = null
 const sideTag = s => s === "long" ? `<span style="color:var(--profit);font-weight:700">LONG</span>` : `<span style="color:var(--loss);font-weight:700">SHORT</span>`
-function renderMomentum(){
-  const sec = $("momSec")
-  if(!MS){ sec.style.display = "none"; return }
+function renderMomBot(d, p, secId, wait){
+  const sec = $(secId)
+  if(!d){ sec.style.display = "none"; return }
   sec.style.display = ""
-  const d = MS
-  $("msUpdated").textContent = `${tx("آخر دورة", "last cycle")} ${ago(d.updated)}`
+  $(p + "Updated").textContent = `${tx("آخر دورة", "last cycle")} ${ago(d.updated)}`
   const pos = d.positions.map(p => {
     const price = blive[p.id] ?? p.price, sg = p.side === "long" ? 1 : -1, pnl = sg * (price - p.entry) * p.qty
     return { ...p, price, pnl, pnl_pct: p.margin ? pnl / p.margin * 100 : 0 }
   })
   const s = d.stats, unreal = pos.reduce((a, p) => a + p.pnl, 0), total = s.realized + unreal
-  $("msRealized").innerHTML = `<span class="${tone(s.realized)}">${usd(s.realized)}</span>`
-  $("msWl").textContent = tx(`${s.closed} اتقفلت · ${s.wins} كسبانة / ${s.losses} خسرانة`, `${s.closed} closed · ${s.wins} won / ${s.losses} lost`)
-  $("msUnreal").innerHTML = `<span class="${tone(unreal)}">${usd(unreal)}</span>`
-  $("msOpen").textContent = tx(`${pos.filter(p => p.side === "long").length} لونج · ${pos.filter(p => p.side === "short").length} شورت`, `${pos.filter(p => p.side === "long").length} long · ${pos.filter(p => p.side === "short").length} short`)
-  $("msMargin").textContent = `${tx("هامش مستخدم", "margin in use")} $${pos.reduce((a, p) => a + p.margin, 0).toFixed(0)}`
-  $("msNext").textContent = d.next_rebalance ? new Date(d.next_rebalance).toLocaleDateString(L === "en" ? "en-GB" : "ar-EG", {weekday: "long", day: "numeric", month: "short", timeZone: "UTC"}) : "—"
-  $("msTotal").innerHTML = `${tx("الإجمالي", "Total")} <b class="mono ${tone(total)}">${usd(total)}</b>`
-  $("msPositions").innerHTML = pos.length ? pos.map(p => `<tr>
+  $(p + "Realized").innerHTML = `<span class="${tone(s.realized)}">${usd(s.realized)}</span>`
+  $(p + "Wl").textContent = tx(`${s.closed} اتقفلت · ${s.wins} كسبانة / ${s.losses} خسرانة`, `${s.closed} closed · ${s.wins} won / ${s.losses} lost`)
+  $(p + "Unreal").innerHTML = `<span class="${tone(unreal)}">${usd(unreal)}</span>`
+  $(p + "Open").textContent = tx(`${pos.filter(p => p.side === "long").length} لونج · ${pos.filter(p => p.side === "short").length} شورت`, `${pos.filter(p => p.side === "long").length} long · ${pos.filter(p => p.side === "short").length} short`)
+  $(p + "Margin").textContent = `${tx("هامش مستخدم", "margin in use")} $${pos.reduce((a, p) => a + p.margin, 0).toFixed(0)}`
+  $(p + "Next").textContent = d.next_rebalance ? new Date(d.next_rebalance).toLocaleDateString(L === "en" ? "en-GB" : "ar-EG", {weekday: "long", day: "numeric", month: "short", timeZone: "UTC"}) : "—"
+  $(p + "Total").innerHTML = `${tx("الإجمالي", "Total")} <b class="mono ${tone(total)}">${usd(total)}</b>`
+  $(p + "Positions").innerHTML = pos.length ? pos.map(p => `<tr>
       <td class="coin">${esc(p.symbol.replace("/USDT", ""))}</td>
       <td>${sideTag(p.side)}</td>
       <td class="num mono ${tone(p.ret)}">${p.ret > 0 ? "+" : ""}${Number(p.ret).toFixed(0)}%</td>
@@ -97,9 +96,9 @@ function renderMomentum(){
       <td class="num mono" style="color:var(--faint)">${px(p.sl)}</td>
       <td class="num mono ${tone(p.pnl)}">${usd(p.pnl)}</td>
       <td class="num mono ${tone(p.pnl_pct)}">${p.pnl_pct > 0 ? "+" : ""}${p.pnl_pct.toFixed(1)}%</td></tr>`).join("")
-    : `<tr><td colspan="8" class="empty">${tx("مفيش صفقات مفتوحة — مستني التبديل الأسبوعي", "No open trades — waiting for the weekly rebalance")}</td></tr>`
-  $("msHistCount").textContent = d.history.length ? `${tx("آخر", "last")} ${d.history.length}` : ""
-  if(d.history.length) $("msHistory").innerHTML = d.history.slice(0, 100).map(h => `<tr>
+    : `<tr><td colspan="8" class="empty">${wait()}</td></tr>`
+  $(p + "HistCount").textContent = d.history.length ? `${tx("آخر", "last")} ${d.history.length}` : ""
+  if(d.history.length) $(p + "History").innerHTML = d.history.slice(0, 100).map(h => `<tr>
       <td class="coin">${esc(h.symbol.replace("/USDT", ""))}</td>
       <td>${sideTag(h.side)}</td>
       <td class="num mono">${px(h.entry)}</td>
@@ -108,6 +107,7 @@ function renderMomentum(){
       <td style="color:var(--muted)">${esc(rsn(h.reason))}</td>
       <td class="mono" style="color:var(--muted)">${day(h.time)}</td></tr>`).join("")
 }
+function renderMomentum(){ renderMomBot(MS, "ms", "momSec", () => tx("مفيش صفقات مفتوحة — مستني التبديل الأسبوعي", "No open trades — waiting for the weekly rebalance")) }
 async function loadMomentum(){
   try{ const r = await fetch(`momentum.json?t=${Date.now()}`, {cache: "no-store"}); if(!r.ok) throw 0; MS = await r.json(); renderMomentum(); bsubscribe() }
   catch{ if(!MS) renderMomentum() }
@@ -115,6 +115,16 @@ async function loadMomentum(){
 loadMomentum()
 setInterval(loadMomentum, 15000)
 setInterval(() => { if(MS) renderMomentum() }, 1000)
+// ── momentum daily (owner, 2026-11-11): momentum_daily.json every 15 s, a new basket every day ──
+let MD = null
+function renderMomDaily(){ renderMomBot(MD, "md", "mdSec", () => tx("مفيش صفقات مفتوحة — مستني سلة بكرة", "No open trades — waiting for tomorrow's basket")) }
+async function loadMomDaily(){
+  try{ const r = await fetch(`momentum_daily.json?t=${Date.now()}`, {cache: "no-store"}); if(!r.ok) throw 0; MD = await r.json(); renderMomDaily(); bsubscribe() }
+  catch{ if(!MD) renderMomDaily() }
+}
+loadMomDaily()
+setInterval(loadMomDaily, 15000)
+setInterval(() => { if(MD) renderMomDaily() }, 1000)
 // ── against the crowd (research §29): retail_fade.json every 15 s, legs priced on the same Binance stream ──
 let RF = null
 function renderRetail(){

@@ -1,0 +1,28 @@
+[Unit]
+Description=Raqm bot — momentum daily: the momentum_ls ranking, a new basket every day at 00:00 UTC (paper)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=raqm
+Group=raqm
+WorkingDirectory=/opt/raqm-momentum-daily
+EnvironmentFile=-/opt/raqm-bot/.env
+Environment=PYTHONUNBUFFERED=1
+# owner, 2026-11-11: to see each day's basket. Every day at 00:00 UTC it ranks the top 50 by 30-day volume on their
+# last 2 weeks' return, closes yesterday's legs and opens the strongest 5 long and the weakest 5 short, 40% stop,
+# $100 margin x2 a leg, like the other paper bots. Own state (state_momentum_daily.json / .log), page data ->
+# momentum_daily.json, Telegram messages marked [momentum daily]. Paper only (bot.py refuses --mom-daily otherwise):
+# no order reaches an exchange. Its own code folder (deploy.sh paper:momentum-daily); it shares the other paper bots'
+# venv and Telegram settings only.
+ExecStart=/opt/raqm-bot/venv/bin/python -E -s bot.py --paper --strategy momentum_daily --amount 100 --leverage 2 --poll 60 --notify --public /var/www/bot.da3m.io --state state_momentum_daily.json
+Restart=always
+RestartSec=30
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/raqm-momentum-daily /var/www/bot.da3m.io
+
+[Install]
+WantedBy=multi-user.target

@@ -24,6 +24,12 @@ MOM = {"weeks": 2, "top": 50, "n": 5, "min_days": 60, "stop": 0.40, "every_days"
 # last 3 days' hourly values) is lowest, short the 3 where it is highest; every Wednesday, as the study's weeks ran
 RETAIL = {"top": 20, "n": 3, "min_days": 150, "weekday": 2, "score": "retail", "ls_hours": 72, "min_ranked": 8, "hold_days": 7}
 
+# --mom-daily (owner, 2026-11-11, paper only): the same ranking, a new basket every day at 00:00 UTC, held one day —
+# to see each day's basket. A coin still in the day's basket on the same side is kept, not closed and reopened (a coin
+# stays 3.9 days on average). Backtest 2019 → 2026-10, $20 x2: keeping them +$3,035 (DD $439, Sharpe 1.16 / 0.91);
+# closing and reopening every leg +$1,587 (the fees); the weekly bot +$2,200 (0.55 / 0.92)
+DAILY = {"weekday": False, "every_days": 1, "hold_days": 1, "keep": True}
+
 
 def momentum_public_name():
     """The momentum bot's public file and paper close-request folder: "momentum", or --public-name for a second one."""
@@ -177,11 +183,17 @@ def run_once_momentum(ex):
                 if result and result.get("status") == "filled":
                     state["mom_last"] = week; state["mom_ranking"] = [{"symbol": s.split(":")[0], "ret": round(r * 100, 1)} for s, r in ranked]; bot.save_state(state)
                 return
+            period = "تبديل يومي" if M["every_days"] == 1 else "تبديل أسبوعي"
+            want = {sym: side for sym, _, side in picks}
+            keep = {s for s, p in state["positions"].items() if M.get("keep") and want.get(s) == p["side"]}
             for sym in list(state["positions"]):
+                if sym in keep: continue                    # still in the basket, same side: held as it is
                 try:
-                    price = float(ex.fetch_ticker(sym)["last"]); closed += bot._paper_close(ex, state, sym, price, "تبديل أسبوعي")
+                    price = float(ex.fetch_ticker(sym)["last"]); closed += bot._paper_close(ex, state, sym, price, period)
                 except Exception as e: bot.log(f"قفل {sym}: {e}")
             for sym, ret, side in picks:
+                if sym in keep:
+                    state["positions"][sym]["ret"] = ret; continue
                 try:
                     price = float(ex.fetch_ticker(sym)["last"]); prices[sym] = price; q = bot.position_size(price) * lev / price
                     sl = price * (1 + M["stop"]) if side == "short" else price * (1 - M["stop"])
@@ -195,11 +207,11 @@ def run_once_momentum(ex):
             fmt = (lambda r: f"L/S {r:.2f}") if retail else (lambda r: f"{r * 100:+.0f}%")
             longs = ", ".join(f"{s.split('/')[0]} {fmt(r)}" for s, r, sd in picks if sd == "long")
             shorts = ", ".join(f"{s.split('/')[0]} {fmt(r)}" for s, r, sd in picks if sd == "short")
-            bot.log(f"🔄 مومنتم: تبديل أسبوعي — قفل {closed:+.4f} | لونج: {longs} | شورت: {shorts}")
+            bot.log(f"🔄 مومنتم: {period} — قفل {closed:+.4f} | لونج: {longs} | شورت: {shorts}")
             if retail:
                 bot.notify(f"🔄 عكس الأغلبية — تبديل أسبوعي (Paper)\nالأسبوع اللي فات: {closed:+.2f}$\n🟢 لونج (الأغلبية شورت): {longs}\n🔴 شورت (الأغلبية لونج): {shorts}")
             else:
-                bot.notify(f"🔄 مومنتم — تبديل أسبوعي (Paper)\nالأسبوع اللي فات: {closed:+.2f}$\n🟢 لونج الأقوى: {longs}\n🔴 شورت الأضعف: {shorts}")
+                bot.notify(f"🔄 مومنتم — {period} (Paper)\n{'امبارح' if M['every_days'] == 1 else 'الأسبوع اللي فات'}: {closed:+.2f}$\n🟢 لونج الأقوى: {longs}\n🔴 شورت الأضعف: {shorts}")
         else: bot.log(f"مومنتم: {len(ranked)} عملة بس في القائمة — مفيش تبديل")
         if M.get("score") == "retail":       # its ranking on the page: the crowd's ratio, not a 2-week return
             state["mom_ranking"] = [{"symbol": s.split(":")[0], "ratio": round(r, 3)} for s, r in ranked]; bot.save_state(state)
