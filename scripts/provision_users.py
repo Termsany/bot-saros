@@ -52,7 +52,9 @@ from app.user_bots import ENVS_ALLOWED, MAX_USERS, MAX_STRATEGIES, STRATEGIES, U
 from app.user_bots import LIVE_ARGS, LIVE_DEFAULT, live_allocation  # noqa: E402
 from app.user_live_activation import consent_strategies  # noqa: E402
 
-EXTRA_ARGS = {"trend_daily": "--universe 10"}      # as the owner's /opt/raqm-live/strategies/*.env
+# as the owner's /opt/raqm-live/strategies/*.env. momentum_ls: the daily basket that keeps the coins still in it
+# (owner, 2026-11-11, every real account)
+EXTRA_ARGS = {"trend_daily": "--universe 10", "momentum_ls": "--mom-daily"}
 NO_ENTRIES = '"no entries"'   # the applied record while a user is wound down
 
 

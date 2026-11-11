@@ -24,7 +24,7 @@ MOM = {"weeks": 2, "top": 50, "n": 5, "min_days": 60, "stop": 0.40, "every_days"
 # last 3 days' hourly values) is lowest, short the 3 where it is highest; every Wednesday, as the study's weeks ran
 RETAIL = {"top": 20, "n": 3, "min_days": 150, "weekday": 2, "score": "retail", "ls_hours": 72, "min_ranked": 8, "hold_days": 7}
 
-# --mom-daily (owner, 2026-11-11, paper only): the same ranking, a new basket every day at 00:00 UTC, held one day —
+# --mom-daily (owner, 2026-11-11; paper, then every real account: docs/momentum-daily-live.md): the same ranking, a new basket every day at 00:00 UTC, held one day —
 # to see each day's basket. A coin still in the day's basket on the same side is kept, not closed and reopened (a coin
 # stays 3.9 days on average). Backtest 2019 → 2026-10, $20 x2: keeping them +$3,035 (DD $439, Sharpe 1.16 / 0.91);
 # closing and reopening every leg +$1,587 (the fees); the weekly bot +$2,200 (0.55 / 0.92)
@@ -164,9 +164,12 @@ def run_once_momentum(ex):
         if len(ranked) >= M.get("min_ranked", 20) and len(ranked) >= 2 * M["n"]:
             closed = 0.0
             lev = int(bot.CONFIG.get("leverage", 2)); picks = [(s, r, "short") for s, r in ranked[:M["n"]]] + [(s, r, "long") for s, r in ranked[-M["n"]:]]
+            # --mom-daily keeps a coin still in the day's basket on the same side: no exit, no new entry for it
+            want = {sym: side for sym, _, side in picks}
+            keep = {s for s, p in state["positions"].items() if M.get("keep") and want.get(s) == p["side"]}
             if not bot.CONFIG["paper_trading"]:
                 exits = []
-                for sym in sorted(state["positions"]):
+                for sym in sorted(set(state["positions"]) - keep):
                     px = float(ex.fetch_ticker(sym)["last"]); pos = state["positions"][sym]
                     exits.append({"symbol": sym, "side": "close_" + pos["side"], "action": "exit", "position": pos, "price": px, "order": 0,
                                   "risk_usdt": 0, "notional_usdt": 0, "correlation_group": bot._correlation_group(sym)})
@@ -176,16 +179,16 @@ def run_once_momentum(ex):
                         bot.save_state(state); return
                 entries = []
                 for sym, ret, side in picks:
+                    if sym in keep: continue
                     px = float(ex.fetch_ticker(sym)["last"]); prices[sym] = px
                     stop = px * (1 + M["stop"]) if side == "short" else px * (1 - M["stop"])
                     entries.append(bot._phase2_leg(sym, side, bot.position_size(px), px, stop, None, "momentum_ls", extra={"ret": ret}))
-                result = bot._phase2_live_basket(ex, state, "momentum_ls", "momentum-rebalance-entry", entries)
+                result = bot._phase2_live_basket(ex, state, "momentum_ls", "momentum-rebalance-entry", entries) if entries else {"status": "filled"}
+                if keep: bot.log(f"🔁 مومنتم: {len(keep)} فضلت في السلة ({', '.join(sorted(s.split('/')[0] for s in keep))}) — {len(entries)} جديدة")
                 if result and result.get("status") == "filled":
                     state["mom_last"] = week; state["mom_ranking"] = [{"symbol": s.split(":")[0], "ret": round(r * 100, 1)} for s, r in ranked]; bot.save_state(state)
                 return
             period = "تبديل يومي" if M["every_days"] == 1 else "تبديل أسبوعي"
-            want = {sym: side for sym, _, side in picks}
-            keep = {s for s, p in state["positions"].items() if M.get("keep") and want.get(s) == p["side"]}
             for sym in list(state["positions"]):
                 if sym in keep: continue                    # still in the basket, same side: held as it is
                 try:

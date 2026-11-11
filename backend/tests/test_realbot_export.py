@@ -82,13 +82,13 @@ class RealbotExportTests(unittest.TestCase):
         (state / "live-momentum_ls.json").write_text(json.dumps({"mom_last": "2026-11-03T00:00:00+00:00", "positions": {}}), encoding="utf-8")
         self.put("momentum_ls", status()); self.put("trend_daily", dict(status(), strategy="trend_daily"))
         bots = {b["strategy"]: b for b in rx.build(self.ipc, NOW, state)["bots"]}
-        self.assertEqual(bots["momentum_ls"]["next_rebalance"], "2026-11-04T00:00:00+00:00")   # the Wednesday after Tuesday
+        self.assertEqual(bots["momentum_ls"]["next_rebalance"], "2026-11-04T00:00:00+00:00")   # the next day (--mom-daily)
         self.assertIsNone(bots["trend_daily"]["next_rebalance"])                               # not a weekly basket
         sys.path.insert(0, str(ROOT)); import bot as botmod
-        self.assertEqual(rx.REBALANCE_WEEKDAY, botmod.MOM["weekday"])
+        self.assertEqual(rx.REBALANCE_EVERY_DAYS, botmod.DAILY["every_days"])
         for last in ("2026-11-03", "2026-11-09", "2026-11-15", "2026-11-17"):
             iso = f"{last}T00:00:00+00:00"
-            self.assertEqual(rx.next_rebalance(iso), botmod.momentum_next(iso).isoformat(), last)
+            self.assertEqual(rx.next_rebalance(iso), botmod.momentum_next(iso, botmod.DAILY["every_days"], botmod.DAILY["weekday"]).isoformat(), last)
 
     def test_no_state_means_no_next_rebalance(self):
         self.put("momentum_ls", status())
