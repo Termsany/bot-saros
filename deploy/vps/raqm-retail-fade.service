@@ -16,7 +16,7 @@ Environment=PYTHONUNBUFFERED=1
 # (state_retail_fade.json / .log), page data -> retail_fade.json, Telegram messages marked [against the crowd].
 # Paper only (bot.py refuses --momentum-retail otherwise): no order reaches an exchange. Its own code folder
 # (deploy/vps/install-retail-fade.sh); it shares the other paper bots' venv and Telegram settings only.
-ExecStart=/opt/raqm-bot/venv/bin/python -E -s bot.py --paper --strategy momentum_ls --momentum-retail --public-name retail_fade --label "against the crowd" --amount 100 --leverage 2 --poll 60 --notify --public /var/www/bot.da3m.io --state state_retail_fade.json
+ExecStart=/opt/raqm-bot/venv/bin/python -E -s bot.py --paper --strategy retail_fade --amount 100 --leverage 2 --poll 60 --notify --public /var/www/bot.da3m.io --state state_retail_fade.json
 Restart=always
 RestartSec=30
 NoNewPrivileges=true

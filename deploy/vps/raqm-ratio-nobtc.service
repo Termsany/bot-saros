@@ -15,7 +15,7 @@ Environment=PYTHONUNBUFFERED=1
 # Its own code folder (main's bot.py and what it imports, installed by deploy/vps/install-ratio-nobtc.sh), so
 # installing it never changes the code the other paper bots in /opt/raqm-bot run on their next restart. It shares
 # their venv and Telegram settings only.
-ExecStart=/opt/raqm-bot/venv/bin/python -E -s bot.py --paper --strategy ratio_trend --ratio-exclude BTC,ETH --public-name ratio_nobtc --label "ratio no BTC/ETH" --amount 40 --leverage 2 --poll 60 --notify --public /var/www/bot.da3m.io --state state_ratio_nobtc.json
+ExecStart=/opt/raqm-bot/venv/bin/python -E -s bot.py --paper --strategy ratio_nobtc --amount 40 --leverage 2 --poll 60 --notify --public /var/www/bot.da3m.io --state state_ratio_nobtc.json
 Restart=always
 RestartSec=30
 NoNewPrivileges=true

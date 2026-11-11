@@ -216,7 +216,7 @@ if __name__=="__main__":
     p.add_argument("--dashboard", action="store_true", help="شغل الداشبورد + البوت معًا")
     p.add_argument("--serve-only", action="store_true", help="داشبورد فقط بدون لوب")
     p.add_argument("--port", type=int, default=None, help="بورت الداشبورد")
-    p.add_argument("--strategy", default=None, help="مثلا trend_daily — استراتيجية واحدة (أو أكتر بفاصلة)")
+    p.add_argument("--strategy", default=None, help="مثلا trend_daily — استراتيجية واحدة (أو أكتر بفاصلة)، أو نسخة باسمها من bots/variants.py (retail_fade, rsi2_btc, ratio_nobtc, ...)")
     p.add_argument("--leverage", type=int, default=None, choices=[1, 2, 3, 4, 5], help="الرافعة")
     p.add_argument("--universe", type=int, default=0, help="اشتغل على أعلى N عملة فوليوم بدل قائمة symbols")
     p.add_argument("--amount", type=float, default=None, help="هامش الصفقة USDT")
@@ -236,7 +236,13 @@ if __name__=="__main__":
     # the momentum day experiment (research/README.md §23): Demo / paper only, the real bot keeps Monday and the full week
     p.add_argument("--mom-weekday", type=int, default=None, choices=range(7), help="مومنتم: يوم التبديل (0 = الاتنين) — Demo بس")
     p.add_argument("--mom-hold", type=int, default=None, choices=range(1, 8), help="مومنتم: يقفل السلة بعد كام يوم — Demo بس")
+    p.add_argument("--show-config", action="store_true", help="print the settings these arguments resolve to (a variant included) and exit — places no order")
     args=p.parse_args()
+    # a named variant (bots/variants.py): its base strategy and flags, then every check below as if they were typed
+    from bots import variants as _variants
+    try: VARIANT = _variants.resolve(args)
+    except ValueError as e: p.error(str(e))
+    if VARIANT and args.state is None: args.state = f"state_{VARIANT}.json"   # never its base strategy's book
     if args.strategy: CONFIG["enabled_strategies"]=[s.strip() for s in args.strategy.split(",") if s.strip()]
     retired = [s for s in (CONFIG.get("enabled_strategies") or []) if s in RETIRED_STRATEGIES]
     if args.strategy and retired: p.error(f"الاستراتيجية دي اتلغت: {', '.join(retired)}")
@@ -285,6 +291,13 @@ if __name__=="__main__":
     if args.paper: CONFIG["paper_trading"]=True
     if args.expect_env and binance_env() != args.expect_env:
         p.error(f"BINANCE_ENV={binance_env()} لكن الخدمة متظبطة على {args.expect_env} — مش هيشتغل")
+    if args.show_config:
+        print(json.dumps({"variant": VARIANT, "strategies": CONFIG.get("enabled_strategies"), "paper": bool(CONFIG.get("paper_trading")),
+                          "live": bool(args.live), "leverage": CONFIG.get("leverage"), "amount": CONFIG.get("trade_amount_usdt"),
+                          "poll": CONFIG.get("poll_seconds"), "public_dir": CONFIG.get("public_dir"), "public_name": CONFIG.get("public_name"),
+                          "label": CONFIG.get("label"), "state": STATE_PATH.name, "log": LOG_PATH.name,
+                          "MOM": MOM, "RATIO": RATIO, "RSI2": RSI2}, ensure_ascii=False, sort_keys=True, default=str))
+        sys.exit(0)
     if args.live:
         unsupported = [s for s in (CONFIG.get("enabled_strategies") or []) if s not in LIVE_READY_STRATEGIES]
         if unsupported:
