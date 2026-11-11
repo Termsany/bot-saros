@@ -32,24 +32,26 @@ Do it on a weekday, away from 00:00 UTC (the daily close) and never on a Monday.
 ## 3. Install, without restarting anything
 ```bash
 cd /root/raqm-src && git fetch -q origin && git checkout -q --detach origin/main
-cat /opt/raqm-live/DEPLOYED_COMMIT        # write it down: the rollback commit (step 9)
-sudo deploy/vps/setup-live.sh "$(git rev-parse HEAD)"
+SHA=$(git rev-parse HEAD)
+sh deploy/vps/deploy.sh "$SHA" --dry-run live paper    # write down each "previous" commit: the rollback (step 9)
+sh deploy/vps/deploy.sh "$SHA" live paper
 ```
-- `setup-live.sh` installs `bot.py`, `bots/`, the backend modules (now with `live_accounts.py`), the scripts and the tools.
-- **The running bots keep the code already in their memory.**
-- `setup-live.sh` also rewrites `/opt/raqm-users/code`, the code every real-money user bot (`raqm-user@…`) runs. Those
+- `live` runs that commit's `setup-live.sh`: `bot.py`, `bots/`, the backend modules (now with `live_accounts.py`), the
+  scripts and the tools. `paper` brings the same `bot.py` + `bots/` to `/opt/raqm-bot` and every own-folder paper bot
+  (a `bot.py` without `bots/` fails at import). Every installed file is checked against git; any difference stops it (exit 5).
+- **Nothing is restarted** (no `--restart`, no `--restart-demo`). The running bots keep the code already in their memory.
+- `live` also rewrites `/opt/raqm-users/code`, the code every real-money user bot (`raqm-user@…`) runs. Those
   bots have `Restart=always`: any restart after this step loads the new code. Step 7b says how they're restarted.
-- The paper bots in `/opt/raqm-bot` need `bots/` copied next to `bot.py`, as in `deploy/vps/README.md`. A `bot.py` without `bots/` fails at import.
+  `deploy.sh` prints the restart command of each running `raqm-live@` / `raqm-user@` unit and never runs it.
 
 ## 4. The API: its code and its unit
 The API's automatic update is frozen while live trading is on, so it gets the new commit by hand, after reading
 `git diff <the API's commit>..<sha> -- backend/app`:
 ```bash
-cp -p /etc/systemd/system/raqm-api.service /root/raqm-api.service.bak-$(date +%Y%m%d)
-install -m 644 /root/raqm-src/deploy/vps/api/raqm-api.service /etc/systemd/system/raqm-api.service
-systemctl daemon-reload
-sudo raqm-api-update --manual <the same 40-char sha>
+sh /root/raqm-src/deploy/vps/deploy.sh "$SHA" api
 ```
+- It saves the old unit in `/var/lib/raqm-deploy/raqm-api.service.<time>`, installs the new one, `daemon-reload`, then
+  `raqm-api-update --manual "$SHA"`, and checks the API's checkout and `backend/app` against git.
 - The new unit adds `-/opt/raqm-risk-accounts` to `ReadWritePaths` (the "-" lets it start before that folder exists).
 - Check: `https://api.da3m.io/api/health` answers. The dashboard's التداول الحقيقي tab shows momentum_ls, its capital
   ($500 / $26), its limits and a **قفل الطوارئ (الأساسي)** card that says "مش شغّال". There's no account picker yet,
@@ -57,8 +59,10 @@ sudo raqm-api-update --manual <the same 40-char sha>
 
 ## 5. Demo first: restart the 6 Demo bots by name, never `raqm-demo@*`
 ```bash
-for s in trend_daily ratio_trend vol_breakout trend_breakout rsi2_pullback listing_short; do systemctl restart raqm-demo@$s; done
+sh /root/raqm-src/deploy/vps/deploy.sh "$SHA" live --restart-demo trend_daily,ratio_trend,vol_breakout,trend_breakout,rsi2_pullback,listing_short
 ```
+- It installs again (idempotent), then restarts those six by name. It refuses `momentum_ls`, a pattern, a masked unit, and
+  any strategy whose `raqm-live@` twin is running or enabled (`Conflicts=` would stop the real bot).
 - **Leave `raqm-demo@momentum_ls` masked.** Its unit conflicts with the real one.
 - **Wait one cycle, then check each bot:**
   - active;
@@ -111,10 +115,12 @@ systemctl list-units --type=service --state=running --no-legend 'raqm-user@*'
   user (docs/users-real-money-plan.md).
 
 ## 9. Rolling back
-- `setup-live.sh <the previous commit>`, then the same restarts: Demo first, the real bot, then the users' bots
-  (step 7b; the previous commit's code goes back to `/opt/raqm-users/code` too).
-- The API: `raqm-api-update --manual <the previous commit>`, and the saved unit back
-  (`/root/raqm-api.service.bak-<date>`, `daemon-reload`, restart the API).
+- `deploy.sh <the previous commit> live paper` (the "rollback:" line step 3 printed; run it with the clone left at the
+  new commit — a previous commit from before `deploy.sh` existed is deployed by the new `deploy.sh`), then the same restarts: Demo first
+  (`--restart-demo …`), the real bot, then the users' bots (step 7b; the previous commit's code goes back to
+  `/opt/raqm-users/code` too).
+- The API: `deploy.sh <the previous commit> api` installs that commit's unit and code (the unit of step 4 is also saved in
+  `/var/lib/raqm-deploy/raqm-api.service.<time>`).
 - The previous commit is the one written down in step 3.
 
 ## Later: trend_daily on its own sub-account (docs/trend-daily-live-plan.md)
