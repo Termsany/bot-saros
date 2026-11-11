@@ -166,6 +166,44 @@ class FakeSystem:
     def no_entries(self, uid): self.calls.append(("no_entries", uid))
 
 
+class KillSwitchLimitTests(unittest.TestCase):
+    """2026-11-11: the users' ledgers never got the kill switch's own limits, so they kept risk_manager's defaults
+    (1% a day, 5% drawdown) and the owner's second-account momentum bot tripped at 1.27% eight minutes after its
+    first basket. The provisioner's own values (20% / 45%, the unit's ceilings) now reach the ledger."""
+    LIVE = dict(env="live", strategies=["momentum_ls"], capital_usdt=500, capital_margin_override_usdt=40, capital_reserve_pct=20)   # the account of 2026-11-09
+
+    def test_every_users_ledger_gets_the_kill_switch_limits_demo_and_live(self):
+        for d in (pu.validate(U1, doc(U1)), pu.validate(U1, doc(U1, **self.LIVE))):
+            lim = pu._limits(d)
+            self.assertEqual((lim["max_daily_loss_pct"], lim["max_drawdown_pct"]), (pu.USER_DAILY_LOSS_PCT, pu.USER_DRAWDOWN_PCT))
+            self.assertEqual((pu.USER_DAILY_LOSS_PCT, pu.USER_DRAWDOWN_PCT), (20.0, 45.0))
+        # never above the unit's ceilings for that user (root's RAQM_CAP_* in the drop-in)
+        dropin = pu.dropin(U1, "momentum_ls", pu.validate(U1, doc(U1, **self.LIVE)))
+        self.assertIn("Environment=RAQM_CAP_DAILY_LOSS_PCT=20", dropin); self.assertIn("Environment=RAQM_CAP_DRAWDOWN_PCT=45", dropin)
+
+    def test_the_ledger_no_longer_trips_on_a_first_baskets_costs(self):
+        from backend.app import risk_manager as rm
+        with tempfile.TemporaryDirectory() as t:
+            p = Path(t) / "risk_state.json"
+            rm.save_risk_state(p, rm._default_state())
+            rm.update_limits(p, pu._limits(pu.validate(U1, doc(U1, **self.LIVE))))
+            lim = rm.load_risk_state(p)["limits"]
+            self.assertEqual((lim["max_daily_loss_pct"], lim["max_drawdown_pct"]), (20.0, 45.0))
+            self.assertLess(1.27, lim["max_daily_loss_pct"])                              # 2026-11-09's trip
+
+    def test_a_user_applied_before_the_fix_gets_the_new_limits_once(self):
+        d = pu.validate(U1, doc(U1)); fs = FakeSystem()
+        fs.files[str(pu.APPLIED / f"{U1}.json")] = (json.dumps(d, sort_keys=True), 0o600)   # the old record: the request only
+        acts = pu.plan({U1: d}, [U1], {U1: "demo"}, {U1: ("key-1", "secret-1")}, {U1: {"trend_daily"}}, lambda u, s: True)
+        pu.apply(acts, {U1: ("key-1", "secret-1")}, fs, log=lambda m: None)
+        self.assertEqual(fs.limits, [U1])                                                  # rewritten with the new limits
+        fs.limits.clear()
+        pu.apply(acts, {U1: ("key-1", "secret-1")}, fs, log=lambda m: None)
+        self.assertEqual(fs.limits, [])                                                    # and only once
+        rec = json.loads(fs.files[str(pu.APPLIED / f"{U1}.json")][0])
+        self.assertEqual(rec["limits"]["max_daily_loss_pct"], 20.0)
+
+
 class ApplyTests(unittest.TestCase):
     def setUp(self):
         self.d = pu.validate(U1, doc(U1)); self.fs = FakeSystem(); self.logs = []
