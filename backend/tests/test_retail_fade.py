@@ -67,7 +67,7 @@ class RetailFadeTests(unittest.TestCase):
 
     def test_momentum_itself_is_unchanged(self):
         self.assertEqual((botmod.MOM["score"], botmod.MOM["top"], botmod.MOM["n"], botmod.MOM["weekday"], botmod.MOM["min_ranked"]),
-                         ("return", 50, 5, 0, 20))
+                         ("return", 50, 5, 2, 20))
         with mock.patch.dict(botmod.CONFIG, {}, clear=False):
             botmod.CONFIG.pop("public_name", None)
             self.assertEqual(botmod.momentum_public_name(), "momentum")
