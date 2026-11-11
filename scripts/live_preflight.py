@@ -74,9 +74,10 @@ def file_ok(path, owner, mode=0o600):
 
 def trading_files(live):
     """The code a real-money bot runs, as setup-live.sh installs it: the top-level modules, the backend modules,
-    bots/ (one file per strategy, when present). scripts/ are tools that place no order and are not in it."""
+    bots/ (one file per strategy) and engine/ (bot.py's parts, since 2026-11-11), when present. scripts/ are tools that
+    place no order and are not in it."""
     live = Path(live)
-    files = [p for p in sorted(live.glob("*.py")) + sorted((live / "backend" / "app").glob("*.py")) + sorted((live / "bots").glob("*.py"))
+    files = [p for p in sorted(live.glob("*.py")) + sorted((live / "backend" / "app").glob("*.py")) + sorted((live / "bots").glob("*.py")) + sorted((live / "engine").glob("*.py"))
              if p.is_file() and not p.is_symlink()]
     return [p.relative_to(live).as_posix() for p in files]
 

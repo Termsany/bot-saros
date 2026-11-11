@@ -37,6 +37,28 @@ class SetupLiveTests(unittest.TestCase):
         self.assertRegex(s, r'(?m)^PAPER_FILES="bot\.py bots ')
         self.assertIn('archive "$SHA" $PAPER_FILES', s)
 
+    def test_every_local_package_bot_py_imports_reaches_every_copy(self):
+        # bot.py imports bots/ (2026-11-09) and engine/ (2026-11-11): a copy that misses one can't start. Read from
+        # bot.py itself, so a package added later fails here until setup-live.sh, deploy.sh and the preflight carry it.
+        import ast, sys
+        root = VPS.parent.parent
+        tree = ast.parse((root / "bot.py").read_text(encoding="utf-8"))
+        pkgs = {n.module.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module
+                and (root / n.module.split(".")[0] / "__init__.py").is_file() and n.module.split(".")[0] != "backend"}
+        self.assertTrue({"bots", "engine"} <= pkgs, pkgs)
+        deploy = (VPS / "deploy.sh").read_text(encoding="utf-8")
+        paper = re.search(r'(?m)^PAPER_FILES="([^"]*)"', deploy).group(1).split()
+        sys.path.insert(0, str(root / "scripts")); import live_preflight as lp
+        with tempfile.TemporaryDirectory() as d:
+            for p in pkgs:
+                self.assertIn(f'for f in "$T"/{p}/*.py; do install -m 644 -o root -g root "$f" "$L/{p}/"; done', self.S, p)
+                self.assertIn(f'for f in "$L"/{p}/*.py; do install -m 644 -o root -g root "$f" "$U/{p}/"; done', self.S, p)
+                self.assertIn(f'"$U/{p}"', self.S, p)                                   # the users' folder is made
+                self.assertIn(p, paper, p)                                              # every paper bot
+                self.assertIn(f"^{p}/[^/]+\\.py$", deploy, p)                            # live: sha-checked
+                (Path(d) / p).mkdir(); (Path(d) / p / "x.py").write_text("x = 1\n", encoding="utf-8")
+            self.assertTrue(all(f"{p}/x.py" in lp.trading_files(d) for p in pkgs))      # the evidence covers them
+
     def test_only_key_lines_reach_the_live_env_file(self):
         self.assertIn("^(BINANCE_API_KEY|BINANCE_SECRET|BINANCE_LIVE_ACCOUNT)=", self.S)
         self.assertNotIn('install -o raqmlive -g raqmlive -m 600 "$B/.env.demo"', self.S)   # no whole-file copy

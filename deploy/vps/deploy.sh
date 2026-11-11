@@ -36,8 +36,8 @@ PAGE=/var/www/bot.da3m.io/index.html
 PAGE_ASSETS=/var/www/bot.da3m.io/assets     # its stylesheet and scripts (deploy/vps/page/assets/, since 2026-11-11)
 API=/opt/raqm-api/app
 SELF=$SRC/deploy/vps/deploy.sh
-# what every paper bot runs (the own-folder ones and /opt/raqm-bot): bot.py imports bots/ and backend/app
-PAPER_FILES="bot.py bots strategies_advanced.py strategies_trend.py strategies_wave.py trade_card.py assets/fonts backend/app"
+# what every paper bot runs (the own-folder ones and /opt/raqm-bot): bot.py imports bots/, engine/ and backend/app
+PAPER_FILES="bot.py bots engine strategies_advanced.py strategies_trend.py strategies_wave.py trade_card.py assets/fonts backend/app"
 # the units setup-live.sh installs (raqm-live@.service is the owner's, by hand; the test keeps this list in step)
 LIVE_UNITS="raqm-demo@.service raqm-demo-momwed.service raqm-watchdog.service raqm-watchdog.timer raqm-backup.service
  raqm-backup.timer raqm-realbot-export.service raqm-realbot-export.timer raqm-rebalance-check.service
@@ -155,8 +155,8 @@ deploy_live() {
     sh "$T/deploy/vps/setup-live.sh" "$SHA"    # that commit's own setup; it never restarts a real-money bot
     say "checking /opt/raqm-live and /opt/raqm-users/code against git"
     for R in "$L" "$U"; do
-        check_git_files "$R" '^[a-z_]+\.py$|^bots/[^/]+\.py$|^assets/fonts/' \
-            bot.py strategies_trend.py strategies_advanced.py strategies_wave.py trade_card.py bots assets/fonts
+        check_git_files "$R" '^[a-z_]+\.py$|^bots/[^/]+\.py$|^engine/[^/]+\.py$|^assets/fonts/' \
+            bot.py strategies_trend.py strategies_advanced.py strategies_wave.py trade_card.py bots engine assets/fonts
         check_present "$R" backend/app; check_present "$R" scripts
         [ "$(file_commit "$R/DEPLOYED_COMMIT")" = "$SHA" ] || { err "  FAIL $R/DEPLOYED_COMMIT is not $SHA"; FAILS=$((FAILS+1)); }
     done
