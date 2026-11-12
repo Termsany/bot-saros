@@ -1,6 +1,6 @@
 # Development plan — the whole application (from 2026-11-04)
 
-The near-term trading steps are in [roadmap.md](roadmap.md) (A–F); this file ([development-plan.md](development-plan.md)) is the whole picture: seven tracks that
+The near-term trading steps are in [roadmap.md](roadmap.md) (stages 0–4, from 2026-11-12); this file ([development-plan.md](development-plan.md)) is the whole picture: seven tracks that
 run side by side. Each stage says **whether it can be deferred** and what deferring costs.
 
 - 🔒 **Gate** — never skipped: it protects real money or users. It can wait only if what it guards waits too.

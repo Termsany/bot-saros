@@ -1,67 +1,86 @@
-# Roadmap (from 2026-11-03, with momentum_ls live)
+# Roadmap (from 2026-11-12, momentum daily)
 
-The rule for every step: **the real bot keeps running and is touched last.** A change reaches Demo first, is seen
-working there, and only then the real bot, outside a rebalance. Each step ships as its own PR, merged after green CI.
+The owner asked for a development plan to follow in stages (2026-11-12). It replaces the roadmap of 2026-11-03
+(A–F, written for the weekly Monday basket; it is in git history, `bb8c70d`).
 
-Where things stand: [production-readiness.md](production-readiness.md). The small-size plan: [live-small-size-plan.md](live-small-size-plan.md).
+**The rule for every stage:** one change at a time, and every idea takes the same path:
+
+1. A backtest: chosen on the data before 2024 and judged on 2024 onward. It is written up in `research/README.md`,
+   whether it wins or loses.
+2. A paper bot, as an A/B pair next to the version that runs now, on demo.da3m.io.
+3. Real money at the smallest size, only when the owner says so.
+
+The real bots are touched last. Each step ships as its own PR, merged after every check is green.
+
+Owner = only the owner can do it (keys, Binance, money, signatures). Claude = code, research, server, checks.
 
 The whole application, all tracks: [development-plan.md](development-plan.md).
 
-Owner = only the owner can do it (keys, Binance, money, names). Claude = code, server, checks.
+## 0. Measurement: running now
 
-## A. Protect the live bot — now → Monday 2026-11-09
+| What runs (paper) | Since |
+|---|---|
+| `raqm-momentum`: weekly basket, opens Wednesday, holds 6 days | 2026-11-11 |
+| `raqm-momentum-daily`: a new basket every day at 00:00 UTC, coins still in it stay open | 2026-11-11 |
+| `raqm-momentum-daily-b7`: the same, a held coin stays while among the strongest/weakest 7 (research §37) | 2026-11-12 |
 
-| # | Step | Who | Done when |
-|---|---|---|---|
-| A1 | ~~Demo measurement restarted~~ (6 strategies back on, 2026-11-03 21:55 UTC) | Claude, owner's go | ✓ every Demo bot's `entry_block` empty |
-| A2 | ~~Close the leftover Demo `momentum_ls` legs~~ (9, not 10: closed 2026-11-03 ~22:02 UTC by the bot's own rebalance exit, net ≈ −2.3 USDT; no order left on them, Demo ledger holds only trend_daily 4 + ratio_trend 2) | Claude, owner's go | ✓ Demo account has only legs some bot owns |
-| A3 | ~~Revoke the old main-account API key on Binance~~ (owner, 2026-11-04; on the way the Demo key was deleted too and replaced by a server-made Ed25519 key, PRs #97–#98) | Owner | ✓ key gone from Binance's API list |
-| A4 | ~~Put real reviewer names in `readiness_evidence.json`~~ — the truth, not placeholders: "Mustafa (owner, not independent)" and "Claude Opus 5.5 (AI code review, not independent)" (2026-11-04, `set_reviewers.py`). **No independent human review exists: accepted by the owner at this size; required before C** | Owner | ✓ evidence names who reviewed, digest re-made |
-| A5 | ~~Test that a live-bot problem reaches Telegram~~ (2026-11-03: the watchdog's own check and send on a copy of the real status with one stop marked unverified; alert + clear received by the owner) | Claude | ✓ message received and cleared |
-| A6 | ~~Demo/real can't be mixed up on the dashboard~~: the card says which account it changes (red = real, blue = Demo), the confirm lists what starts **and what stops**, the 15 s refresh no longer wipes unsaved switches, a late answer for the other tab is dropped | Claude | ✓ PR merged |
-| A7 | **Watch the first real rebalance** (Mon 00:00 UTC = 02:00 Cairo): old legs closed with fills/fees/funding, no old stop left, 10 new legs with stops, no recovery | Claude + owner | checklist in the plan §1 all ticked |
+- The goal is to check that the live trading matches the backtest: rebalances, stops, fees, and funding. Profit is
+  not judged here; two weeks are far too few for that.
+- **Passes when** there are two weeks without an operating error, and each bot's switches and costs are within the
+  backtest's range.
 
-## B. Make it solid — 2026-11-09 → 2026-11-23 (rebalances 2 and 3)
+## 1. The main account goes live (owner's go)
 
-| # | Step | Done when |
+| # | Step | Who |
 |---|---|---|
-| B1 | PR #89 (one file per strategy): merge after A7, restart Demo bots **by name, never `raqm-demo@*`** (starting `raqm-demo@momentum_ls` stops the real bot: `Conflicts=`), run `demo_e2e`'s `cli` path, then restart the real bot on a weekday between rebalances | real bot runs the new code, positions untouched |
-| B2 | CI runs `python bot.py` as `__main__` once against the fake exchange (the gap PR #89 showed) | a test fails if the entry point breaks |
-| B3 | Real results per rebalance: fees, funding and slippage per leg vs the backtest, kept by the bot and shown on realbot.da3m.io / dashboard | each week's real costs readable without the server |
-| B4 | Restore test: rebuild the real ledger + state from last night's backup on a scratch folder | restore proven, steps written down |
-| B5 | Weekly Demo check of the 6 strategies against [demo-baseline.md](demo-baseline.md) | a line per strategy per week in production-readiness.md |
+| 1.1 | Add funds to about $500 (a $26 margin ×2 at a 40% stop needs equity ≥ $463) | Owner |
+| 1.2 | Close INIT, which was opened by hand | Owner |
+| 1.3 | `rebase_hwm.py /opt/raqm-risk <new equity> "<name>"` after the deposit | Owner |
+| 1.4 | Reset the kill switch after 00:00 UTC | Owner |
+| 1.5 | Rebind the readiness evidence to the live sha; Claude prepares it, the owner signs | Claude + owner |
+| 1.6 | Read-only review of the first real basket: fills, stops on the exchange, and the coins kept | Claude |
 
-## C. The size decision — after the 3rd real rebalance (~2026-11-24)
+Alongside:
+- Close the second account (owner).
+- Deploy the 2026-11-11 cleanup, which is merged but not deployed.
 
-About 30 closed real legs. Compare with the baseline (win rate ≈ 49 %, PF ≈ 1.2 net of real fees and funding;
-read against the 7-weekday average, PF ≈ 1.15):
-- **within it** → raise one step: $26 → $40 per leg, ceilings and capital recomputed, preflight 13/13, 3 more rebalances;
-- **far below it** → switch `momentum_ls` off on real money (not re-tuned), back to Demo only.
+**Passes when** there are two real weeks and the gap between real and paper is small and explained (fees, slippage,
+timing).
 
-**Before any step up: an independent review** of the order path by a programmer other than the owner, its findings fixed, and the evidence's reviewers updated (A4 records that none exists yet).
+## 2. Improve the strategy (research → paper)
 
-Never more than one step up at a time, and never inside the week of a loss bigger than the basket's normal range.
+Each idea is its own study, in this order:
 
-## D. A second strategy on real money — from ~December
+| # | Idea | Why |
+|---|---|---|
+| 2.1 | Buffer 7: decide from the A/B in stage 0 | The backtest shows the worst drawdown at $358 instead of $578, for 11% less profit |
+| 2.2 | Exclude new coins (listed fewer than N days) | Likely the source of the largest stops |
+| 2.3 | Size by volatility: a wilder coin gets a smaller leg | The same risk per leg instead of the same dollars |
+| 2.4 | Blend lookbacks (2 weeks + 4 weeks) in the ranking | 2w and 4w were each the best on different periods |
 
-- The first Demo strategy to finish its sample within baseline goes next (most likely `trend_daily` or `ratio_trend`;
-  `rsi2_pullback` and `listing_short` trade too rarely to be first).
-- Its own sub-account and key, its own capital and ceilings — one bot per account keeps "no positions the bot didn't
-  open" simple and one strategy's loss away from the other's.
-- Same path as momentum_ls: preflight, smallest size, 3 rebalances / ~30 trades, then the size decision.
+- Ideas already closed are not reopened: the reversal basket (all 10 variants lost) and no shorts (§37).
+- **Passes when** an idea wins in both periods, not one. Anything that fails is recorded and closed.
 
-## E. Users — in parallel, Demo only
+## 3. Execution quality and risk
 
-[phase2-design.md](phase2-design.md): a user's bot runs on the owner's order path, on the user's own Binance Demo key.
-1. The first testers' user IDs into `/etc/raqm-users/allow.list` (owner gives them).
-2. The provisioner starts `raqm-user@<uid>--<strategy>` from the dashboard's choice; per-user ledger, limits and
-   kill switch; a user can only see and close their own bot.
-3. Watch it with 2–3 testers for two weeks before opening it wider.
+- Measure the real slippage per leg against the paper price, kept by the bot and shown on the page.
+- A liquidity filter for thin coins.
+- Review the risk limits (the 40% stop, the daily loss limit, the aggregate) on real data.
+- The rest of the security plan (items 10 and 12).
 
-Real money for users is **not** on this roadmap: it needs the owner's own results first and a legal/terms review.
+## 4. Scale
 
-## F. Always on
+- Raise capital in steps, each after 4 clean weeks, never more than one step at a time, and never within a week
+  of a loss larger than the basket's normal range.
+- **Before any step up:** an independent review of the order path by a programmer other than the owner, its
+  findings fixed, and the evidence's reviewers updated. None exists yet; the owner accepted that at this size.
+- The four invited friends' accounts on the users' path (`provision_users.py`, evidence matched to the deployed sha).
+- A second strategy not tied to momentum (RSI-2 from #167 is the first candidate), on its own account, so the
+  drawdowns spread.
 
-- Each week: dependency and security updates (backend, frontend, bot) through PRs; secret-scan stays green.
-- Each month: rotate the bot's API key (owner creates it, Claude installs nothing secret).
-- Any recovery, stop missing on the exchange, or watchdog alert on the real bot: kill switch first, then find out why.
+## Always on
+
+- Each week: dependency and security updates through PRs; secret-scan stays green.
+- Each month: rotate the bots' API keys (the owner creates them; Claude installs nothing secret).
+- Any recovery, a stop missing on the exchange, or a watchdog alert on a real bot: the kill switch first, then the
+  cause.
