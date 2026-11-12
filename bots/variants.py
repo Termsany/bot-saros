@@ -13,6 +13,8 @@ VARIANTS = {
     "retail_fade": {"base": "momentum_ls", "label": "against the crowd", "options": {"momentum_retail": True}},
     # momentum_ls with a new basket every day, held one day (owner 2026-11-11) — paper only
     "momentum_daily": {"base": "momentum_ls", "label": "momentum daily", "options": {"mom_daily": True}},
+    # ... a held coin stays while among the strongest/weakest 7 (research §37) — paper only
+    "momentum_daily_b7": {"base": "momentum_ls", "label": "momentum daily buffer 7", "options": {"mom_daily": True, "mom_buffer": 7}},
     # RSI-2 entries only while BTC closes above its 200-day average (research §28)
     "rsi2_btc": {"base": "rsi2_pullback", "label": "RSI-2 + BTC filter", "options": {"rsi2_btc_ma": 200}},
     # the ratio trend without BTC and ETH (research §25)
@@ -24,7 +26,7 @@ VARIANTS = {
     "ratio_net_nobtc": {"base": "ratio_trend", "label": "ratio net no BTC/ETH", "options": {"ratio_exclude": "BTC,ETH", "ratio_net": True}},
 }
 # the flags a variant may set, and their defaults (bot.py's argparse): a flag still at its default takes the variant's
-OPTION_DEFAULTS = {"momentum_retail": False, "mom_daily": False, "rsi2_btc_ma": 0, "ratio_exclude": "", "ratio_trail": 0.0, "ratio_net": False}
+OPTION_DEFAULTS = {"momentum_retail": False, "mom_daily": False, "mom_buffer": 0, "rsi2_btc_ma": 0, "ratio_exclude": "", "ratio_trail": 0.0, "ratio_net": False}
 
 
 def resolve(args):
