@@ -808,6 +808,48 @@ Chosen on before 2024, judged on 2024 → 2026-10.
 - **Decision:** nothing changes on a bot. Buffer 7 is the candidate for a paper bot next to `raqm-momentum-daily`,
   if the owner wants a lower-drawdown version measured live.
 
+### 38. Paper vs backtest on the same days, and a breakeven stop: the bots trade the backtest; the breakeven stop loses (`momentum_breakeven_study.py`, 2026-11-16)
+
+**Paper vs backtest (stage 0 of [the roadmap](../docs/roadmap.md)).** The three momentum paper bots ($100 ×2 a leg)
+against `momentum_daily_study.py`'s simulator over the same days, data to 2026-11-14:
+- **Daily, buffer 5 and 7 (11-12 → 11-15):** all the shorts and 4 of 5 longs are the same every day. The same stops
+  hit the same coins (ARIA, IDOL, AKE, AGT, about −$80 each). Buffer 7: backtest −$181, paper −$240. The gap comes
+  from the bot's first entry at 10:05 instead of 00:00, and from the one different long.
+- **Weekly (5 baskets from 10-23):** 7 to 9 of 10 legs match the ranking. Paper −$235, backtest −$586.
+- **The one difference** is the fifth long, at the volume cut. ICNT and ESPORTS rank 52–56 in the backtest and inside
+  the top 50 in the bot. The bot ranks by close × base volume, with a 24-hour pre-filter; the study uses the real
+  quote volume. It changes about one leg in ten, and it is not the cause of the losses.
+- **The losses are the market's.** Weekly baskets whose legs hit the 40% stop within the week, by year:
+  - Longs: 0.5–8% in 2020–2024, 10% in 2025, 21% in 2026.
+  - All legs since 2026-07: 18%.
+  - Paper weekly: 15 of 42.
+
+  The top 50 is now full of new, wild coins. With the data to 11-14, the backtest's worst drawdown is $734 (it was
+  $578), and 2026 so far is +$38.
+
+**The breakeven stop (owner's idea).** Once a leg is up X (long or short), its stop moves to the entry price, and the
+leg stays open. Daily bars hide the day's order, so the trigger day is resolved with Binance hourly candles (2,755
+days, none missing); a trigger and a return inside the same hour count as stopped. Daily basket, $20 ×2 a leg:
+
+| variant (buffer 5) | net | worst DD | Sharpe < 2024 | Sharpe 2024 → | 2026 |
+|---|---|---|---|---|---|
+| **no breakeven (runs)** | **+$2,904** | **$734** | **1.16** | **0.82** | +$38 |
+| breakeven after the price is up 10% | +$382 | $1,316 | 0.56 | −0.14 | −$697 |
+| breakeven after the price is up 20% | +$2,018 | $885 | 0.93 | 0.53 | −$261 |
+| breakeven after the price is up 30% | +$2,515 | $758 | 1.04 | 0.71 | −$127 |
+| breakeven after the price is up 40% | +$2,721 | $782 | 1.07 | 0.79 | −$1 |
+| breakeven after the price is up 60% | +$2,792 | $813 | 1.09 | 0.79 | −$7 |
+
+- Buffer 7 behaves the same way: every level is below its own baseline.
+- **Why it loses:**
+  - The losses are legs that go against from the first day and hit the 40% stop. A breakeven stop never touches
+    them; the recent paper stops never reached +40% first.
+  - What it does touch are momentum winners that run, come back to the entry, and then run again. Out at zero, they
+    miss the second run.
+  - This is the same lesson as the trailing stop: anything that takes a winner out early hurts this basket.
+- **Decision:** nothing changes on a bot. The next ideas aim at the legs that stop out (roadmap 2.2, new coins
+  excluded; 2.3, size by volatility).
+
 ## The site now shows only the four paper bots
 
 `research/bots_stats.py` writes `lib/bot-stats.json` (the numbers the site shows); the dashboard's live section and
