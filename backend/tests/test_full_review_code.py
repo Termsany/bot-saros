@@ -12,7 +12,7 @@ sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "backend")); sys.pa
 import bot as botmod
 from backend.app import risk_manager as rm
 from test_trend_live import FakeBinance
-from test_live_momentum_ls import MomentumFakeBinance, SYMS, ranked
+from test_live_momentum_ls import MomentumFakeBinance, SYMS, ranked, on_a_wednesday
 
 S = "SOL/USDT:USDT"
 
@@ -78,6 +78,9 @@ class SingleLegTests(Base):
 
 class BasketTests(Base):
     strategy = "momentum_ls"
+
+    def setUp(self):
+        super().setUp(); on_a_wednesday(self)
 
     def run_momentum(self, ex, ranking=None):
         with mock.patch.object(botmod, "momentum_rank", return_value=ranking or ranked()):

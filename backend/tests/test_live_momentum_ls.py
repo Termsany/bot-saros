@@ -15,6 +15,8 @@ sys.path.insert(0, str(ROOT / "backend"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import bot as botmod
+import bots.momentum_ls as momentum_mod
+from datetime import datetime, timezone
 from backend.app import risk_manager as riskmgr_mod
 from test_trend_live import FakeBinance
 
@@ -33,6 +35,17 @@ class MomentumFakeBinance(FakeBinance):
         if self.fail_symbol and sym == self.fail_symbol and "stopLossPrice" not in (params or {}):
             raise Exception("rejected")
         return super().create_order(sym, typ, side, qty, price, params)
+
+
+class _Wednesday(datetime):
+    @classmethod
+    def now(cls, tz=None): return datetime(2026, 11, 11, 0, 5, tzinfo=tz or timezone.utc)
+
+
+def on_a_wednesday(test):
+    """The weekly basket opens on Wednesday (MOM weekday 2, one day's catch-up), so a test that runs the bot's weekly
+    rebalance runs on one, whatever day the suite runs. Without it these tests failed Friday → Tuesday after #201."""
+    p = mock.patch.object(momentum_mod, "datetime", _Wednesday); p.start(); test.addCleanup(p.stop)
 
 
 def ranked():
@@ -57,6 +70,7 @@ class MomentumLsLiveTests(unittest.TestCase):
                               "enabled_strategies": ["momentum_ls"], "max_open_positions": 50, "public_dir": None})
         botmod._ENTRY_BLOCK["reason"] = ""
         self.state = botmod.load_state()
+        on_a_wednesday(self)
 
     def tearDown(self):
         botmod.CONFIG.clear(); botmod.CONFIG.update(self._cfg)

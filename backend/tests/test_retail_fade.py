@@ -32,6 +32,8 @@ class FakeEx:
 
 
 class RetailFadeTests(unittest.TestCase):
+    def setUp(self): base.on_a_wednesday(self)          # the weekly basket opens on Wednesday
+
     def rank(self, ex):
         with mock.patch.dict(botmod.MOM, botmod.RETAIL), \
              mock.patch.object(botmod, "listing_markets", return_value=[(f"{c}/USDT:USDT", 0, 0) for c in COINS]):
