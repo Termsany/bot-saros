@@ -50,6 +50,7 @@ function bsubscribe(){
                ...(typeof RN !== "undefined" && RN ? RN.pairs.flatMap(p => [p.long, p.short]) : []),
                ...(typeof RT !== "undefined" && RT ? RT.pairs.flatMap(p => [p.long, p.short]) : []),
                ...(typeof RW !== "undefined" && RW ? RW.pairs.flatMap(p => [p.long, p.short]) : []),
+               ...(typeof RK !== "undefined" && RK ? RK.pairs.flatMap(p => [p.long, p.short]) : []),
                ...(typeof BO !== "undefined" && BO ? BO.positions : []), ...(typeof R2 !== "undefined" && R2 ? R2.positions : []),
                ...(typeof RB !== "undefined" && RB ? RB.positions : []),
                ...(typeof TBk !== "undefined" && TBk ? TBk.positions : [])].map(p => p.id)
@@ -240,7 +241,7 @@ function renderPortfolios(){
 }
 setInterval(renderPortfolios, 1000)
 // ── HIGH RISK ratio trend (fourth paper bot): ratio.json every 15 s, legs priced on the same Binance stream ──
-let RS = null, RN = null, RT = null, RW = null
+let RS = null, RN = null, RT = null, RW = null, RK = null
 function renderRatioInto(k, secId, d){
   const sec = $(secId)
   if(!d){ sec.style.display = "none"; return }
@@ -256,7 +257,8 @@ function renderRatioInto(k, secId, d){
   $(k + "Open").textContent = pairs.length
   $(k + "Margin").textContent = `${tx("هامش مستخدم", "margin in use")} $${pairs.reduce((a, p) => a + p.margin, 0).toFixed(0)}`
   $(k + "Total").innerHTML = `<span class="${tone(total)}">${usd(total)}</span>`
-  $(k + "Next").textContent = d.next_members ? tx(`تحديث القائمة ${day(d.next_members)}`, `list refresh ${day(d.next_members)}`) : ""
+  $(k + "Next").textContent = d.next_switch ? tx(`التبديل الجاي ${day(d.next_switch)}`, `next switch ${day(d.next_switch)}`)
+    : d.next_members ? tx(`تحديث القائمة ${day(d.next_members)}`, `list refresh ${day(d.next_members)}`) : ""
   $(k + "Pairs").innerHTML = pairs.length ? pairs.map(p => `<tr>
       <td class="coin" style="color:var(--profit)">${esc(p.long.symbol.replace("/USDT", ""))}</td>
       <td class="coin" style="color:var(--loss)">${esc(p.short.symbol.replace("/USDT", ""))}</td>
@@ -276,6 +278,7 @@ function renderRatio(){ renderRatioInto("rs", "ratioSec", RS) }
 function renderRatioNb(){ renderRatioInto("rn", "ratioNbSec", RN) }
 function renderRatioTr(){ renderRatioInto("rt", "ratioTrSec", RT) }
 function renderRatioTw(){ renderRatioInto("rw", "ratioTwSec", RW) }
+function renderRatioWk(){ renderRatioInto("rk", "ratioWkSec", RK) }
 async function loadRatio(){
   try{ const r = await fetch(`ratio.json?t=${Date.now()}`, {cache: "no-store"}); if(!r.ok) throw 0; RS = await r.json(); renderRatio(); bsubscribe() }
   catch{ if(!RS) renderRatio() }
@@ -288,10 +291,13 @@ async function loadRatio(){
   // the first ratio bot with a 20% trail (research §35): hidden until its file exists
   try{ const r = await fetch(`ratio_trail_btc.json?t=${Date.now()}`, {cache: "no-store"}); if(!r.ok) throw 0; RW = await r.json(); renderRatioTw(); bsubscribe() }
   catch{ if(!RW) renderRatioTw() }
+  // the no-BTC bot switching once a week, on Monday (research §41): hidden until its file exists
+  try{ const r = await fetch(`ratio_weekly.json?t=${Date.now()}`, {cache: "no-store"}); if(!r.ok) throw 0; RK = await r.json(); renderRatioWk(); bsubscribe() }
+  catch{ if(!RK) renderRatioWk() }
 }
 loadRatio()
 setInterval(loadRatio, 15000)
-setInterval(() => { if(RS) renderRatio(); if(RN) renderRatioNb(); if(RT) renderRatioTr(); if(RW) renderRatioTw() }, 1000)
+setInterval(() => { if(RS) renderRatio(); if(RN) renderRatioNb(); if(RT) renderRatioTr(); if(RW) renderRatioTw(); if(RK) renderRatioWk() }, 1000)
 // ── volatility breakout + RSI-2 (fifth and sixth paper bots): breakout.json / rsi2.json every 15 s, Binance prices ──
 let BO = null, R2 = null, TBk = null, RB = null
 function renderSimple(key, d, watchHtml){

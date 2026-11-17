@@ -1,0 +1,28 @@
+[Unit]
+Description=Raqm bot — ratio trend without BTC/ETH, switching once a week on Monday (paper experiment, research §41)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=raqm
+Group=raqm
+WorkingDirectory=/opt/raqm-ratio-weekly
+EnvironmentFile=-/opt/raqm-bot/.env
+Environment=PYTHONUNBUFFERED=1
+# owner, 2026-11-17 (research §41): next to raqm-ratio-nobtc, the same no-BTC/ETH ratio trend ($40 margin x2 a leg),
+# its pairs changing only at the first cycle after 00:00 UTC on Monday instead of every day. Backtest: a third of the
+# trades, a lower drawdown on 6 weekdays of 7; which weekday is noise (Monday is momentum_ls's anchor). Own state
+# (state_ratio_weekly.json / .log), page data -> ratio_weekly.json. Paper only (bot.py refuses --ratio-weekday
+# otherwise). Its own code folder (deploy.sh paper:ratio-weekly); it shares the other paper bots' venv and Telegram
+# settings only.
+ExecStart=/opt/raqm-bot/venv/bin/python -E -s bot.py --paper --strategy ratio_weekly --amount 40 --leverage 2 --poll 60 --notify --public /var/www/bot.da3m.io --state state_ratio_weekly.json
+Restart=always
+RestartSec=30
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/raqm-ratio-weekly /var/www/bot.da3m.io
+
+[Install]
+WantedBy=multi-user.target

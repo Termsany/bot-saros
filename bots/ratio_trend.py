@@ -9,9 +9,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-RATIO = {"top": 7, "sma": 50, "min_days": 120, "every_days": 7, "exclude": [], "net": False, "stop": 0.40, "trail": 0.0}
+RATIO = {"top": 7, "sma": 50, "min_days": 120, "every_days": 7, "exclude": [], "net": False, "stop": 0.40, "trail": 0.0, "weekday": None}
 # trail: --ratio-trail, paper pairs only — out when the ratio is that far below its best since entry (research §35)
 # exclude: --ratio-exclude (research §25). net: --ratio-net — one position per coin, the sum of its pairs (run_once_ratio_net)
+# weekday: --ratio-weekday, paper pairs only — the pairs change only on that day (0 = Monday), not every day (research §41)
 
 def ratio_public_name():
     """The ratio bot's public file and paper close-request folder: "ratio", or --public-name for a second one."""
@@ -67,6 +68,23 @@ def _ratio_close_pair(ex, state, key, prices, reason, fcache):
                              "opened": pr["time"], "time": datetime.now(timezone.utc).isoformat(), "type": "paper"})
     return pnl
 
+def ratio_switch_due(state, today):
+    """Every day, or with --ratio-weekday (research §41) only on that weekday: a new bot at its first cycle, then the
+    first cycle after 00:00 UTC on that day, never twice a day, and as soon as 7 days have passed if the day was missed
+    (the bot down all day). Between switches the pairs, their sides and the members stay as they are. `today` is
+    00:00 UTC."""
+    wd = bot.RATIO.get("weekday"); last = state.get("ratio_switch")
+    if wd is None or not last: return True
+    last = datetime.fromisoformat(last)
+    return today - last >= pd.Timedelta(days=7) or (today.weekday() == wd and last < today)
+
+def ratio_next_switch(state):
+    """The next switching day (00:00 UTC) after the last one, with --ratio-weekday; else None."""
+    wd = bot.RATIO.get("weekday"); last = state.get("ratio_switch")
+    if wd is None or not last: return None
+    last = datetime.fromisoformat(last)
+    return last + pd.Timedelta(days=(wd - last.weekday()) % 7 or 7)
+
 def run_once_ratio(ex):
     if bot.RATIO.get("net"):
         return run_once_ratio_net(ex)
@@ -95,7 +113,7 @@ def run_once_ratio(ex):
             state["pairs"].pop(key, None)
         bot.save_state(state)
     today = now.replace(hour=0, minute=0, second=0, microsecond=0); prices = {}
-    if state.get("ratio_day") != today.isoformat():          # once a day, right after the daily close
+    if state.get("ratio_day") != today.isoformat() and bot.ratio_switch_due(state, today):   # right after the daily close
         cache, fcache = {}, {}
         last = state.get("ratio_members_at")
         if last is None or today - datetime.fromisoformat(last) >= pd.Timedelta(days=R["every_days"]):
@@ -181,7 +199,9 @@ def run_once_ratio(ex):
                     legs.append({"sym": sym, "side": side, "entry": x, "qty": bot.position_size(x) * lev / x})
                 rk = state.get("ratio_rank") or {}
                 state["pairs"][key] = {"sign": sig, "time": now.isoformat(), "legs": legs, "ranks": [rk.get(a), rk.get(b)]}
-        state["ratio_day"] = today.isoformat(); bot.save_state(state)
+        state["ratio_day"] = today.isoformat()
+        if R.get("weekday") is not None: state["ratio_switch"] = today.isoformat()
+        bot.save_state(state)
         bot.log(f"🔄 ratio: {len(state['pairs'])} زوج مفتوح | قفل اليوم {closed:+.4f} | قلب {flips}")
         if closed or flips:
             bot.notify(f"⚠️ HIGH RISK — ratio trend (Paper)\nأزواج مفتوحة {len(state['pairs'])} · اتقلب {flips}\nمقفول النهارده {closed:+.2f}$ · إجمالي محقق {state['stats']['pnl']:+.2f}$")
@@ -378,11 +398,12 @@ def write_ratio_status(state, prices):
         margin = sum(l["entry"] * l["qty"] for l in legs) / max(1, int(bot.CONFIG.get("leverage", 2)))
         pairs.append({"pair": key, "long": legs[0], "short": legs[1], "pnl": round(pnl, 4), "margin": round(margin, 2), "opened": pr["time"],
                       "ranks": pr.get("ranks"), "peak": pr.get("peak")})
-    st = state.get("stats", {}); at = state.get("ratio_members_at")
+    st = state.get("stats", {}); at = state.get("ratio_members_at"); nxt = bot.ratio_next_switch(state)
     data = {"updated": datetime.now(timezone.utc).isoformat(), "risk": "high", "mode": "paper" if bot.CONFIG["paper_trading"] else "live",
             "rules": bot.RATIO, "leverage": int(bot.CONFIG.get("leverage", 2)), "margin": bot.CONFIG.get("trade_amount_usdt"), "started": bot.CONFIG.get("started_at"),
             "members": [m.split("/")[0] for m in sorted(state.get("ratio_members", []), key=lambda m: (state.get("ratio_rank") or {}).get(m, 99))],
             "next_members": (datetime.fromisoformat(at) + pd.Timedelta(days=bot.RATIO["every_days"])).isoformat() if at else None,
+            "next_switch": nxt.isoformat() if nxt else None,
             "stats": {"closed": st.get("trades", 0), "wins": st.get("wins", 0), "losses": st.get("losses", 0),
                       "realized": round(float(st.get("pnl", 0)), 4), "unrealized": round(sum(p["pnl"] for p in pairs), 4), "open": len(pairs)},
             "pairs": sorted(pairs, key=lambda p: p["pair"]),

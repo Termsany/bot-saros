@@ -334,6 +334,26 @@
       <tbody id="rtHistory"><tr><td colspan="4" class="empty">لسه مفيش أزواج اتقفلت</td></tr></tbody>
     </table></div>
   </section>
+  <section id="ratioWkSec" style="margin-top:44px;border-top:1px solid var(--line);padding-top:26px;display:none">
+    <div class="head"><h2>Ratio trend من غير BTC/ETH · تبديل أسبوعي <span style="margin-inline-start:8px;font-size:11px;font-weight:700;color:var(--loss);border:1px solid rgba(255,84,112,.45);background:rgba(255,84,112,.1);border-radius:999px;padding:2px 9px">⚠️ HIGH RISK</span></h2><span class="count" id="rkUpdated"></span></div>
+    <p class="sub" style="font-size:13px">نفس بوت Ratio من غير BTC/ETH بالظبط، والفرق في التوقيت بس: الأزواج بتتغير مرة واحدة في الأسبوع، يوم الاتنين أول دورة بعد 00:00 UTC (2 الفجر بتوقيت مصر)، مش كل يوم. في الاختبار (research §41) قلّل الصفقات للتلت وقلّل التراجع في أغلب الأيام، بس أنهي يوم بالظبط ده حظ — شغالة Paper عشان نقارن الاتنين.</p>
+    <div class="chips" id="rkMembers"></div>
+    <div class="kpis" style="margin-top:14px">
+      <div class="card kpi"><div class="label">ربح محقق</div><div class="value mono" id="rkRealized">—</div><div class="note" id="rkWl">—</div></div>
+      <div class="card kpi"><div class="label">ربح الأزواج المفتوحة</div><div class="value mono" id="rkUnreal">—</div><div class="note">بالسعر اللحظي من Binance</div></div>
+      <div class="card kpi"><div class="label">أزواج مفتوحة</div><div class="value mono" id="rkOpen">—</div><div class="note" id="rkMargin">—</div></div>
+      <div class="card kpi"><div class="label">الإجمالي</div><div class="value mono" id="rkTotal">—</div><div class="note" id="rkNext">—</div></div>
+    </div>
+    <div class="table" style="margin-top:14px"><table>
+      <thead><tr><th>لونج</th><th>شورت</th><th>دخول لونج</th><th>دخول شورت</th><th>الربح $</th><th>من</th></tr></thead>
+      <tbody id="rkPairs"><tr><td colspan="6" class="empty">بيحمّل…</td></tr></tbody>
+    </table></div>
+    <div class="head" style="margin-top:16px"><h2 style="font-size:14px">اتقفلت</h2><span class="count" id="rkHistCount"></span></div>
+    <div class="table"><table>
+      <thead><tr><th>الزوج (لونج / شورت)</th><th>الربح $</th><th>السبب</th><th>الوقت</th></tr></thead>
+      <tbody id="rkHistory"><tr><td colspan="4" class="empty">لسه مفيش أزواج اتقفلت</td></tr></tbody>
+    </table></div>
+  </section>
 
   <section id="boSec" style="margin-top:44px;border-top:1px solid var(--line);padding-top:26px;display:none">
     <div class="head"><h2>بريك أوت التذبذب (Larry Williams) — تجربة Paper</h2><span class="count" id="boUpdated"></span></div>
@@ -433,9 +453,9 @@
   </footer>
 </div>
 
-<script src="assets/i18n.js?v=762d28f7ae9b"></script>
+<script src="assets/i18n.js?v=26d5759825b8"></script>
 <script src="assets/live.js?v=48dbc557a37c"></script>
-<script src="assets/bots.js?v=7533b916b136"></script>
-<script src="assets/board.js?v=d4d888908aaa"></script>
+<script src="assets/bots.js?v=bbd716d122ab"></script>
+<script src="assets/board.js?v=5d90a5cb38b7"></script>
 </body>
 </html>
