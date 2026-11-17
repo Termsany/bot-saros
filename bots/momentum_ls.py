@@ -34,6 +34,39 @@ DAILY = {"weekday": False, "every_days": 1, "hold_days": 1, "keep": True}
 # drawdown $358 instead of $578 for 11% less profit, the same Sharpe in both periods
 
 
+# --mom-vol L (owner, 2026-11-17, paper only; research §39): a new leg's margin is the usual amount x clip(ref / vol,
+# 0.25, 2): vol = the coin's standard deviation of daily returns over L days, ref = the median of the day's ranked coins.
+# A wild coin gets a smaller leg, a calm one a larger. Backtest (L 60): the worst drawdown $338 instead of $734 for the
+# same capital, 14% less profit, a higher Sharpe in both periods. A held leg keeps its size.
+VOL = {}          # symbol -> its daily-return volatility, filled by momentum_rank while MOM["vol"] is set
+VOL_CLIP = (0.25, 2.0)
+
+
+def daily_vol(closes, L):
+    """standard deviation of the last L daily returns of `closes` (oldest first); None with too little history."""
+    c = [float(x) for x in closes]
+    if len(c) < L + 1: return None
+    r = [c[i] / c[i - 1] - 1 for i in range(len(c) - L, len(c)) if c[i - 1] > 0]
+    if len(r) < max(2, L): return None
+    m = sum(r) / len(r)
+    return (sum((x - m) ** 2 for x in r) / (len(r) - 1)) ** 0.5
+
+
+def vol_ref(ranked):
+    """the median volatility of the ranked coins (the typical coin keeps the usual amount)."""
+    v = sorted(VOL[s] for s, _ in ranked if VOL.get(s))
+    if not v: return None
+    h = len(v) // 2
+    return v[h] if len(v) % 2 else (v[h - 1] + v[h]) / 2
+
+
+def vol_weight(sym, ref, clip=VOL_CLIP):
+    """the size multiplier of a new leg: ref / its volatility, clipped; 1 when either is unknown."""
+    v = VOL.get(sym)
+    if not v or not ref: return 1.0
+    return min(clip[1], max(clip[0], ref / v))
+
+
 def momentum_picks(ranked, n, held=None, buffer=None):
     """[(symbol, score, side)]: n shorts from the weak end of `ranked` (weakest first) and n longs from the strong
     end. With `held` ({symbol: side}) and a buffer B > n, a held coin still among the B on its side is picked first."""
@@ -118,9 +151,10 @@ def momentum_rank(ex):
     rows = []
     for sym in cands:
         try:
-            k = ex.fetch_ohlcv(sym, "1d", limit=max(70, bot.MOM["min_days"] + 10))[:-1]          # closed candles only
+            k = ex.fetch_ohlcv(sym, "1d", limit=max(70, bot.MOM["min_days"] + 10, int(bot.MOM.get("vol") or 0) + 11))[:-1]   # closed only
             if len(k) < bot.MOM["min_days"]: continue
             rows.append((sum(r[4] * r[5] for r in k[-30:]) / 30, sym, k[-1][4] / k[-1 - 7 * bot.MOM["weeks"]][4] - 1))
+            if bot.MOM.get("vol"): VOL[sym] = daily_vol([r[4] for r in k], int(bot.MOM["vol"]))
         except Exception as e: bot.log(f"momentum {sym}: {e}")
     top = sorted(rows, reverse=True)[:bot.MOM["top"]]
     if bot.MOM.get("score") == "retail":
@@ -207,6 +241,7 @@ def run_once_momentum(ex):
                     state["mom_last"] = week; state["mom_ranking"] = [{"symbol": s.split(":")[0], "ret": round(r * 100, 1)} for s, r in ranked]; bot.save_state(state)
                 return
             period = "تبديل يومي" if M["every_days"] == 1 else "تبديل أسبوعي"
+            ref = vol_ref(ranked) if M.get("vol") else None
             for sym in list(state["positions"]):
                 if sym in keep: continue                    # still in the basket, same side: held as it is
                 try:
@@ -216,10 +251,11 @@ def run_once_momentum(ex):
                 if sym in keep:
                     state["positions"][sym]["ret"] = ret; continue
                 try:
-                    price = float(ex.fetch_ticker(sym)["last"]); prices[sym] = price; q = bot.position_size(price) * lev / price
+                    w = vol_weight(sym, ref) if M.get("vol") else 1.0
+                    price = float(ex.fetch_ticker(sym)["last"]); prices[sym] = price; q = bot.position_size(price) * w * lev / price
                     sl = price * (1 + M["stop"]) if side == "short" else price * (1 - M["stop"])
                     state["positions"][sym] = {"side": side, "entry": price, "qty": q, "leverage": lev, "time": now.isoformat(),
-                                               "sl": sl, "tp": None, "ret": ret}
+                                               "sl": sl, "tp": None, "ret": ret, **({"w": round(w, 3)} if M.get("vol") else {})}
                 except Exception as e: bot.log(f"فتح {sym}: {e}")
             state["mom_last"] = week
             state["mom_ranking"] = [{"symbol": s.split(":")[0], "ret": round(r * 100, 1)} for s, r in ranked]
@@ -252,7 +288,7 @@ def write_momentum_status(state, prices):
         pnl = sg * (price - p["entry"]) * p["qty"]; margin = p["entry"] * p["qty"] / max(1, int(p.get("leverage", 2)))
         pos.append({"symbol": sym.split(":")[0], "id": sym.split("/")[0] + "USDT", "side": p["side"], "entry": p["entry"], "price": price,
                     "qty": p["qty"], "margin": round(margin, 2), "sl": p["sl"], "pnl": round(pnl, 4),
-                    "pnl_pct": round(pnl / margin * 100, 2) if margin else 0, "opened": p["time"],
+                    "pnl_pct": round(pnl / margin * 100, 2) if margin else 0, "opened": p["time"], **({"w": p["w"]} if "w" in p else {}),
                     **({"ratio": round(float(p.get("ret", 0)), 3)} if bot.MOM.get("score") == "retail" else {"ret": round(p.get("ret", 0) * 100, 1)})})
     st = state.get("stats", {}); last = state.get("mom_last")
     data = {"updated": datetime.now(timezone.utc).isoformat(), "mode": "paper" if bot.CONFIG["paper_trading"] else "live", "rules": bot.MOM,

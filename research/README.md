@@ -850,6 +850,48 @@ days, none missing); a trigger and a return inside the same hour count as stoppe
 - **Decision:** nothing changes on a bot. The next ideas aim at the legs that stop out (roadmap 2.2, new coins
   excluded; 2.3, size by volatility).
 
+### 39. Momentum daily with each leg sized by its volatility: half the drawdown, a better Sharpe in both periods — a paper bot (`momentum_volsize_study.py`, 2026-11-17)
+
+Roadmap 2.3. Moskowitz, Ooi & Pedersen (2012) scale every asset to the same volatility, and Kim, Tse & Wald (2016) find
+most of time-series momentum's risk-adjusted gain comes from that scaling. §30 showed that leaving the wild coins out
+loses, because they are where the edge is. Sizing keeps them, but smaller.
+
+**The rule.** A new leg's margin is $20 × clip(ref / vol, 0.25, 2):
+- vol is the coin's standard deviation of daily returns over L days, at the ranking close;
+- ref is the median vol of that day's ranked top 50, so a typical coin keeps $20;
+- a held leg keeps its size.
+
+Everything else is §37's daily basket. Fixed first: L 20 or 60, the clip [0.25, 2] or [0.25, 1], the pick by Sharpe
+before 2024 at buffer 5. It is adopted only if it also beats the baseline after 2024 and its neighbours agree.
+"Same $" scales PnL and DD to the baseline's average margin in use ($200 against $159), because smaller legs tie up
+less capital. Data to 2026-11-14:
+
+| buffer 5 | net | net, same $ | worst DD | DD, same $ | Sharpe < 2024 | Sharpe 2024 → | 2022 | 2025 | 2026 |
+|---|---|---|---|---|---|---|---|---|---|
+| **$20 a leg (runs)** | +$2,904 | +$2,904 | $734 | $734 | 1.16 | 0.82 | −100 | +1,339 | +38 |
+| vol 20 d, ×0.25–2 | +$1,540 | +$2,119 | $248 | $341 | 1.18 | 0.78 | +30 | +525 | −10 |
+| vol 20 d, ×0.25–1 | +$1,479 | +$2,199 | $226 | $336 | 1.20 | 0.74 | +10 | +509 | −4 |
+| **vol 60 d, ×0.25–2 (the pick)** | +$1,985 | **+$2,491** | $269 | **$338** | **1.25** | **0.87** | −7 | +389 | **+114** |
+| vol 60 d, ×0.25–1 | +$1,886 | +$2,546 | $276 | $373 | 1.23 | 0.83 | −21 | +391 | +111 |
+
+- **Neighbours of the pick:**
+  - 30 days: 1.27 / 0.84.
+  - 45 days: 1.27 / 0.82.
+  - Clip ×0.25–1.5: 1.24 / 0.86.
+
+  Every one is at or above the baseline in both periods, so 60 days is not a lucky number.
+- **Buffer 7 says the same:** the drawdown is $217 instead of $490, and the Sharpe 1.16 / 0.88 against 1.12 / 0.85.
+- **Where it comes from:** the 40% stops cost $1,675 instead of $3,433. On 2026-11-11, AGT, AKE, Q and JCT would
+  have been $5 legs, IDOL $7 and ARIA $11, which are the stops the paper bots took at −$80 each (§38).
+- **What it gives up:**
+  - 2025 drops from +$1,339 to about +$490 at the same capital, because that year's profit came from wild coins
+    that ran.
+  - The Sharpe gain is small (+0.05 to +0.09). The real change is the drawdown.
+- **Before real money:** at a $26 base margin the smallest leg would be ~$6.5 ($13 notional), close to Binance's
+  minimum order. Check that first.
+- **Decision:** a paper bot, `raqm-momentum-daily-vol` (`--strategy momentum_daily_vol`, `bot.py --mom-vol 60`), next
+  to `raqm-momentum-daily` as an A/B pair. No real bot changes.
+
 ## The site now shows only the four paper bots
 
 `research/bots_stats.py` writes `lib/bot-stats.json` (the numbers the site shows); the dashboard's live section and

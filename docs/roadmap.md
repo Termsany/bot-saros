@@ -23,6 +23,7 @@ The whole application, all tracks: [development-plan.md](development-plan.md).
 | `raqm-momentum`: weekly basket, opens Wednesday, holds 6 days | 2026-11-11 |
 | `raqm-momentum-daily`: a new basket every day at 00:00 UTC, coins still in it stay open | 2026-11-11 |
 | `raqm-momentum-daily-b7`: the same, a held coin stays while among the strongest/weakest 7 (research §37) | 2026-11-12 |
+| `raqm-momentum-daily-vol`: the same, each new leg sized by its 60-day volatility (research §39) | 2026-11-17 |
 
 - The goal is to check that the live trading matches the backtest: rebalances, stops, fees, and funding. Profit is
   not judged here; two weeks are far too few for that.
@@ -55,10 +56,11 @@ Each idea is its own study, in this order:
 |---|---|---|
 | 2.1 | Buffer 7: decide from the A/B in stage 0 | The backtest shows the worst drawdown at $358 instead of $578, for 11% less profit |
 | 2.2 | Exclude new coins (listed fewer than N days) | Likely the source of the largest stops |
-| 2.3 | Size by volatility: a wilder coin gets a smaller leg | The same risk per leg instead of the same dollars |
+| 2.3 | Size by volatility: a wilder coin gets a smaller leg | **Passed the backtest (§39)**: half the drawdown, a better Sharpe in both periods; on paper since 2026-11-17 |
 | 2.4 | Blend lookbacks (2 weeks + 4 weeks) in the ranking | 2w and 4w were each the best on different periods |
 
-- Ideas already closed are not reopened: the reversal basket (all 10 variants lost) and no shorts (§37).
+- Ideas already closed are not reopened: the reversal basket (all 10 variants lost), no shorts (§37), and a breakeven
+  stop (§38).
 - **Passes when** an idea wins in both periods, not one. Anything that fails is recorded and closed.
 
 ## 3. Execution quality and risk

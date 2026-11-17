@@ -230,6 +230,7 @@ if __name__=="__main__":
     p.add_argument("--ratio-trail", type=float, default=0.0, help="ratio trend, paper pairs: out when the ratio is this far below its best since entry, e.g. 0.20 (research §35)")
     p.add_argument("--momentum-retail", action="store_true", help="momentum_ls ranked against the crowd's long/short ratio (paper only, research §29)")
     p.add_argument("--mom-buffer", type=int, default=0, help="momentum daily: a held coin stays while among the strongest/weakest B (paper only, research §37)")
+    p.add_argument("--mom-vol", type=int, default=0, help="momentum daily: size each new leg by its L-day volatility (paper only, research §39)")
     p.add_argument("--mom-daily", action="store_true", help="momentum_ls: a new basket every day at 00:00 UTC, keeping the coins still in it (owner 2026-11-11)")
     p.add_argument("--rsi2-btc-ma", type=int, default=0, help="RSI-2: new entries only while BTC closes above this daily average, e.g. 200 (research §28)")
     p.add_argument("--public-name", default=None, help="a second bot of the same strategy: its public file name (e.g. ratio_nobtc)")
@@ -275,6 +276,9 @@ if __name__=="__main__":
     if args.mom_buffer:
         if not args.mom_daily or not args.paper or not 5 <= args.mom_buffer <= 20: p.error("--mom-buffer: paper --mom-daily only, 5..20")
         MOM["buffer"] = args.mom_buffer
+    if args.mom_vol:
+        if not args.mom_daily or not args.paper or not 20 <= args.mom_vol <= 120: p.error("--mom-vol: paper --mom-daily only, 20..120 days")
+        MOM["vol"] = args.mom_vol
     if args.rsi2_btc_ma:
         if not 20 <= args.rsi2_btc_ma <= 400: p.error("--rsi2-btc-ma: 20..400 days")
         RSI2["btc_ma"]=args.rsi2_btc_ma

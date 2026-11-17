@@ -16,6 +16,8 @@ const BOTS = [
   { k: "momentum_daily_b7", d: () => MB, sec: "mbSec", ar: "مومنتم يومي · هامش 7", en: "Momentum daily · buffer 7", fam: "momentum", ab: "B", twin: "momentum_daily",
     since: "2026-11-12T00:00:00Z", diff: { ar: "الفرق الوحيد: العملة المفتوحة بتفضل طول ما هي من أقوى (أو أضعف) 7، مش 5 (research §37).", en: "The one difference: an open coin stays while it is among the strongest (or weakest) 7, not 5 (research §37)." } },
   { k: "retail_fade", d: () => RF, sec: "rfSec", ar: "عكس الأغلبية", en: "Against the crowd", fam: "momentum" },
+  { k: "momentum_daily_vol", d: () => MV, sec: "mvSec", ar: "مومنتم يومي · حجم بالتذبذب", en: "Momentum daily · vol-sized", fam: "momentum", ab: "B", twin: "momentum_daily",
+    since: "2026-11-17T00:00:00Z", diff: { ar: "الفرق الوحيد: هامش كل صفقة جديدة على قد تذبذب العملة، العنيفة أصغر والهادية أكبر (research §39).", en: "The one difference: each new leg's margin follows the coin's volatility, smaller for a wild coin, larger for a calm one (research §39)." } },
   { k: "ratio", d: () => RS, sec: "ratioSec", ar: "Ratio", en: "Ratio trend", fam: "ratio", risk: true, ab: "A", twin: "ratio_trail_btc" },
   { k: "ratio_trail_btc", d: () => RW, sec: "ratioTwSec", ar: "Ratio · trailing 20%", en: "Ratio · trail 20%", fam: "ratio", risk: true, ab: "B", twin: "ratio",
     since: "2026-11-10T11:30:00Z", diff: TRAIL },
