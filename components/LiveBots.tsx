@@ -101,7 +101,7 @@ export function LiveBots({ bots, loaded, admin = false }: { bots: LiveBot[], loa
                             <td className="py-1.5 font-bold" dir="ltr" style={align}>{p.label}</td>
                             <td className="py-1.5">
                               {p.side === "pair" ? <span className="text-faint">{p.detail}</span>
-                                : <span className={`rounded px-1.5 py-0.5 font-mono text-[10px] font-bold ${p.side === "long" ? "bg-profit/10 text-profit" : "bg-loss/10 text-loss"}`}>{p.side.toUpperCase()}</span>}
+                                : <span className={`rounded-sm px-1.5 py-0.5 font-mono text-[10px] font-bold ${p.side === "long" ? "bg-profit/10 text-profit" : "bg-loss/10 text-loss"}`}>{p.side.toUpperCase()}</span>}
                             </td>
                             <td className="py-1.5 font-mono text-muted tabular" dir="ltr" style={align}>{p.price !== undefined ? `${px(p.entry)} → ${px(p.price)}` : ""}</td>
                             <td className={`py-1.5 font-mono font-bold tabular ${tone(p.pnl)}`} dir="ltr" style={align}>{money(p.pnl)}</td>
@@ -111,7 +111,7 @@ export function LiveBots({ bots, loaded, admin = false }: { bots: LiveBot[], loa
                             <span className="text-profit/90">{p.exit}</span>
                             {admin && (closing[s.live + p.ref]
                               ? <span className="ms-2 text-muted">{closing[s.live + p.ref]}</span>
-                              : <button onClick={() => close(s.live, name, p.ref, p.label)} className="ms-2 rounded border border-loss/50 px-1.5 text-[10px] font-bold text-loss hover:bg-loss/10">{t.close}</button>)}
+                              : <button onClick={() => close(s.live, name, p.ref, p.label)} className="ms-2 rounded-sm border border-loss/50 px-1.5 text-[10px] font-bold text-loss hover:bg-loss/10">{t.close}</button>)}
                           </td></tr>
                         </Fragment>))}
                       </tbody>
