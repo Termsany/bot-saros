@@ -200,6 +200,7 @@ from engine.loop import (DashHandler, MARKET_DATA_METHODS, _strategy_ex, _write_
 # ── the strategies, one file each (bots/): re-exported here — bot.<name> stays the one name the CLI, the API and the tests use ──
 from bots.momentum_ls import MOM, RETAIL, DAILY, momentum_public_name, retail_ratio, momentum_due, momentum_hold_over, momentum_next, momentum_slot, momentum_picks, momentum_mode, momentum_rank, run_once_momentum, write_momentum_status
 from bots.ratio_trend import RATIO, ratio_public_name, ratio_mode, _daily_closed, _ratio_rank, ratio_members, ratio_signal, _ratio_close_pair, run_once_ratio, write_ratio_status
+from bots.ratio_trend import ratio_switch_due, ratio_next_switch
 from bots.ratio_trend import ratio_targets, ratio_net_plan, run_once_ratio_net, write_ratio_net_status
 from bots.listing_short import LISTING, listing_mode, _listing_close, run_once_listing, write_listing_status
 from bots.vol_breakout import VB, breakout_mode, run_once_breakout
@@ -228,6 +229,7 @@ if __name__=="__main__":
     p.add_argument("--ratio-exclude", default="", help="ratio trend: coins left out of the weekly pick, e.g. BTC,ETH (research §25)")
     p.add_argument("--ratio-net", action="store_true", help="ratio trend: one position per coin, the sum of its pairs — the only way a one-way account trades all of them (docs/ratio-trend-live-plan.md §1)")
     p.add_argument("--ratio-trail", type=float, default=0.0, help="ratio trend, paper pairs: out when the ratio is this far below its best since entry, e.g. 0.20 (research §35)")
+    p.add_argument("--ratio-weekday", type=int, default=None, choices=range(7), help="ratio trend, paper pairs: the pairs change only on this weekday, 0 = Monday (research §41)")
     p.add_argument("--momentum-retail", action="store_true", help="momentum_ls ranked against the crowd's long/short ratio (paper only, research §29)")
     p.add_argument("--mom-buffer", type=int, default=0, help="momentum daily: a held coin stays while among the strongest/weakest B (paper only, research §37)")
     p.add_argument("--mom-vol", type=int, default=0, help="momentum daily: size each new leg by its L-day volatility (paper only, research §39)")
@@ -266,6 +268,10 @@ if __name__=="__main__":
         if args.strategy != "ratio_trend" or not args.paper or args.ratio_net or not 0 < args.ratio_trail < 1:
             p.error("--ratio-trail: paper ratio_trend pairs only (not --ratio-net), a fraction like 0.20")
         RATIO["trail"]=args.ratio_trail
+    if args.ratio_weekday is not None:
+        if args.strategy != "ratio_trend" or not args.paper or args.ratio_net:
+            p.error("--ratio-weekday: paper ratio_trend pairs only (not --ratio-net)")
+        RATIO["weekday"]=args.ratio_weekday
     if args.momentum_retail:
         if args.strategy != "momentum_ls" or not args.paper: p.error("--momentum-retail: paper momentum_ls only")
         MOM.update(RETAIL)

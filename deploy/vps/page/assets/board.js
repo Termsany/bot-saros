@@ -24,6 +24,8 @@ const BOTS = [
   { k: "ratio_nobtc", d: () => RN, sec: "ratioNbSec", ar: "Ratio من غير BTC/ETH", en: "Ratio · no BTC/ETH", fam: "ratio", risk: true, ab: "A", twin: "ratio_trail" },
   { k: "ratio_trail", d: () => RT, sec: "ratioTrSec", ar: "Ratio من غير BTC/ETH · trailing 20%", en: "Ratio · no BTC/ETH · trail 20%", fam: "ratio", risk: true, ab: "B",
     twin: "ratio_nobtc", since: "2026-11-10T11:17:00Z", diff: TRAIL },
+  { k: "ratio_weekly", d: () => RK, sec: "ratioWkSec", ar: "Ratio من غير BTC/ETH · أسبوعي", en: "Ratio · no BTC/ETH · weekly", fam: "ratio", risk: true, ab: "B",
+    twin: "ratio_nobtc", since: "2026-11-23T00:00:00Z", diff: { ar: "الفرق الوحيد: الأزواج بتتغير مرة في الأسبوع يوم الاتنين، مش كل يوم (research §41).", en: "The one difference: the pairs change once a week, on Monday, not every day (research §41)." } },
   { k: "breakout", d: () => BO, sec: "boSec", ar: "بريك أوت التذبذب", en: "Volatility breakout", fam: "breakout" },
   { k: "rsi2", d: () => R2, sec: "r2Sec", ar: "RSI-2", en: "RSI-2", fam: "meanrev", ab: "A", twin: "rsi2_btc" },
   { k: "rsi2_btc", d: () => RB, sec: "rbSec", ar: "RSI-2 + فلتر BTC", en: "RSI-2 + BTC filter", fam: "meanrev", ab: "B", twin: "rsi2",

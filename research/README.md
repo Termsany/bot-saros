@@ -944,9 +944,10 @@ bot. 30-day top 7, $26 × 2 a unit, 2020-01 → 2026-11-14.
 - **Caveats:**
   - this is about the 25th variant of the ratio trend on the same data (17 universes, 7 exits);
   - a whole week without switching also means a week without leaving a pair that turned (only the 40% stop acts).
-- **Decision:** no live change. A paper candidate: the no-BTC ratio trend switching weekly on Monday, next to the
-  daily paper bot as an A/B pair. Monday because it is the anchor already chosen for momentum_ls (2026-11-03), not
-  because it ranked well here. Expect anything in the 0.3–1.3 range after 2024.
+- **Decision:** no live change. A paper bot: `raqm-ratio-weekly` (`--strategy ratio_weekly`, `bot.py --ratio-weekday
+  0`), the no-BTC ratio trend switching weekly on Monday, next to `raqm-ratio-nobtc` (daily) as an A/B pair. Monday
+  because it is the anchor already chosen for momentum_ls (2026-11-03), not because it ranked well here. Expect
+  anything in the 0.3–1.3 range after 2024.
 
 ## The site now shows only the four paper bots
 

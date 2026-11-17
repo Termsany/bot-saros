@@ -24,6 +24,7 @@ The whole application, all tracks: [development-plan.md](development-plan.md).
 | `raqm-momentum-daily`: a new basket every day at 00:00 UTC, coins still in it stay open | 2026-11-11 |
 | `raqm-momentum-daily-b7`: the same, a held coin stays while among the strongest/weakest 7 (research §37) | 2026-11-12 |
 | `raqm-momentum-daily-vol`: the same, each new leg sized by its 60-day volatility (research §39) | 2026-11-17 |
+| `raqm-ratio-weekly`: the no-BTC ratio trend, its pairs changing only on Monday, next to `raqm-ratio-nobtc` (research §41) | not deployed yet |
 
 - The goal is to check that the live trading matches the backtest: rebalances, stops, fees, and funding. Profit is
   not judged here; two weeks are far too few for that.
