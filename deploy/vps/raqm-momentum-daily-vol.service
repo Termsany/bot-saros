@@ -1,0 +1,28 @@
+[Unit]
+Description=Raqm bot — momentum daily vol-sized: the daily basket, each new leg sized by its 60-day volatility (paper, research §39)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=raqm
+Group=raqm
+WorkingDirectory=/opt/raqm-momentum-daily-vol
+EnvironmentFile=-/opt/raqm-bot/.env
+Environment=PYTHONUNBUFFERED=1
+# owner, 2026-11-17 (research §39): next to raqm-momentum-daily, the same daily basket with each new leg's margin
+# scaled by the coin's 60-day volatility against the day's median (x0.25 to x2): a wild coin a small leg. Backtest:
+# the worst drawdown $338 instead of $734 for the same capital, 14% less profit. Own state
+# (state_momentum_daily_vol.json / .log), page data -> momentum_daily_vol.json. Paper only (bot.py refuses
+# --mom-vol otherwise). Its own code folder (deploy.sh paper:momentum-daily-vol); it shares the other paper bots'
+# venv and Telegram settings only.
+ExecStart=/opt/raqm-bot/venv/bin/python -E -s bot.py --paper --strategy momentum_daily_vol --amount 100 --leverage 2 --poll 60 --notify --public /var/www/bot.da3m.io --state state_momentum_daily_vol.json
+Restart=always
+RestartSec=30
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/raqm-momentum-daily-vol /var/www/bot.da3m.io
+
+[Install]
+WantedBy=multi-user.target

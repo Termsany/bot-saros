@@ -167,6 +167,66 @@ class BufferTests(unittest.TestCase):
         self.assertIn('id="mbSec"', (ROOT / "deploy/vps/page/index.html").read_text(encoding="utf-8"))
 
 
+class VolSizeTests(unittest.TestCase):
+    """--mom-vol (research §39): a new leg's margin is the usual amount x clip(median vol / its vol, 0.25, 2)."""
+
+    def test_volatility_and_weight(self):
+        from bots import momentum_ls as mls
+        self.assertIsNone(mls.daily_vol([1, 2, 3], 5))
+        self.assertAlmostEqual(mls.daily_vol([100, 110, 99, 108.9], 3), 0.1155, places=3)   # +10%, -10%, +10%
+        with mock.patch.dict(mls.VOL, {"A": 0.02, "B": 0.05, "C": 0.20, "D": 0.80}, clear=True):
+            self.assertAlmostEqual(mls.vol_ref([("A", 0), ("B", 0), ("C", 0), ("D", 0)]), 0.125)
+            self.assertEqual(mls.vol_weight("A", 0.125), 2.0)                     # calm: double, no more
+            self.assertAlmostEqual(mls.vol_weight("C", 0.125), 0.625)
+            self.assertEqual(mls.vol_weight("D", 0.125), 0.25)                    # wild: a quarter, no less
+            self.assertEqual(mls.vol_weight("E", 0.125), 1.0)                     # unknown: the usual amount
+
+    def test_the_paper_basket_sizes_each_leg(self):
+        from bots import momentum_ls as mls
+        state = {"positions": {}, "history": [], "stats": {"trades": 0, "wins": 0, "losses": 0, "pnl": 0.0}}
+        vols = {s: (0.30 if s == "S19/USDT:USDT" else 0.05) for s, _ in ranked()}
+
+        class FakeDT(datetime):
+            @classmethod
+            def now(cls, tz=None): return datetime(2026, 11, 17, 0, 5, tzinfo=timezone.utc)
+
+        with mock.patch.dict(botmod.MOM, {**botmod.DAILY, "vol": 60}), \
+             mock.patch.dict(mls.VOL, vols, clear=True), \
+             mock.patch.dict(botmod.CONFIG, {"paper_trading": True, "public_dir": None, "trade_amount_usdt": 100, "leverage": 2,
+                                             "use_percent_risk": False}), \
+             mock.patch.object(botmod, "load_state", lambda: state), \
+             mock.patch.object(botmod, "save_state", lambda s: None), \
+             mock.patch.object(botmod, "process_paper_closes", lambda *a, **k: None), \
+             mock.patch.object(botmod, "notify", lambda *a, **k: None), \
+             mock.patch.object(botmod, "log", lambda *a, **k: None), \
+             mock.patch.object(botmod, "momentum_rank", lambda ex: ranked()), \
+             mock.patch.object(mls, "datetime", FakeDT):
+            mls.run_once_momentum(MomentumFakeBinance())
+        pos = state["positions"]; self.assertEqual(len(pos), 10)
+        margin = lambda s: pos[s]["entry"] * pos[s]["qty"] / pos[s]["leverage"]
+        self.assertAlmostEqual(margin("S19/USDT:USDT") / margin("S18/USDT:USDT"), 0.25 / 1.0)   # the wild coin: a quarter
+        self.assertEqual(pos["S19/USDT:USDT"]["w"], 0.25); self.assertEqual(pos["S0/USDT:USDT"]["w"], 1.0)
+
+    def test_the_cli(self):
+        e = {k: v for k, v in os.environ.items() if not k.startswith(("BINANCE", "ALLOW_LIVE", "RAQM_"))}
+        e.update({"BINANCE_ENV": "live", "PYTHONIOENCODING": "utf-8"})
+        run = lambda *a: subprocess.run([sys.executable, "bot.py", *a], cwd=ROOT, env=e, capture_output=True, timeout=120, encoding="utf-8", errors="replace")
+        r = run("--paper", "--strategy", "momentum_daily_vol", "--show-config")
+        self.assertEqual(r.returncode, 0, r.stderr); self.assertIn('"vol": 60', r.stdout); self.assertIn('"public_name": "momentum_daily_vol"', r.stdout)
+        for a in (("--live", "--strategy", "momentum_ls", "--mom-daily", "--mom-vol", "60"), ("--paper", "--strategy", "momentum_ls", "--mom-vol", "60"),
+                  ("--paper", "--strategy", "momentum_ls", "--mom-daily", "--mom-vol", "5")):
+            r = run(*a); self.assertEqual(r.returncode, 2, a); self.assertIn("--mom-vol", r.stderr)
+        u = (ROOT / "deploy/vps/raqm-momentum-daily-vol.service").read_text(encoding="utf-8")
+        self.assertIn("--paper --strategy momentum_daily_vol --amount 100 --leverage 2", u)
+        self.assertIn("WorkingDirectory=/opt/raqm-momentum-daily-vol", u)
+        page = ROOT / "deploy/vps/page"
+        self.assertIn('id="mvSec"', (page / "index.html").read_text(encoding="utf-8"))
+        self.assertIn("momentum_daily_vol.json", (page / "assets/bots.js").read_text(encoding="utf-8"))
+        self.assertIn('k: "momentum_daily_vol"', (page / "assets/board.js").read_text(encoding="utf-8"))
+        sys.path.insert(0, str(ROOT / "scripts")); import watchdog
+        self.assertIn("momentum_daily_vol", watchdog.PAPER_BOTS)
+
+
 class WiringTests(unittest.TestCase):
     def run_bot(self, *args):
         e = {k: v for k, v in os.environ.items() if not k.startswith(("BINANCE", "ALLOW_LIVE", "RAQM_"))}

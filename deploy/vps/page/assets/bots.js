@@ -45,7 +45,7 @@ async function loadListing(){
 }
 function bsubscribe(){
   if(!bws || bws.readyState !== 1) return
-  const ids = [...(LS ? LS.positions : []), ...(typeof MS !== "undefined" && MS ? MS.positions : []), ...(typeof MD !== "undefined" && MD ? MD.positions : []), ...(typeof MB !== "undefined" && MB ? MB.positions : []), ...(typeof RF !== "undefined" && RF ? RF.positions : []),
+  const ids = [...(LS ? LS.positions : []), ...(typeof MS !== "undefined" && MS ? MS.positions : []), ...(typeof MD !== "undefined" && MD ? MD.positions : []), ...(typeof MB !== "undefined" && MB ? MB.positions : []), ...(typeof MV !== "undefined" && MV ? MV.positions : []), ...(typeof RF !== "undefined" && RF ? RF.positions : []),
                ...(typeof RS !== "undefined" && RS ? RS.pairs.flatMap(p => [p.long, p.short]) : []),
                ...(typeof RN !== "undefined" && RN ? RN.pairs.flatMap(p => [p.long, p.short]) : []),
                ...(typeof RT !== "undefined" && RT ? RT.pairs.flatMap(p => [p.long, p.short]) : []),
@@ -88,7 +88,7 @@ function renderMomBot(d, p, secId, wait){
   $(p + "Next").textContent = d.next_rebalance ? new Date(d.next_rebalance).toLocaleDateString(L === "en" ? "en-GB" : "ar-EG", {weekday: "long", day: "numeric", month: "short", timeZone: "UTC"}) : "—"
   $(p + "Total").innerHTML = `${tx("الإجمالي", "Total")} <b class="mono ${tone(total)}">${usd(total)}</b>`
   $(p + "Positions").innerHTML = pos.length ? pos.map(p => `<tr>
-      <td class="coin">${esc(p.symbol.replace("/USDT", ""))}</td>
+      <td class="coin">${esc(p.symbol.replace("/USDT", ""))}${p.w != null ? ` <span class="mono" style="color:var(--faint);font-size:11px">$${Number(p.margin).toFixed(0)}</span>` : ""}</td>
       <td>${sideTag(p.side)}</td>
       <td class="num mono ${tone(p.ret)}">${p.ret > 0 ? "+" : ""}${Number(p.ret).toFixed(0)}%</td>
       <td class="num mono">${px(p.entry)}</td>
@@ -135,6 +135,16 @@ async function loadMomB7(){
 loadMomB7()
 setInterval(loadMomB7, 15000)
 setInterval(() => { if(MB) renderMomB7() }, 1000)
+// ── momentum daily, vol-sized (research §39): momentum_daily_vol.json every 15 s ──
+let MV = null
+function renderMomVol(){ renderMomBot(MV, "mv", "mvSec", () => tx("مفيش صفقات مفتوحة — مستني سلة بكرة", "No open trades — waiting for tomorrow's basket")) }
+async function loadMomVol(){
+  try{ const r = await fetch(`momentum_daily_vol.json?t=${Date.now()}`, {cache: "no-store"}); if(!r.ok) throw 0; MV = await r.json(); renderMomVol(); bsubscribe() }
+  catch{ if(!MV) renderMomVol() }
+}
+loadMomVol()
+setInterval(loadMomVol, 15000)
+setInterval(() => { if(MV) renderMomVol() }, 1000)
 // ── against the crowd (research §29): retail_fade.json every 15 s, legs priced on the same Binance stream ──
 let RF = null
 function renderRetail(){

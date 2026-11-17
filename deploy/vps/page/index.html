@@ -214,6 +214,26 @@
     </table></div>
   </section>
 
+  <section id="mvSec" style="margin-top:44px;border-top:1px solid var(--line);padding-top:26px;display:none">
+    <div class="head"><h2>مومنتم يومي · حجم بالتذبذب — تجربة Paper</h2><span class="count" id="mvUpdated"></span></div>
+    <p class="sub" style="font-size:13px">نفس بوت المومنتم اليومي بالظبط، والفرق إن هامش كل صفقة جديدة على قد تذبذب العملة: العملة العنيفة بتاخد هامش أصغر (لحد ربع)، والهادية أكبر (لحد الضعف)، والعادية زي ما هي. في الباك تست (research §39) أكبر هبوط بنفس رأس المال بيقل من 734$ لـ 338$، والربح أقل 14%.</p>
+    <div class="kpis" style="margin-top:14px">
+      <div class="card kpi"><div class="label">ربح محقق</div><div class="value mono" id="mvRealized">—</div><div class="note" id="mvWl">—</div></div>
+      <div class="card kpi"><div class="label">ربح الصفقات المفتوحة</div><div class="value mono" id="mvUnreal">—</div><div class="note">بالسعر اللحظي من Binance</div></div>
+      <div class="card kpi"><div class="label">مفتوحة</div><div class="value mono" id="mvOpen" style="font-size:18px">—</div><div class="note" id="mvMargin">—</div></div>
+      <div class="card kpi"><div class="label">التبديل الجاي</div><div class="value mono" id="mvNext" style="font-size:18px">—</div><div class="note" id="mvTotal">—</div></div>
+    </div>
+    <div class="table" style="margin-top:14px"><table>
+      <thead><tr><th>العملة</th><th>الاتجاه</th><th>أداء أسبوعين</th><th>الدخول</th><th>السعر الحالي</th><th>الوقف</th><th>الربح $</th><th>على الهامش</th></tr></thead>
+      <tbody id="mvPositions"><tr><td colspan="8" class="empty">بيحمّل…</td></tr></tbody>
+    </table></div>
+    <div class="head" style="margin-top:16px"><h2 style="font-size:14px">اتقفلت</h2><span class="count" id="mvHistCount"></span></div>
+    <div class="table"><table>
+      <thead><tr><th>العملة</th><th>الاتجاه</th><th>الدخول</th><th>الخروج</th><th>الربح $</th><th>السبب</th><th>الوقت</th></tr></thead>
+      <tbody id="mvHistory"><tr><td colspan="7" class="empty">لسه مفيش صفقات اتقفلت</td></tr></tbody>
+    </table></div>
+  </section>
+
   <section id="rfSec" style="margin-top:44px;border-top:1px solid var(--line);padding-top:26px;display:none">
     <div class="head"><h2>عكس الأغلبية (نسبة لونج/شورت) — تجربة Paper</h2><span class="count" id="rfUpdated"></span></div>
     <p class="sub" style="font-size:13px">بوت منفصل من بحث الـ Open Interest (research §29): كل أربع على أعلى 20 عملة فوليوم على Binance، بيعمل لونج على أقل 3 عملات في نسبة لونج/شورت الحسابات (الأغلبية شورت) وشورت على أعلى 3 (الأغلبية لونج)، ويقفلهم ويبدّل بعد أسبوع (وقف 40%). في الاختبار كانت الفكرة الوحيدة اللي كسبت قبل 2024 وبعدها، ومش مرتبطة بالمومنتم — بس اتلقت بعد ما شفنا النتايج، فشغالة Paper عشان نتابعها بس.</p>
@@ -413,9 +433,9 @@
   </footer>
 </div>
 
-<script src="assets/i18n.js?v=a7237a493fd1"></script>
+<script src="assets/i18n.js?v=762d28f7ae9b"></script>
 <script src="assets/live.js?v=48dbc557a37c"></script>
-<script src="assets/bots.js?v=a9357d7226bc"></script>
-<script src="assets/board.js?v=0e12aa7e780f"></script>
+<script src="assets/bots.js?v=7533b916b136"></script>
+<script src="assets/board.js?v=d4d888908aaa"></script>
 </body>
 </html>
