@@ -1,5 +1,6 @@
 import BOT_STATS from "./bot-stats.json"
 import CATALOG from "./strategies.json"
+import EXTRA_STATS from "./extra-stats.json"
 
 /** Measured by research/bots_stats.py on every Binance USDT-M perpetual since 2019 (delisted included), coins chosen
  *  by volume at the time, fees + real funding, $20 x2 per position — never edit these numbers by hand. */
@@ -41,6 +42,47 @@ const DETAILS: Record<string, Details> = {
 const MEASURED = BOT_STATS.bots as unknown as Record<string, BotStats>
 export const STRATEGIES: Strategy[] = CATALOG_STRATEGIES.filter(c => c.planned)
   .map(c => ({ id: c.id, name: c.name, nameAr: c.nameAr, live: c.live, ...DETAILS[c.id], ...MEASURED[c.id] }))
+
+/** The rest of the paper bots on the backtest page (owner, 2026-11-17): research/extra_bots_stats.py, the same data and
+ *  costs, x2 only. Open to every plan (the plan's day limit still applies): they are not in TIERS.count, which stays the
+ *  four above. */
+const EXTRA_DETAILS: Record<string, { name: string; nameAr: string; live: string } & Details> = {
+  momentum_daily: { name: "Momentum daily", nameAr: "مومنتم يومي", live: "momentum_daily", desc: "سلة المومنتم بتتبدل كل يوم",
+    method: "كل يوم 00:00 UTC بيرتّب أعلى 50 عملة فوليوم حسب أدائها آخر أسبوعين: لونج أقوى 5 وشورت أضعف 5. العملة اللي لسه في السلة بتفضل مفتوحة، واللي خرجت بتتقفل (وقف 40%). ده اللي شغال على الحسابات الحقيقية.",
+    tier: "free", icon: "⇅", risk: "normal", perCoin: false, sides: "لونج + شورت" },
+  momentum_daily_b7: { name: "Momentum daily · buffer 7", nameAr: "مومنتم يومي · هامش 7", live: "momentum_daily_b7", desc: "المومنتم اليومي، والعملة بتفضل طول ما هي من أقوى 7",
+    method: "نفس المومنتم اليومي، والفرق إن العملة المفتوحة بتفضل طول ما هي من أقوى 7 (للونج) أو أضعف 7 (للشورت)، مش 5 بس. تبديلات أقل وأكبر هبوط أصغر، بربح أقل شوية (research §37).",
+    tier: "free", icon: "⇅", risk: "normal", perCoin: false, sides: "لونج + شورت" },
+  momentum_daily_vol: { name: "Momentum daily · vol-sized", nameAr: "مومنتم يومي · حجم بالتذبذب", live: "momentum_daily_vol", desc: "المومنتم اليومي، وحجم كل صفقة على قد تذبذب العملة",
+    method: "نفس المومنتم اليومي، والفرق إن هامش كل صفقة جديدة على قد تذبذب العملة آخر 60 يوم: العنيفة بتاخد هامش أصغر (لحد الربع) والهادية أكبر (لحد الضعف). أكبر هبوط أقل من النص بنفس رأس المال (research §39).",
+    tier: "free", icon: "⇅", risk: "normal", perCoin: false, sides: "لونج + شورت" },
+  rsi2_pullback: { name: "RSI-2 Pullback", nameAr: "RSI-2 شراء الهبوط", live: "rsi2", desc: "شراء الهبوط الحاد في ترند صاعد",
+    method: "على أعلى 10 عملات فوليوم: لو العملة فوق متوسط 200 يوم وRSI-2 نزل تحت 5، بيشتري افتتاح بكرة. بيخرج بعد أول إغلاق فوق متوسط 5 أيام، أو بعد 10 أيام (Connors 2008).",
+    tier: "free", icon: "↗", risk: "normal", perCoin: false, sides: "لونج" },
+  rsi2_btc: { name: "RSI-2 + BTC filter", nameAr: "RSI-2 + فلتر BTC", live: "rsi2_btc", desc: "RSI-2، بس لما BTC يكون فوق متوسط 200 يوم",
+    method: "نفس RSI-2، والفرق إنه مش بيدخل غير لما BTC يكون مقفل فوق متوسط 200 يوم. صفقات أقل ونسبة كسب أعلى (research §28).",
+    tier: "free", icon: "↗", risk: "normal", perCoin: false, sides: "لونج" },
+  vol_breakout: { name: "Volatility Breakout", nameAr: "بريك أوت التذبذب (Williams)", live: "breakout", desc: "شراء اختراق الافتتاح + 0.7 من مدى امبارح",
+    method: "على أعلى 10 عملات فوليوم، لو إغلاق امبارح فوق متوسط 20 يوم: بيشتري لما السعر يطلع فوق الافتتاح بـ 0.7 من مدى امبارح، ويبيع افتتاح بكرة (Larry Williams).",
+    tier: "free", icon: "⤴", risk: "normal", perCoin: false, sides: "لونج" },
+  trend_breakout: { name: "Trend Breakout", nameAr: "اختراق الترند", live: "tbreak", desc: "كسر أعلى 20 يوم في ترند صاعد",
+    method: "على أعلى 100 عملة فوليوم في ترند صاعد (السعر فوق متوسط 50 فوق 150 فوق 200 يوم): بيشتري لما الإغلاق يكسر أعلى سعر في 20 يوم، ويبيع بعد إغلاق تحت متوسط 20 يوم، ووقف 40% (Minervini/Darvas).",
+    tier: "free", icon: "⤴", risk: "normal", perCoin: false, sides: "لونج" },
+  ratio_nobtc: { name: "Ratio · no BTC/ETH", nameAr: "Ratio من غير BTC/ETH", live: "ratio_nobtc", desc: "ترند النسبة على أعلى 7 عملات من غير BTC وETH",
+    method: "زي ترند النسبة، على الأزواج بين أعلى 7 عملات فوليوم من غير BTC وETH: لو نسبة العملتين فوق متوسط 50 يوم = لونج الأولى وشورت التانية، والعكس (research §25).",
+    tier: "free", icon: "⚖", risk: "high", perCoin: false, sides: "لونج + شورت" },
+  ratio_trail: { name: "Ratio · no BTC/ETH · trail 20%", nameAr: "Ratio من غير BTC/ETH · trailing 20%", live: "ratio_trail", desc: "Ratio من غير BTC/ETH، وبيقفل لو النسبة رجعت 20% من أحسن نقطة",
+    method: "نفس Ratio من غير BTC/ETH، والفرق إن الزوج بيتقفل لو النسبة رجعت 20% من أحسن مستوى من وقت الدخول، ويفضل مقفول لحد ما الترند يتقلب (research §35).",
+    tier: "free", icon: "⚖", risk: "high", perCoin: false, sides: "لونج + شورت" },
+  ratio_trail_btc: { name: "Ratio · trail 20%", nameAr: "Ratio · trailing 20%", live: "ratio_trail_btc", desc: "ترند النسبة على أعلى 7 عملات، مع trailing 20%",
+    method: "ترند النسبة على أعلى 7 عملات فوليوم (BTC وETH جوا)، والزوج بيتقفل لو النسبة رجعت 20% من أحسن مستوى من وقت الدخول (research §35).",
+    tier: "free", icon: "⚖", risk: "high", perCoin: false, sides: "لونج + شورت" },
+}
+const EXTRA_MEASURED = EXTRA_STATS.bots as unknown as Record<string, BotStats>
+export const BACKTEST_EXTRA: Strategy[] = Object.entries(EXTRA_DETAILS).map(([id, d]) => ({ id, ...d, ...EXTRA_MEASURED[id] }))
+/** Every strategy the backtest page lists: the plans' four first, then the open ones. */
+export const BACKTEST_ALL: Strategy[] = [...STRATEGIES, ...BACKTEST_EXTRA]
+export const isOpenBacktest = (id: string) => BACKTEST_EXTRA.some(s => s.id === id)
 
 /** What the live bots section needs about a bot. */
 export type LiveStrategy = Pick<Strategy, "id" | "name" | "nameAr" | "desc" | "sides" | "risk" | "live"> & { experimental?: boolean }
