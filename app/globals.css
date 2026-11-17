@@ -1,18 +1,80 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+/* Tailwind v4 (2026-11-17; v3's picomatch chain failed npm audit, GHSA-fc5q-39xc-vjpf). Only app/ and components/
+   are scanned, as tailwind.config.js did in v3. */
+@import "tailwindcss" source(none);
+@source "../app";
+@source "../components";
+
+/* Raqm identity — the tokens of the Figma file "RAQM — Global Redesign 2026" (Color collection, modes Dark + Light).
+   Each colour is a "R G B" variable below: dark by default, light under [data-theme="light"]. `inline` puts
+   rgb(var(--c-x)) straight into each utility, so the theme switch works wherever data-theme sits and `bg-corona/10`
+   opacity still works. Brand accent is corona (gold); profit/loss only for gains, losses, LONG/SHORT. */
+@theme inline {
+  --color-void: rgb(var(--c-void));         /* page background */
+  --color-surface: rgb(var(--c-surface));   /* cards */
+  --color-surface2: rgb(var(--c-surface2)); /* inner elements, inputs, hover */
+  --color-line: rgb(var(--c-line));         /* borders, dividers */
+  --color-line2: rgb(var(--c-line2));       /* stronger border */
+  --color-ink: rgb(var(--c-ink));           /* primary text */
+  --color-muted: rgb(var(--c-muted));       /* secondary text */
+  --color-faint: rgb(var(--c-faint));       /* tertiary text, captions */
+  --color-corona: rgb(var(--c-corona));     /* brand */
+  --color-corona-soft: rgb(var(--c-corona-soft));
+  --color-corona-deep: rgb(var(--c-corona-deep));
+  --color-on-corona: rgb(var(--c-on-corona));
+  --color-umbra: rgb(var(--c-umbra));       /* AI / secondary accent */
+  --color-profit: rgb(var(--c-profit));
+  --color-loss: rgb(var(--c-loss));
+  --color-signal: rgb(var(--c-signal));
+
+  --font-sans: var(--app-sans), system-ui, sans-serif;
+  --font-display: var(--app-sans), system-ui, sans-serif;
+  --font-mono: var(--app-mono), ui-monospace, monospace;
+}
+
+@theme {
+  /* v3's line heights, in rem: v4's are unitless, so a `text-[10px]` inside a `text-sm` box inherited a smaller one */
+  --text-xs--line-height: 1rem;
+  --text-sm--line-height: 1.25rem;
+  --text-base--line-height: 1.5rem;
+  --text-lg--line-height: 1.75rem;
+  --text-xl--line-height: 1.75rem;
+  --text-2xl--line-height: 2rem;
+  --text-3xl--line-height: 2.25rem;
+  --text-4xl--line-height: 2.5rem;
+
+  --animate-fade-up: fade-up 0.7s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  @keyframes fade-up {
+    0% { opacity: 0; transform: translateY(14px); }
+    100% { opacity: 1; transform: none; }
+  }
+}
+
+/* space-y-* as in v3: the gap above every child but the first. v4 puts it below every child but the last, which
+   comes out a few px short wherever a child is inline (a link or icon row at the top of a stack) and shifted the pages. */
+@utility space-y-* {
+  & > :not(:last-child) { margin-block-end: 0; }
+  & > :not([hidden]) ~ :not([hidden]) { margin-block-start: calc(var(--spacing) * --value(number)); margin-block-end: 0; }
+}
+
+/* v3 defaults that v4 changed, kept so the pages look and behave as before: a bare `border` was gray-200 (v4:
+   currentColor), placeholders were gray-400 (v4: half the text colour), buttons had the pointer cursor (v4: default). */
+@layer base {
+  *, ::after, ::before, ::backdrop, ::file-selector-button { border-color: var(--color-gray-200, currentcolor); }
+  input::placeholder, textarea::placeholder { color: var(--color-gray-400); }
+  button:not(:disabled), [role="button"]:not(:disabled) { cursor: pointer; }
+}
 
 /* the self-hosted fonts (app/layout.tsx imports their @font-face rules) */
 :root {
   --font-cairo: "Cairo Variable";
   --font-geist: "Geist Variable";
-  --font-mono: "JetBrains Mono";
-  --font-sans: var(--font-cairo);
+  --app-mono: "JetBrains Mono";
+  --app-sans: var(--font-cairo);
 }
 /* English pages: Geist for Latin text, Cairo still covering any Arabic */
-:lang(en) { --font-sans: var(--font-geist), var(--font-cairo); }
+:lang(en) { --app-sans: var(--font-geist), var(--font-cairo); }
 
-/* Colour tokens as "R G B" (tailwind.config.js reads them as rgb(var(--c-x) / alpha)).
+/* Colour tokens as "R G B" (the @theme block above reads them as rgb(var(--c-x)), opacity on top).
    Figma "RAQM — Global Redesign 2026": dark is the default (the values the whole app had), light under data-theme. */
 :root {
   --c-void: 7 8 13;          --c-surface: 15 17 24;        --c-surface2: 22 26 37;
@@ -33,18 +95,21 @@
   color-scheme: light;
 }
 
-/* Base: readable, 15px */
-html { font-size: 15px; }
-body { line-height: 1.6; }
+/* Element defaults go in the base layer: v4's utilities live in a cascade layer, and an unlayered `h1 { line-height }`
+   would beat a `leading-*` class on the same h1 (v3 let the class win). */
+@layer base {
+  /* Base: readable, 15px */
+  html { font-size: 15px; }
+  body { line-height: 1.6; }
+
+  h1, h2, h3 { letter-spacing: -0.02em; line-height: 1.2; }
+  :lang(en) h1, :lang(en) h2 { letter-spacing: -0.035em; }
+}
 
 /* JetBrains for mono/numbers */
 .font-mono, code, .font-mono * {
-  font-family: var(--font-mono), ui-monospace, monospace !important;
+  font-family: var(--app-mono), ui-monospace, monospace !important;
 }
-.font-display { font-family: var(--font-display), var(--font-sans), sans-serif; }
-
-h1, h2, h3 { letter-spacing: -0.02em; line-height: 1.2; }
-:lang(en) h1, :lang(en) h2 { letter-spacing: -0.035em; }
 
 /* tabular figures so prices don't jump while updating */
 .tabular { font-variant-numeric: tabular-nums; }

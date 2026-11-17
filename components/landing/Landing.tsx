@@ -73,7 +73,7 @@ export function Landing({ locale, prices }: { locale: Locale; prices?: Record<st
             <span className="inline-flex items-center gap-2 rounded-full border border-loss/35 bg-loss/10 px-3 py-1 text-[12px] font-semibold text-loss">
               <i className="relative h-1.5 w-1.5 rounded-full bg-loss after:absolute after:inset-0 after:animate-ping after:rounded-full after:bg-loss"/>{t.hero.badge}
             </span>
-            <h1 className={`mt-6 font-bold sm:text-[64px] ${locale === "ar" ? "text-[34px] leading-[1.3] sm:leading-[1.2]" : "text-[42px] leading-[1.05]"}`}>{t.hero.title[0]}<br/><span className="bg-gradient-to-r from-corona to-corona-soft bg-clip-text text-transparent rtl:bg-gradient-to-l">{t.hero.title[1]}</span></h1>
+            <h1 className={`mt-6 font-bold sm:text-[64px] ${locale === "ar" ? "text-[34px] leading-[1.3] sm:leading-[1.2]" : "text-[42px] leading-[1.05]"}`}>{t.hero.title[0]}<br/><span className="bg-linear-to-r from-corona to-corona-soft bg-clip-text text-transparent rtl:bg-linear-to-l">{t.hero.title[1]}</span></h1>
             <p className="mt-6 max-w-[560px] text-[17px] leading-8 text-muted sm:text-[18px]">{t.hero.sub}</p>
             <div className="mt-8 flex flex-wrap gap-3">
               <a href="/dashboard" className="inline-flex items-center gap-2 rounded-xl bg-corona px-6 py-3.5 text-[15px] font-semibold text-on-corona shadow-[0_10px_30px_-10px_rgb(var(--c-corona)/.7)] transition hover:-translate-y-0.5 hover:bg-corona-soft">{t.hero.ctaStart}</a>

@@ -43,7 +43,7 @@ export function PaperWallet(){
       </div>
       <div className="mt-2 font-mono text-2xl font-bold tabular" dir="ltr">{total.toLocaleString("en-US",{minimumFractionDigits:2, maximumFractionDigits:2})} <span className="text-sm text-muted">USDT</span></div>
       <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-line" dir="ltr">
-        <div className="h-full rounded-full bg-gradient-to-r from-umbra to-corona" style={{width: `${Math.min(100, Math.max(4, 50 + pct*2))}%`}} />
+        <div className="h-full rounded-full bg-linear-to-r from-umbra to-corona" style={{width: `${Math.min(100, Math.max(4, 50 + pct*2))}%`}} />
       </div>
       <div className="mt-2 text-[11px] text-faint">رأس المال {balance.toLocaleString("en-US")} USDT · فلوس وهمية 100%</div>
     </div>

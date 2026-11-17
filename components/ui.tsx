@@ -70,5 +70,5 @@ export const btn = {
   ghost: "inline-flex items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-sm font-semibold text-muted transition hover:text-ink disabled:opacity-40",
 }
 
-export const field = "w-full rounded-xl border border-line bg-void px-3.5 py-2.5 text-sm text-ink outline-none transition placeholder:text-faint focus:border-corona/60"
+export const field = "w-full rounded-xl border border-line bg-void px-3.5 py-2.5 text-sm text-ink outline-hidden transition placeholder:text-faint focus:border-corona/60"
 export const label = "mb-1.5 block text-[12px] font-semibold text-muted"

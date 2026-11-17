@@ -1,7 +1,7 @@
 import "./globals.css"
 // Self-hosted (npm @fontsource, bundled into /_next/static): next/font/google downloaded the fonts from Google at build
 // time, and a bad answer from there failed the build (CI, 2026-11-03, twice in an hour). globals.css names them in the
-// --font-cairo / --font-geist / --font-mono variables the tailwind.config.js / globals.css tokens use.
+// --font-cairo / --font-geist / --font-mono variables the globals.css @theme tokens use.
 import "@fontsource-variable/cairo"
 import "@fontsource-variable/geist"
 import "@fontsource/jetbrains-mono/500.css"

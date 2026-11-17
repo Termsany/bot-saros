@@ -134,7 +134,7 @@ export function RealMoney(){
         })}
 
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-          {next ? <div className="rounded-xl border border-corona/35 bg-corona/[0.08] px-3.5 py-2.5">
+          {next ? <div className="rounded-xl border border-corona/35 bg-corona/8 px-3.5 py-2.5">
             <div className="text-[12px] font-semibold text-corona">{t.next}</div>
             <div className="text-[14px] font-semibold">{when(next, locale)}</div>
           </div> : <span/>}

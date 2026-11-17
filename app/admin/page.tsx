@@ -713,7 +713,7 @@ function CommandPalette({ open, onClose, items }: { open: boolean; onClose: () =
   if (!open) return null
   const visible = items.filter(item => !query || item.label.toLowerCase().includes(query.toLowerCase()) || item.hint?.toLowerCase().includes(query.toLowerCase()))
   return (
-    <div dir="rtl" className="fixed inset-0 z-50 flex items-start justify-center bg-void/80 p-4 pt-24 backdrop-blur-sm" onClick={onClose}>
+    <div dir="rtl" className="fixed inset-0 z-50 flex items-start justify-center bg-void/80 p-4 pt-24 backdrop-blur-xs" onClick={onClose}>
       <div className="w-full max-w-lg rounded-2xl border border-line bg-surface p-3 shadow-2xl" onClick={e => e.stopPropagation()}>
         <input ref={inputRef} value={query} onChange={e => setQuery(e.target.value)} placeholder="بحث سريع · تبويب أو استراتيجية... (Esc للإغلاق)"
           onKeyDown={e => { if (e.key === "Escape") onClose(); if (e.key === "Enter" && visible[0]) { visible[0].onSelect(); onClose() } }}
@@ -922,7 +922,7 @@ function UnifiedTimeline({ events }: { events: TimelineEvent[] }) {
       </div>
       <ol className="relative space-y-1 border-r border-line pr-5">
         {visible.slice(0, 50).map((e, i) => <li key={i} className="relative py-2">
-          <span className="absolute -right-[25px] top-[15px]"><Dot tone={kindMeta[e.kind][1]} /></span>
+          <span className="absolute right-[-25px] top-[15px]"><Dot tone={kindMeta[e.kind][1]} /></span>
           <div className="flex flex-wrap items-center justify-between gap-2 text-[13px]"><span className="flex items-center gap-2"><b>{e.title}</b><Pill tone={kindMeta[e.kind][1]}>{kindMeta[e.kind][0]}</Pill></span>{e.at && <span className="font-mono text-[12px] text-faint" dir="ltr">{e.at}</span>}</div>
           <div className="mt-0.5 text-[12px] text-muted">{e.detail}</div>
         </li>)}
