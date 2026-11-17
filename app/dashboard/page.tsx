@@ -214,7 +214,7 @@ export default function Dashboard(){
           <Card className="sm:p-5">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex min-w-0 flex-wrap items-center gap-2 sm:gap-3">
-                <select value={symbol} onChange={e=>setSymbol(e.target.value)} aria-label={t.coin} className="rounded-lg border border-line bg-surface2 px-2.5 py-1.5 text-[17px] font-bold outline-none focus:border-corona/50" dir="ltr">
+                <select value={symbol} onChange={e=>setSymbol(e.target.value)} aria-label={t.coin} className="rounded-lg border border-line bg-surface2 px-2.5 py-1.5 text-[17px] font-bold outline-hidden focus:border-corona/50" dir="ltr">
                   {PAIRS.map(p=><option key={p} value={p}>{p}</option>)}
                 </select>
                 <span className="font-mono text-[22px] font-bold tabular" dir="ltr">{current ? fmt(current.close) : "—"}</span>
@@ -286,7 +286,7 @@ export default function Dashboard(){
               })}
             </div>
             {nextRebalance && (
-              <div className="mt-3 rounded-xl border border-corona/35 bg-corona/[0.08] px-3.5 py-3">
+              <div className="mt-3 rounded-xl border border-corona/35 bg-corona/8 px-3.5 py-3">
                 <div className="text-[12px] font-semibold text-corona">{t.nextPaper}</div>
                 <div className="text-[14px] font-semibold">{nextRebalance}</div>
               </div>

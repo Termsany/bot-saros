@@ -30,7 +30,7 @@ export function LandingPricing({ locale, prices }: { locale: Locale; prices?: Re
         {TIERS.map(tier => {
           const price = prices?.[tier.id] != null ? `$${prices[tier.id]}` : tier.price.replace(/^(\d+)\$$/, "$$$1")
           return (
-            <div key={tier.id} className={`relative flex flex-col rounded-[20px] border p-6 transition duration-300 hover:-translate-y-1 ${tier.popular ? "border-corona/70 bg-corona/[0.05] shadow-[0_18px_50px_-24px_rgb(var(--c-corona)/.55)]" : "border-line bg-surface hover:border-line2"}`}>
+            <div key={tier.id} className={`relative flex flex-col rounded-[20px] border p-6 transition duration-300 hover:-translate-y-1 ${tier.popular ? "border-corona/70 bg-corona/5 shadow-[0_18px_50px_-24px_rgb(var(--c-corona)/.55)]" : "border-line bg-surface hover:border-line2"}`}>
               <div className="flex items-center justify-between gap-2">
                 <span className="text-[18px] font-semibold">{tier.name}</span>
                 {tier.popular && <span className="rounded-full border border-corona/40 bg-corona/10 px-2.5 py-0.5 text-[11px] font-semibold text-corona">{t.popular}</span>}

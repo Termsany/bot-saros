@@ -119,7 +119,7 @@ export default function AuthPage() {
   const title = mode === "login" ? "أهلاً بيك تاني" : mode === "signup" ? "اعمل حسابك" : mode === "recovery" ? "كلمة سر جديدة" : "استعادة كلمة السر"
   const sub = mode === "login" ? "ادخل عشان تشوف بوتاتك وصفقاتك" : mode === "signup" ? "ابدأ مجانًا بفلوس وهمية" : mode === "recovery" ? "اختار كلمة سر جديدة لحسابك" : "هنبعتلك رابط على بريدك"
   const action = mode === "login" ? "دخول" : mode === "signup" ? "اعمل الحساب" : mode === "recovery" ? "حدّث كلمة السر" : "ابعت الرابط"
-  const input = "w-full rounded-xl border border-line bg-void px-3.5 py-2.5 text-sm outline-none transition focus:border-corona/60"
+  const input = "w-full rounded-xl border border-line bg-void px-3.5 py-2.5 text-sm outline-hidden transition focus:border-corona/60"
 
   return (
     <div dir="rtl" className="grid min-h-screen bg-void text-ink lg:grid-cols-2">

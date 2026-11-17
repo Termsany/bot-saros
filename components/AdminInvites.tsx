@@ -78,7 +78,7 @@ export function InviteDialog({ open, onClose, prices, emailConfigured, onCreated
   }
 
   return (
-    <div dir="rtl" className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-void/80 p-4 pt-16 backdrop-blur-sm" onMouseDown={onClose}>
+    <div dir="rtl" className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-void/80 p-4 pt-16 backdrop-blur-xs" onMouseDown={onClose}>
       <div role="dialog" aria-modal="true" aria-label="ادعُ مستخدم" className="w-full max-w-[560px] rounded-2xl border border-line bg-surface p-6 shadow-2xl" onMouseDown={e => e.stopPropagation()}>
         <div className="mb-5 flex items-start justify-between gap-3">
           <div><h2 className="text-[20px] font-bold">ادعُ مستخدم</h2><p className="mt-0.5 text-[13px] text-muted">باقة هدية، أو تجربة مجانية، أو رابط دفع — لإيميل واحد</p></div>

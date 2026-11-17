@@ -125,7 +125,7 @@ const shortTs = (s: string) => String(s).slice(5,16).replace("T"," ")
 function Field({ label, children }: { label: string, children: React.ReactNode }){
   return <label className="block"><span className="mb-1.5 block text-xs font-semibold text-muted">{label}</span>{children}</label>
 }
-const inputCls = "w-full rounded-xl border border-line bg-void px-3 py-2.5 text-sm outline-none transition focus:border-corona/60"
+const inputCls = "w-full rounded-xl border border-line bg-void px-3 py-2.5 text-sm outline-hidden transition focus:border-corona/60"
 function Step({ n, title, right }: { n: number, title: string, right?: React.ReactNode }){
   return <div className="flex items-center justify-between gap-2"><h2 className="flex items-center gap-2 text-[15px] font-semibold"><span className="grid h-[22px] w-[22px] place-items-center rounded-full bg-corona/15 font-mono text-[12px] text-corona">{n}</span>{title}</h2>{right}</div>
 }
@@ -361,7 +361,7 @@ export default function BacktestPage(){
         {/* results — left column */}
         <section className="min-w-0 space-y-4">
           {error && !loading && (
-            <div className="flex gap-3 rounded-2xl border border-loss/30 bg-loss/[0.06] p-4 text-sm text-loss"><TriangleAlert size={18} className="shrink-0"/><span className="whitespace-pre-wrap">{error}</span></div>
+            <div className="flex gap-3 rounded-2xl border border-loss/30 bg-loss/6 p-4 text-sm text-loss"><TriangleAlert size={18} className="shrink-0"/><span className="whitespace-pre-wrap">{error}</span></div>
           )}
 
           {loading && (
