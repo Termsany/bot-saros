@@ -892,6 +892,62 @@ less capital. Data to 2026-11-14:
 - **Decision:** a paper bot, `raqm-momentum-daily-vol` (`--strategy momentum_daily_vol`, `bot.py --mom-vol 60`), next
   to `raqm-momentum-daily` as an A/B pair. No real bot changes.
 
+### 41. The ratio trend switching once a week instead of every day: a third of the trades, a smaller drawdown — which day is noise; a paper candidate (`ratio_rebalance_day_study.py`, 2026-11-17)
+
+(§40, the Ichimoku, is in PR #213.) Owner: "what if the switch happens on a set week or time?"
+
+**Today:** the pairs' signal (each ratio against its 50-day mean) is read at every daily close, and the book changes
+at the next open.
+
+**Here:** the same daily signal is read only on the switching day. On that day the book takes the day's pairs,
+members and sides; in between it keeps them. A coin whose 40% stop fires stays flat until its units change, as live.
+
+**The rule, fixed before the run:** a schedule is adopted only if it beats daily's NETTED Sharpe before 2024 on the
+no-BTC universe, is not lower after, and the other weekdays agree. One good weekday alone is luck.
+
+**The data:** NETTED is the live bot (§34: one position per coin, a change closed and reopened). PAIRS is the paper
+bot. 30-day top 7, $26 × 2 a unit, 2020-01 → 2026-11-14.
+
+| no BTC/ETH | NETTED PnL | NETTED worst DD | Sharpe < 2024 / 2024 → | fees | changes a year | PAIRS Sharpe < 2024 / 2024 → | PAIRS win % |
+|---|---|---|---|---|---|---|---|
+| **daily (today)** | +2,995 | 1,375 | 0.55 / 0.78 | 561 | 730 | 0.87 / 0.27 | 34 |
+| weekly, Mon | +3,926 | 734 | 0.86 / 1.07 | 200 | 256 | 0.89 / 0.87 | 44 |
+| weekly, Tue | +2,396 | **590** | 0.82 / **0.33** | 200 | 260 | 1.01 / 1.00 | 44 |
+| weekly, Wed | +3,540 | 814 | 0.69 / 1.16 | 197 | 256 | 0.93 / 1.65 | 44 |
+| weekly, Thu | +2,861 | 1,018 | 0.66 / 0.62 | 197 | 250 | 0.88 / 0.43 | 45 |
+| weekly, Fri | +3,298 | 846 | 0.63 / 0.97 | 194 | 250 | 1.09 / 0.45 | 45 |
+| weekly, Sat | +2,802 | 1,458 | 0.60 / 0.77 | 190 | 248 | 1.01 / 0.29 | 44 |
+| weekly, Sun | +4,318 | 1,136 | 0.83 / 1.33 | 201 | 260 | 0.83 / 1.02 | 43 |
+| twice a week, Mon + Thu | +2,962 | 1,067 | 0.76 / 0.57 | 296 | 377 | 0.87 / 0.14 | 42 |
+| every 14 days, Mon | +4,407 | 781 | 0.67 / 1.42 | 120 | 156 | 0.65 / 1.34 | 47 |
+
+- **Weekly is better on what doesn't depend on the day:**
+  - a third of the changes (about 255 a year instead of 730), so fees fall from $561 to about $200;
+  - the worst drawdown is lower on 6 of the 7 days (median $846 against $1,375);
+  - the Sharpe before 2024 is higher on all 7 days (0.60–0.86 against 0.55);
+  - the paper book's win rate goes from 34% to 43–45%.
+
+  Reading the signal every day mostly catches the ratio crossing its mean back and forth.
+- **Which day is noise:**
+  - after 2024 the Sharpe goes from 0.33 (Tue) to 1.33 (Sun) on the same rule;
+  - four days pass the rule (Mon, Wed, Fri, Sun), Sat is level, and Tue and Thu are below daily;
+  - picking the best day would be fitting.
+- **With BTC/ETH (the paper bot's universe):**
+  - the drawdown is lower on all 7 days (755–1,324 against 1,354);
+  - the Sharpe is mixed (before 2024 better on 3 days, after on 4).
+
+  The gain is weaker here, as everything on this universe (§25).
+- **Twice a week (Mon + Thu)** is worse than either day alone after 2024 (0.57). Two switches a week aren't half
+  way between daily and weekly.
+- **Every 14 days** looks best (+4,407, 1.42 after), but it is one of 14 possible starting days and holds a stale
+  signal for two weeks. Not trusted.
+- **Caveats:**
+  - this is about the 25th variant of the ratio trend on the same data (17 universes, 7 exits);
+  - a whole week without switching also means a week without leaving a pair that turned (only the 40% stop acts).
+- **Decision:** no live change. A paper candidate: the no-BTC ratio trend switching weekly on Monday, next to the
+  daily paper bot as an A/B pair. Monday because it is the anchor already chosen for momentum_ls (2026-11-03), not
+  because it ranked well here. Expect anything in the 0.3–1.3 range after 2024.
+
 ## The site now shows only the four paper bots
 
 `research/bots_stats.py` writes `lib/bot-stats.json` (the numbers the site shows); the dashboard's live section and
