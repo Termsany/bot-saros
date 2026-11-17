@@ -892,6 +892,53 @@ less capital. Data to 2026-11-14:
 - **Decision:** a paper bot, `raqm-momentum-daily-vol` (`--strategy momentum_daily_vol`, `bot.py --mom-vol 60`), next
   to `raqm-momentum-daily` as an A/B pair. No real bot changes.
 
+### 40. Ichimoku on daily candles: it doesn't beat the daily trend, and as a filter on it adds nothing — not adopted (`ichimoku_study.py`, 2026-11-17)
+
+The question: is the Ichimoku better than `trend_daily`, or does its cloud improve it? Until now it was only one of
+the 15 signals of the old 1h/4h engine (`ichimoku_signal`, weight 10%), never tested alone.
+
+**The test.** Same harness as `trend_study.py`, so the numbers compare:
+- the 8 coins and $100 notional;
+- 0.04% fees and the real funding;
+- chosen on the first 60% of each coin, reported on the last 40% (≈ 2024 → 2026-11-14).
+
+**What was tried:**
+- the cloud alone;
+- Tenkan/Kijun alone;
+- the bot's own scoring;
+- the strict classic (cloud + Tenkan/Kijun + Chikou);
+- the cloud as a filter on `trend_daily`'s signal.
+
+Each one with the classic 9/26/52 and the crypto 20/60/120, long-only and long/short, fixed size or volatility 0.8.
+The cloud is shifted forward, so it uses only data up to day t − 26 (no look-ahead).
+
+| long-only, vol 0.8 | Sharpe < 60% | Sharpe after | coins won after | PnL after | median DD after | trades after |
+|---|---|---|---|---|---|---|
+| **trend_daily, the bot's rule (2 of 3 up)** | 1.19 | **0.63** | **8/8** | **+552** | 43 | 541 |
+| trend_daily as first studied (average sign) | 1.15 | 0.55 | 8/8 | +359 | 46 | 541 |
+| Tenkan/Kijun 9/26/52 (best Ichimoku before) | **1.20** | 0.34 | 5/8 | +172 | 72 | 412 |
+| the bot's Ichimoku scoring, 9/26/52 | 1.12 | 0.42 | 8/8 | +263 | 42 | 397 |
+| cloud alone, 9/26/52 | 0.95 | 0.59 | 8/8 | +487 | 49 | 342 |
+| strict classic, 20/60/120 | 0.98 | 0.52 | 8/8 | +410 | 45 | 191 |
+| trend_daily + cloud filter, 9/26/52 | 1.11 | 0.54 | 8/8 | +373 | 42 | 390 |
+| buy-and-hold | 0.91 | 0.05 | 4/8 | +176 | 111 | 0 |
+
+- **The best Ichimoku before 2024 falls apart after.** Tenkan/Kijun 9/26/52 matched `trend_daily` before
+  (1.20 vs 1.19). After: Sharpe 0.34, 5 coins of 8, a third of the profit, and a drawdown 1.7× bigger.
+- **The best one after 2024 (the cloud alone) is hindsight.** It was 17th of 49 setups before 2024, and it still doesn't beat
+  `trend_daily` (0.59 vs 0.63, +487 vs +552).
+- **As a filter on `trend_daily`:** about the same result (0.54 vs 0.55). It cuts trades by 28% and, after 2024, fees by
+  $3 and the drawdown slightly. Too little to justify a change.
+- **Long/short:** worse in almost every variant. Same as `trend_daily`.
+- **8-coin portfolio, whole period:**
+  - `trend_daily` (bot's rule): +$2,632, Sharpe 1.24, 2025 +178.
+  - The best Ichimoku: +$2,270, Sharpe 1.14, 2025 −96 and 2026 −57.
+- **Caveat:** the harness trades close to close and resizes on a >25% change. The bot enters at the next open,
+  with a size fixed for the trade and a 40% stop. Both strategies are measured the same way, so the comparison
+  holds; the dollar levels are approximate.
+- **Decision:** no Ichimoku bot, and no filter on `trend_daily`. They measure the same trend, and the 20/60/120-day
+  closes do it better. `ichimoku_signal` stays where it is (the old engine), unused by the live strategies.
+
 ### 41. The ratio trend switching once a week instead of every day: a third of the trades, a smaller drawdown — which day is noise; a paper candidate (`ratio_rebalance_day_study.py`, 2026-11-17)
 
 (§40, the Ichimoku, is in PR #213.) Owner: "what if the switch happens on a set week or time?"
