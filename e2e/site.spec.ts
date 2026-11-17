@@ -100,6 +100,11 @@ test("the Backtest page in English after the English landing, Arabic after the s
   await expect(page.getByRole("heading", { name: "Run settings" })).toBeVisible()
   await expect(page.getByRole("button", { name: "Run the backtest" })).toBeVisible()
   await expect(page.getByText("Market and range")).toBeVisible()
+  // the rest of the paper bots (owner, 2026-11-17): listed after the plans' four, open to every plan, x2 only
+  await expect(page.getByTestId("backtest-more-bots")).toHaveText("More bots · open to every plan")
+  await expect(page.getByTestId("backtest-strategy-momentum_daily_vol")).toBeEnabled()
+  await page.getByTestId("backtest-strategy-momentum_daily_vol").click()
+  await expect(page.getByText("This bot was tested at x2 only.", { exact: false })).toBeVisible()
   await expectNoSideScroll(page)
   await page.getByTestId("app-lang-switch").filter({ visible: true }).first().click()
   await expect(html).toHaveAttribute("lang", "ar")
