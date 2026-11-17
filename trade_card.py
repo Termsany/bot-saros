@@ -1,5 +1,5 @@
 """Telegram card for a closed trade (owner, 2026-10-31): one image per trade — win, loss, stop or target — in the
-site's colours (tailwind.config.js, Figma "Raqm / Color"), with the Arabic details in the photo's caption.
+site's colours (app/globals.css, Figma "Raqm / Color"), with the Arabic details in the photo's caption.
 
 The image is English and numbers only: Pillow without libraqm can't join Arabic letters, Telegram's caption can.
 Fonts ship in assets/fonts (DejaVu, free licence) so the card looks the same on every server. Nothing here may

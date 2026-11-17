@@ -36,7 +36,7 @@ function NavLink({ item, on }: { item: NavItem, on: boolean }){
   return (
     <a href={item.href} aria-current={on ? "page" : undefined}
       className={`relative flex items-center gap-2.5 rounded-[10px] px-3 py-2.5 text-[15px] font-semibold transition ${on ? "bg-corona/10 text-corona" : "text-muted hover:bg-surface2/60 hover:text-ink"}`}>
-      {on && <i className="absolute end-2 top-1/2 h-[18px] w-[3px] -translate-y-1/2 rounded bg-corona"/>}
+      {on && <i className="absolute inset-e-2 top-1/2 h-[18px] w-[3px] -translate-y-1/2 rounded-sm bg-corona"/>}
       <Icon size={20} strokeWidth={1.8}/><span>{item.label}</span>
     </a>
   )

@@ -24,11 +24,13 @@ VARIANTS = {
     # ... and out of a pair when its ratio falls 20% from its best since entry — paper pairs only
     "ratio_trail": {"base": "ratio_trend", "label": "ratio trail 20%", "options": {"ratio_exclude": "BTC,ETH", "ratio_trail": 0.20}},
     "ratio_trail_btc": {"base": "ratio_trend", "label": "ratio trail 20% BTC/ETH", "options": {"ratio_trail": 0.20}},
+    # ... switching once a week, on Monday, instead of every day (research §41) — paper pairs only
+    "ratio_weekly": {"base": "ratio_trend", "label": "ratio weekly Mon", "options": {"ratio_exclude": "BTC,ETH", "ratio_weekday": 0}},
     # the netted book without BTC and ETH: the real-money candidate (docs/ratio-trend-live-plan.md, research §34)
     "ratio_net_nobtc": {"base": "ratio_trend", "label": "ratio net no BTC/ETH", "options": {"ratio_exclude": "BTC,ETH", "ratio_net": True}},
 }
 # the flags a variant may set, and their defaults (bot.py's argparse): a flag still at its default takes the variant's
-OPTION_DEFAULTS = {"momentum_retail": False, "mom_daily": False, "mom_buffer": 0, "mom_vol": 0, "rsi2_btc_ma": 0, "ratio_exclude": "", "ratio_trail": 0.0, "ratio_net": False}
+OPTION_DEFAULTS = {"momentum_retail": False, "mom_daily": False, "mom_buffer": 0, "mom_vol": 0, "rsi2_btc_ma": 0, "ratio_exclude": "", "ratio_trail": 0.0, "ratio_net": False, "ratio_weekday": None}
 
 
 def resolve(args):

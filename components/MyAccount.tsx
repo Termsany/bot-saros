@@ -108,11 +108,11 @@ export function MyAccount({ tier, bots }: { tier: string, bots: LiveBot[] }){
           <label className="block">
             <span className="text-xs font-semibold text-muted">{t.capital}</span>
             <input type="number" min={10} inputMode="decimal" value={capital} onChange={e => setCapital(e.target.value)} placeholder={t.eg}
-              className="mt-1 w-full rounded-lg border border-line bg-surface2 px-3 py-2 font-mono text-base outline-none focus:border-corona/50" dir="ltr"/>
+              className="mt-1 w-full rounded-lg border border-line bg-surface2 px-3 py-2 font-mono text-base outline-hidden focus:border-corona/50" dir="ltr"/>
           </label>
           <label className="block">
             <span className="text-xs font-semibold text-muted">{t.bot}</span>
-            <select value={strategy} onChange={e => setStrategy(e.target.value)} className="mt-1 w-full rounded-lg border border-line bg-surface2 px-3 py-2 text-sm outline-none focus:border-corona/50">
+            <select value={strategy} onChange={e => setStrategy(e.target.value)} className="mt-1 w-full rounded-lg border border-line bg-surface2 px-3 py-2 text-sm outline-hidden focus:border-corona/50">
               {unlocked.map(x => <option key={x.id} value={x.id}>{strategyName(x, locale)}{x.risk === "high" ? " (High Risk)" : ""} — {t.from} {usd(smallestCapital(x))}</option>)}
             </select>
           </label>

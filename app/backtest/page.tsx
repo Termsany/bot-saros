@@ -1,7 +1,7 @@
 "use client"
 import { useEffect, useMemo, useState } from "react"
 import { Area, AreaChart, CartesianGrid, ComposedChart, Line, ReferenceLine, ResponsiveContainer, Scatter, Tooltip, XAxis, YAxis } from "recharts"
-import { STRATEGIES, TIERS, BACKTEST_DAYS, BOT_PAGE, backtestSpanDays, minCapitalNote, pfTone, sharpeTone, strategyName, unlockTier, TREND_ID } from "@/lib/strategies"
+import { STRATEGIES, BACKTEST_ALL, BACKTEST_EXTRA, isOpenBacktest, TIERS, BACKTEST_DAYS, BOT_PAGE, backtestSpanDays, minCapitalNote, pfTone, sharpeTone, strategyName, unlockTier, TREND_ID, type Strategy } from "@/lib/strategies"
 import { useLocale, useT } from "@/lib/i18n/locale"
 import { useThemeColors } from "@/lib/theme-colors"
 import { getMyTier } from "@/lib/supabase"
@@ -31,8 +31,10 @@ const SIDES_EN: Record<string, string> = { "لونج": "Long", "شورت": "Shor
 const T = {
   ar: {
     reasons: { SL: "وقف خسارة", TP: "هدف", reverse: "إشارة عكسية", close: "نهاية المدة", stop: "وقف حماية",
-      "signal off": "الترند وقف", week: "تبديل أسبوعي", time: "خلصت 90 يوم", "delisted/end": "اتشالت / نهاية البيانات", flip: "الترند اتقلب",
-      "left the list": "عملة خرجت من القائمة" } as Record<string, string>,
+      "signal off": "الترند وقف", week: "تبديل أسبوعي", time: "خلصت المدة", "delisted/end": "اتشالت / نهاية البيانات", flip: "الترند اتقلب",
+      "left the list": "عملة خرجت من القائمة", day: "تبديل يومي", "next open": "خروج افتتاح بكرة", signal: "قفل فوق متوسط 5 يوم",
+      "below 20d avg": "قفل تحت متوسط 20 يوم", trail: "رجعت 20% من أحسن نقطة" } as Record<string, string>,
+    moreBots: "بوتات تانية · مفتوحة لكل الباقات", x2Only: "البوت ده اتختبر على x2 بس. مبلغ الصفقة بيكبّر ويصغّر النتيجة بنفس النسبة.",
     reversed: "التاريخ معكوس — «من» لازم يكون قبل «إلى»", tooLong: (span: number, max: number) => `المدة ${span} يوم — باقتك تسمح بـ ${max} يوم كحد أقصى. رقّي باقتك لباك تست أطول`, failed: "فشل",
     subtitle: "اختبر أي استراتيجية على بيانات السوق الحقيقية قبل ما تخاطر بفلوسك", unlimited: "بلا حدود", upTo: (n: number) => `لحد ${n} يوم`,
     settings: "إعدادات التشغيل", step1: "الاستراتيجية", oneCoin: "على العملة اللي تختارها", allCoins: "على كل العملات زي البوت", minCap: "أقل رأس مال",
@@ -61,8 +63,10 @@ const T = {
   },
   en: {
     reasons: { SL: "Stop loss", TP: "Target", reverse: "Opposite signal", close: "End of range", stop: "Protective stop",
-      "signal off": "Trend stopped", week: "Weekly rebalance", time: "90 days ended", "delisted/end": "Delisted / end of data", flip: "Trend flipped",
-      "left the list": "Coin left the list" } as Record<string, string>,
+      "signal off": "Trend stopped", week: "Weekly rebalance", time: "Time limit", "delisted/end": "Delisted / end of data", flip: "Trend flipped",
+      "left the list": "Coin left the list", day: "Daily rebalance", "next open": "Out at the next open", signal: "Close above the 5-day average",
+      "below 20d avg": "Close below the 20-day average", trail: "20% off its best" } as Record<string, string>,
+    moreBots: "More bots · open to every plan", x2Only: "This bot was tested at x2 only. The amount scales the result in proportion.",
     reversed: "The dates are reversed — \"From\" must be before \"To\"", tooLong: (span: number, max: number) => `${span} days — your plan allows up to ${max} days. Upgrade for longer backtests`, failed: "Failed",
     subtitle: "Test any strategy on real market data before you risk your money", unlimited: "Unlimited", upTo: (n: number) => `Up to ${n} days`,
     settings: "Run settings", step1: "Strategy", oneCoin: "on the coin you pick", allCoins: "on every coin, like the bot", minCap: "Min. capital",
@@ -96,6 +100,16 @@ const METHOD_EN: Record<string, string> = {
   momentum_ls: "Every week it ranks the top 50 coins by volume on their last two weeks: long the strongest 5, short the weakest 5, swapped after a week (40% stop). Built on cross-sectional crypto momentum research (Liu, Tsyvinski & Wu 2022).",
   listing_short: "Shorts a new Binance listing 30 days after launch, closing after 90 days or if the price rises 40% above entry, at most 10 at once. Built on research showing new coins fall after the hype (Benedetti & Kostovetsky 2021).",
   ratio_trend: "Every pair among the top 7 coins by volume (21 pairs): if the ratio of the two prices is above its 50-day average, long the first and short the second, and the other way round. A big worst drawdown, and adding it to the other bots lowered their result in the last two years — hence High Risk.",
+  momentum_daily: "Every day at 00:00 UTC it ranks the top 50 coins by volume on their last two weeks: long the strongest 5, short the weakest 5. A coin still in the basket stays open; one that left is closed (40% stop). This is what the real accounts run.",
+  momentum_daily_b7: "Momentum daily, except that an open coin stays while it is among the strongest 7 (longs) or weakest 7 (shorts), not just 5. Fewer switches and a smaller worst drawdown, for a little less profit (research §37).",
+  momentum_daily_vol: "Momentum daily, except that each new leg's margin follows the coin's 60-day volatility: a wild coin gets a smaller leg (down to a quarter), a calm one a larger (up to double). Less than half the worst drawdown at the same capital (research §39).",
+  rsi2_pullback: "On the top 10 coins by volume: when a coin is above its 200-day average and its 2-day RSI falls below 5, it buys the next open; out after the first close above the 5-day average, or after 10 days (Connors 2008).",
+  rsi2_btc: "RSI-2, except that it only enters while BTC closes above its 200-day average. Fewer trades and a higher win rate (research §28).",
+  vol_breakout: "On the top 10 coins by volume, when yesterday's close is above its 20-day average: buys when the price rises 0.7 × yesterday's range above the open, and sells at the next open (Larry Williams).",
+  trend_breakout: "On the top 100 coins by volume in an uptrend (price above the 50, 150 and 200-day averages, in that order): buys when the close breaks the 20-day high, sells after a close below the 20-day average, 40% stop (Minervini/Darvas).",
+  ratio_nobtc: "The ratio trend on the pairs among the top 7 coins by volume without BTC and ETH: ratio above its 50-day average = long the first, short the second, and the other way round (research §25).",
+  ratio_trail: "Ratio without BTC/ETH, except that a pair closes when its ratio falls 20% from its best since entry, and stays out until the trend flips (research §35).",
+  ratio_trail_btc: "The ratio trend on the top 7 coins by volume (BTC and ETH included), a pair closing when its ratio falls 20% from its best since entry (research §35).",
 }
 
 function fmt(n: number|null|undefined, d?: number){
@@ -111,7 +125,7 @@ const shortTs = (s: string) => String(s).slice(5,16).replace("T"," ")
 function Field({ label, children }: { label: string, children: React.ReactNode }){
   return <label className="block"><span className="mb-1.5 block text-xs font-semibold text-muted">{label}</span>{children}</label>
 }
-const inputCls = "w-full rounded-xl border border-line bg-void px-3 py-2.5 text-sm outline-none transition focus:border-corona/60"
+const inputCls = "w-full rounded-xl border border-line bg-void px-3 py-2.5 text-sm outline-hidden transition focus:border-corona/60"
 function Step({ n, title, right }: { n: number, title: string, right?: React.ReactNode }){
   return <div className="flex items-center justify-between gap-2"><h2 className="flex items-center gap-2 text-[15px] font-semibold"><span className="grid h-[22px] w-[22px] place-items-center rounded-full bg-corona/15 font-mono text-[12px] text-corona">{n}</span>{title}</h2>{right}</div>
 }
@@ -129,7 +143,7 @@ export default function BacktestPage(){
   const [leverage, setLeverage] = useState(2)
   // only the daily trend runs on one coin; the other three bots trade a whole portfolio (see the home page table)
   const [selected, setSelected] = useState<string[]>([TREND_ID])
-  const sel = STRATEGIES.find(x=> x.id===selected[0])
+  const sel = BACKTEST_ALL.find(x=> x.id===selected[0])
   const portfolio = !!sel && !sel.perCoin     // trades many coins: results come from its full historical test
   const [dataTo, setDataTo] = useState("")
   const trend = selected.includes(TREND_ID)   // daily candles only
@@ -168,7 +182,7 @@ export default function BacktestPage(){
 
   const planCount = TIERS.find(t=> t.id===tier)?.count ?? 1
   function toggle(id:string){
-    if(STRATEGIES.findIndex(x=> x.id===id) >= planCount) return   // locked by the plan (the server checks too)
+    if(!isOpenBacktest(id) && STRATEGIES.findIndex(x=> x.id===id) >= planCount) return   // locked by the plan (the server checks too)
     setSelected([id]); setTimeframe("1d"); setLeverage(2)    // every bot was tested at x2
     setResult(null); setError("")
   }
@@ -204,7 +218,7 @@ export default function BacktestPage(){
     finally{ setLoading(false) }
   }
 
-  const ranStrategies = STRATEGIES.filter(s=> (ran?.strategies || []).includes(s.id))
+  const ranStrategies = BACKTEST_ALL.filter(s=> (ran?.strategies || []).includes(s.id))
   const equity = useMemo(()=>{
     let cum = 0
     return [{ i: 0, v: 0 }, ...(result?.trades || []).map((t,i)=> ({ i: i+1, v: (cum += t.pnl) }))]
@@ -264,10 +278,11 @@ export default function BacktestPage(){
           <div className="space-y-3">
             <Step n={1} title={t.step1}/>
             <div className="space-y-1.5">
-              {STRATEGIES.map((st, i)=>{
-                const on = selected.includes(st.id), locked = i >= planCount
-                return (
-                  <button key={st.id} onClick={()=>toggle(st.id)} aria-pressed={on} disabled={locked}
+              {[...STRATEGIES, ...BACKTEST_EXTRA].map((st: Strategy, i)=>{
+                const on = selected.includes(st.id), locked = !isOpenBacktest(st.id) && i >= planCount
+                return (<div key={st.id}>
+                  {i === STRATEGIES.length && <div className="px-1 pb-1.5 pt-3 text-[12px] font-semibold text-muted" data-testid="backtest-more-bots">{t.moreBots}</div>}
+                  <button onClick={()=>toggle(st.id)} aria-pressed={on} disabled={locked} data-testid={`backtest-strategy-${st.id}`}
                     className={`flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2 text-start transition disabled:cursor-not-allowed disabled:opacity-60 ${on ? "bg-surface2 ring-1 ring-corona/30" : "border border-line hover:bg-surface2/60"}`}>
                     <div className="min-w-0">
                       <div className="flex items-center gap-1.5 truncate text-sm font-bold">{strategyName(st, locale)}{st.risk === "high" && <span className="rounded-full bg-loss/10 px-1.5 text-[10px] text-loss">HIGH RISK</span>}</div>
@@ -278,7 +293,7 @@ export default function BacktestPage(){
                       ? <span className="flex shrink-0 items-center gap-1 rounded-full bg-corona/10 px-2 py-0.5 text-[10px] font-bold text-corona"><Lock size={11}/> {unlockTier(i).name}</span>
                       : <span className={`grid h-5 w-5 shrink-0 place-items-center rounded-full border ${on ? "border-corona bg-corona text-on-corona" : "border-faint"}`}>{on && <Check size={13} strokeWidth={3}/>}</span>}
                   </button>
-                )
+                </div>)
               })}
             </div>
             {portfolio && <p className="text-[11px] leading-5 text-faint">{t.portfolioNote}<a href={BOT_PAGE} target="_blank" rel="noopener" className="text-corona hover:underline">{t.botsPage}</a>.</p>}
@@ -329,9 +344,9 @@ export default function BacktestPage(){
               ))}
             </div>
             <p className="text-xs text-faint">{portfolio
-              ? (selected[0] === "ratio_trend"
+              ? (selected[0].startsWith("ratio")
                 ? t.ratioNote
-                : t.levNote(leverage))
+                : isOpenBacktest(selected[0]) ? t.x2Only : t.levNote(leverage))
               : trend
               ? t.trendNote(leverage)
               : t.x5Note}</p>
@@ -346,7 +361,7 @@ export default function BacktestPage(){
         {/* results — left column */}
         <section className="min-w-0 space-y-4">
           {error && !loading && (
-            <div className="flex gap-3 rounded-2xl border border-loss/30 bg-loss/[0.06] p-4 text-sm text-loss"><TriangleAlert size={18} className="shrink-0"/><span className="whitespace-pre-wrap">{error}</span></div>
+            <div className="flex gap-3 rounded-2xl border border-loss/30 bg-loss/6 p-4 text-sm text-loss"><TriangleAlert size={18} className="shrink-0"/><span className="whitespace-pre-wrap">{error}</span></div>
           )}
 
           {loading && (

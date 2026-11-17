@@ -34,7 +34,7 @@ export default function LLMLab(){
           <Card>
             <CardHeader title="فكرة الاستراتيجية"/>
             <textarea value={prompt} onChange={e=>setPrompt(e.target.value)} rows={4} aria-label="وصف الاستراتيجية"
-              className="w-full rounded-xl border border-corona/50 bg-void px-4 py-3.5 text-[15px] leading-7 outline-none focus:border-corona"
+              className="w-full rounded-xl border border-corona/50 bg-void px-4 py-3.5 text-[15px] leading-7 outline-hidden focus:border-corona"
               placeholder="مثال: اخترع استراتيجية تمزج Bollinger Squeeze + حجم للـ 15m"/>
             <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
               <div className="flex flex-wrap items-center gap-1.5">
@@ -57,7 +57,7 @@ export default function LLMLab(){
             </Card>
           )}
 
-          {error && <div className="whitespace-pre-wrap rounded-2xl border border-loss/30 bg-loss/[0.06] p-4 text-sm text-loss">{error}</div>}
+          {error && <div className="whitespace-pre-wrap rounded-2xl border border-loss/30 bg-loss/6 p-4 text-sm text-loss">{error}</div>}
 
           {result && (
             <Card>

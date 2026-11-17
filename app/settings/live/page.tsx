@@ -281,7 +281,7 @@ export default function UserLiveSettingsPage() {
 
       <ol className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {steps.map(([t, h, s], i) => (
-          <li key={t} className={`flex items-center gap-3 rounded-[14px] border px-4 py-3.5 ${s === "now" ? "border-corona bg-corona/[0.08]" : "border-line bg-surface"}`}>
+          <li key={t} className={`flex items-center gap-3 rounded-[14px] border px-4 py-3.5 ${s === "now" ? "border-corona bg-corona/8" : "border-line bg-surface"}`}>
             <span className={`grid h-[30px] w-[30px] shrink-0 place-items-center rounded-full font-mono text-sm ${s === "done" ? "bg-profit/15 text-profit" : s === "now" ? "bg-corona/15 text-corona" : "bg-surface2 text-faint"}`}>{s === "done" ? "✓" : i + 1}</span>
             <div className="min-w-0"><div className={`text-[15px] font-semibold ${s === "todo" ? "text-muted" : ""}`}>{t}</div><div className={`truncate text-[12px] ${s === "done" ? "text-profit" : "text-faint"}`}>{h}</div></div>
           </li>
@@ -289,7 +289,7 @@ export default function UserLiveSettingsPage() {
       </ol>
 
       {msg && (
-        <div className={`rounded-xl border p-3 text-sm ${msg.type === "success" ? "border-profit/30 bg-profit/[0.06] text-profit" : "border-loss/30 bg-loss/[0.06] text-loss"}`}>{msg.text}</div>
+        <div className={`rounded-xl border p-3 text-sm ${msg.type === "success" ? "border-profit/30 bg-profit/6 text-profit" : "border-loss/30 bg-loss/6 text-loss"}`}>{msg.text}</div>
       )}
 
       <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
@@ -309,7 +309,7 @@ export default function UserLiveSettingsPage() {
               </label>
               <label className="relative block"><span className={label}>Secret</span>
                 <input value={secret} onChange={e => setSecret(e.target.value)} type={show ? "text" : "password"} placeholder="Secret" className={`${field} pe-10 font-mono`} dir="ltr"/>
-                <button type="button" onClick={() => setShow(!show)} aria-label={show ? t.hide : t.show} className="absolute bottom-3 end-3 text-faint hover:text-ink">{show ? <EyeOff size={15}/> : <Eye size={15}/>}</button>
+                <button type="button" onClick={() => setShow(!show)} aria-label={show ? t.hide : t.show} className="absolute bottom-3 inset-e-3 text-faint hover:text-ink">{show ? <EyeOff size={15}/> : <Eye size={15}/>}</button>
               </label>
               {exchange === "okx" && (
                 <label className="block"><span className={label}>{t.okxOnly}</span>
@@ -425,7 +425,7 @@ export default function UserLiveSettingsPage() {
               <Pill tone={liveStatus.enabled ? "profit" : "neutral"}>{liveStatus.enabled ? t.running : t.notOn}</Pill>
             </div>
           </div>
-          <p className="mt-4 rounded-xl border border-corona/40 bg-corona/[0.06] p-3 text-[12px] leading-6 text-muted">{live ? t.liveNote : t.demoOnly}</p>
+          <p className="mt-4 rounded-xl border border-corona/40 bg-corona/6 p-3 text-[12px] leading-6 text-muted">{live ? t.liveNote : t.demoOnly}</p>
         </Card>
       </div>
     </AppShell>
